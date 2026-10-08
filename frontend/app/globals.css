@@ -1,0 +1,183 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 20% 97%;
+    --foreground: 222 18% 12%;
+    --card: 210 25% 100%;
+    --card-foreground: 222 18% 12%;
+    --popover: 210 25% 100%;
+    --popover-foreground: 222 18% 12%;
+    --primary: 151 43% 28%;
+    --primary-foreground: 210 25% 99%;
+    --secondary: 210 18% 92%;
+    --secondary-foreground: 222 18% 16%;
+    --muted: 210 18% 94%;
+    --muted-foreground: 215 13% 42%;
+    --accent: 151 20% 91%;
+    --accent-foreground: 153 32% 24%;
+    --destructive: 0 58% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 18% 84%;
+    --input: 214 18% 78%;
+    --ring: 151 43% 28%;
+    --radius: 0.75rem;
+    --font-sans: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+    --font-display: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  }
+
+  .dark {
+    --background: 0 0% 4%;
+    --foreground: 210 22% 94%;
+    --card: 0 0% 8%;
+    --card-foreground: 210 22% 94%;
+    --popover: 0 0% 9%;
+    --popover-foreground: 210 22% 94%;
+    --primary: 151 32% 65%;
+    --primary-foreground: 0 0% 8%;
+    --secondary: 0 0% 13%;
+    --secondary-foreground: 210 22% 91%;
+    --muted: 0 0% 11%;
+    --muted-foreground: 215 12% 68%;
+    --accent: 150 14% 17%;
+    --accent-foreground: 151 26% 82%;
+    --destructive: 0 52% 58%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 20%;
+    --input: 0 0% 25%;
+    --ring: 151 32% 65%;
+  }
+
+  * { @apply border-border; }
+  html { @apply scroll-smooth; color-scheme: light; }
+  html.dark { color-scheme: dark; }
+  body { @apply bg-background text-foreground antialiased; font-family: var(--font-sans); }
+  h1, h2, h3 { text-wrap: balance; }
+  button, a, input, select, textarea { @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background; }
+  button, a { cursor: pointer; touch-action: manipulation; }
+  ::selection { background: hsl(var(--primary) / 0.2); }
+}
+
+@layer components {
+  .app-scrollbar { scrollbar-gutter: stable; }
+  .clear-button {
+    border: 1px solid hsl(var(--border));
+    transition: color 140ms ease, background-color 140ms ease, border-color 140ms ease;
+  }
+  .clear-button-primary {
+    border-color: hsl(var(--primary));
+    background-color: hsl(var(--primary));
+  }
+  .clear-button-primary:hover:not(:disabled) { background-color: hsl(var(--primary) / 0.9); }
+  .clear-button-secondary { border-color: hsl(var(--border)); background-color: hsl(var(--secondary)); }
+  .clear-button-outline { border-color: hsl(var(--border)); background-color: hsl(var(--card)); }
+  .clear-button-outline:hover:not(:disabled) { background-color: hsl(var(--secondary)); }
+  .clear-button-quiet { border-color: transparent; background-color: transparent; }
+  .clear-button-quiet:hover:not(:disabled) { background-color: hsl(var(--secondary)); }
+  .clear-button-soft { border-color: hsl(var(--primary) / 0.32); background-color: hsl(var(--primary) / 0.12); }
+  .clear-button-soft:hover:not(:disabled) { background-color: hsl(var(--primary) / 0.18); }
+  .clear-button-danger { border-color: hsl(var(--destructive)); background-color: hsl(var(--destructive)); }
+  .clear-button-danger:hover:not(:disabled) { background-color: hsl(var(--destructive) / 0.9); }
+  .clear-button-link { border-color: transparent; background-color: transparent; }
+  .clear-button:disabled { cursor: not-allowed; }
+  .glass-card {
+    background: hsl(var(--card) / 0.58);
+    border: 1px solid hsl(var(--border) / 0.86);
+    border-color: hsl(var(--border) / 0.86);
+    backdrop-filter: blur(26px) saturate(145%);
+    box-shadow: 0 22px 60px -34px rgba(15, 23, 42, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.62);
+  }
+  .glass-panel {
+    background: hsl(var(--card) / 0.4);
+    border: 1px solid hsl(var(--border) / 0.86);
+    border-color: hsl(var(--border) / 0.86);
+    backdrop-filter: blur(30px) saturate(148%);
+    box-shadow: 0 26px 72px -42px rgba(15, 23, 42, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.46);
+  }
+  .dark .glass-card {
+    background: hsl(var(--card) / 0.58);
+    border-color: hsl(var(--border) / 0.92);
+    box-shadow: 0 24px 70px -38px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  }
+  .dark .glass-panel {
+    background: hsl(var(--card) / 0.46);
+    border-color: hsl(var(--border) / 0.94);
+    box-shadow: 0 30px 84px -44px rgba(0, 0, 0, 0.96), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  }
+  .magic-card-surface {
+    border: 0;
+    background: hsl(var(--card) / 0.38);
+    backdrop-filter: blur(30px) saturate(150%);
+    box-shadow: none;
+  }
+  .dark .magic-card-surface {
+    border-color: transparent;
+    background: hsl(var(--card) / 0.5);
+    box-shadow: none;
+  }
+  .magic-card-frame {
+    box-shadow: 0 24px 70px -38px rgba(15, 23, 42, 0.44);
+  }
+  .dark .magic-card-frame {
+    box-shadow: 0 28px 78px -42px rgba(0, 0, 0, 0.96);
+  }
+  .landing-canvas {
+    background:
+      radial-gradient(52rem 42rem at 83% 17%, hsl(var(--primary) / 0.11), transparent 68%),
+      radial-gradient(38rem 30rem at 5% 62%, hsl(var(--accent-foreground) / 0.07), transparent 70%);
+  }
+  .dark .landing-canvas {
+    background:
+      radial-gradient(48rem 42rem at 84% 16%, hsl(var(--primary) / 0.13), transparent 70%),
+      radial-gradient(36rem 30rem at 7% 64%, hsl(var(--accent-foreground) / 0.06), transparent 72%);
+  }
+  .workspace-canvas {
+    background:
+      radial-gradient(48rem 34rem at 8% 7%, hsl(var(--primary) / 0.06), transparent 72%),
+      radial-gradient(44rem 40rem at 92% 90%, hsl(var(--accent-foreground) / 0.05), transparent 72%);
+  }
+  .dark .workspace-canvas {
+    background:
+      radial-gradient(48rem 34rem at 8% 7%, hsl(var(--primary) / 0.08), transparent 72%),
+      radial-gradient(44rem 40rem at 92% 90%, hsl(var(--accent-foreground) / 0.05), transparent 72%);
+  }
+  .auth-canvas {
+    background:
+      radial-gradient(38rem 34rem at 8% 18%, hsl(var(--primary) / 0.12), transparent 72%),
+      radial-gradient(35rem 34rem at 92% 86%, hsl(var(--accent-foreground) / 0.08), transparent 72%);
+  }
+  .dark .auth-canvas {
+    background:
+      radial-gradient(38rem 34rem at 8% 18%, hsl(var(--primary) / 0.13), transparent 72%),
+      radial-gradient(35rem 34rem at 92% 86%, hsl(var(--accent-foreground) / 0.08), transparent 72%);
+  }
+  .leaflet-container { z-index: 0; font-family: var(--font-sans); background: #dbe4eb; }
+  .leaflet-control-zoom a { color: #263241; font-weight: 700; }
+  .dark .leaflet-control-zoom a { color: #263241; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: hsl(var(--card)); color: hsl(var(--foreground)); }
+  .leaflet-popup-content { margin: 14px 16px; min-width: 180px; }
+  .map-marker { display: grid; place-items: center; width: 30px; height: 30px; border: 3px solid white; border-radius: 999px 999px 999px 4px; background: #42624f; color: white; font-size: 11px; font-weight: 800; box-shadow: 0 7px 16px rgba(15, 23, 42, 0.28); transform: rotate(-45deg); }
+  .map-marker > span { transform: rotate(45deg); }
+  .map-marker.selected { background: #78927e; width: 36px; height: 36px; }
+  .map-marker.pin { background: #374151; }
+  .prose-link { @apply text-primary underline decoration-primary/30 underline-offset-4 hover:decoration-primary; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --border: 215 18% 55%;
+    --muted-foreground: 215 18% 28%;
+    --ring: 151 44% 24%;
+  }
+  :root.dark {
+    --border: 0 0% 46%;
+    --muted-foreground: 214 14% 86%;
+    --ring: 151 38% 76%;
+  }
+}

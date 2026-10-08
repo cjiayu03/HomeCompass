@@ -1,0 +1,44 @@
+name: Requirement or defect task
+description: One reviewable implementation or documentation increment
+title: ""
+labels: []
+assignees: []
+body:
+  - type: textarea
+    id: requirement
+    attributes:
+      label: Requirement or use case
+      description: Reference the shared Doc, model or course deliverable. State the observed problem.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Describe observable success and relevant boundary, missing-data and failure behavior.
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and dependencies
+      description: Name affected files/services, decisions and prerequisite tasks.
+    validations:
+      required: false
+  - type: textarea
+    id: owner-reviewer
+    attributes:
+      label: Owner and reviewer
+      description: Assign actual teammates when agreed.
+    validations:
+      required: false
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence on completion
+      description: Record the PR, commands/manual cases, actual results, limitations and traceability updates.
+    validations:
+      required: false
