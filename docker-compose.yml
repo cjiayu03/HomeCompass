@@ -1,0 +1,87 @@
+services:
+  database:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  migrate:
+    image: postgis/postgis:16-3.4
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      PGHOST: database
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      PGUSER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ./database/migrations:/migrations:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command: ["psql -v ON_ERROR_STOP=1 -f /migrations/001_initial.sql -f /migrations/002_persistence_sources.sql -f /migrations/003_spatial_source_layers.sql -f /migrations/004_location_provenance.sql"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the database service in .env}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_PUBLISHABLE_KEY: ${SUPABASE_PUBLISHABLE_KEY:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      DATA_GOV_SG_API_KEY: ${DATA_GOV_SG_API_KEY:-}
+      ONEMAP_ACCESS_TOKEN: ${ONEMAP_ACCESS_TOKEN:-}
+      HDB_RESALE_DATASET_ID: ${HDB_RESALE_DATASET_ID:-d_8b84c4ee58e3cfc0ece0d773c8ca6abc}
+      DATA_GOV_SG_DOWNLOAD_HOSTS: ${DATA_GOV_SG_DOWNLOAD_HOSTS:-data.gov.sg,api-open.data.gov.sg,storage.data.gov.sg}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
+      GEMINI_MONTHLY_BUDGET_USD: ${GEMINI_MONTHLY_BUDGET_USD:-}
+      GEMINI_MAX_OUTPUT_TOKENS: ${GEMINI_MAX_OUTPUT_TOKENS:-512}
+      GEMINI_INPUT_USD_PER_MILLION: ${GEMINI_INPUT_USD_PER_MILLION:-0.75}
+      GEMINI_OUTPUT_USD_PER_MILLION: ${GEMINI_OUTPUT_USD_PER_MILLION:-3.75}
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:-}
+        NEXT_PUBLIC_MAP_TILE_URL: ${NEXT_PUBLIC_MAP_TILE_URL:-https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  postgres-data:
