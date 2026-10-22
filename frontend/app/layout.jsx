@@ -1,4 +1,5 @@
 import 'leaflet/dist/leaflet.css';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import './globals.css';
 import { Providers } from './providers';
 import { APP_NAME } from '@/lib/data';

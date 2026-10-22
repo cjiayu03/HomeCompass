@@ -10,7 +10,8 @@ if (backendOrigin) {
   if (parsedBackendOrigin.pathname !== '/' || parsedBackendOrigin.search || parsedBackendOrigin.hash) {
     throw new Error('BACKEND_URL must be an origin only, for example https://your-api.vercel.app.');
   }
-  if (process.env.NODE_ENV === 'production' && process.env.BACKEND_URL && parsedBackendOrigin.protocol !== 'https:') {
+  const localBackend = ['localhost', '127.0.0.1', '[::1]'].includes(parsedBackendOrigin.hostname);
+  if (process.env.NODE_ENV === 'production' && process.env.BACKEND_URL && parsedBackendOrigin.protocol !== 'https:' && !localBackend) {
     throw new Error('BACKEND_URL must use HTTPS in production.');
   }
 }

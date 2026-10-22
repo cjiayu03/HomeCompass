@@ -18,13 +18,12 @@ export function AppShell({ children }) {
   const pathname = usePathname();
   const { theme, setTheme } = useAppTheme();
   const { shortlistIds, compareIds, notice, setNotice } = useWorkspace();
-  const { client, user } = useAuth();
+  const { user, signOut } = useAuth();
   const router = useRouter();
   const isDark = theme === 'dark';
 
-  async function signOut() {
-    if (!client) return;
-    await client.auth.signOut();
+  async function handleSignOut() {
+    try { await signOut(); } catch { /* Local auth state is cleared even if the server is unreachable. */ }
     router.replace('/');
   }
 
@@ -59,7 +58,7 @@ export function AppShell({ children }) {
             </Button>
             {user ? <>
               <Button asChild variant="ghost" size="sm" className="hidden sm:inline-flex"><Link href="/account"><CircleUserRound className="size-4" />{user.email?.split('@')[0] || 'Account'}</Link></Button>
-              <Button variant="outline" size="sm" onClick={signOut} aria-label="Sign out"><LogOut className="size-4" /><span className="hidden sm:inline">Sign out</span></Button>
+              <Button variant="outline" size="sm" onClick={handleSignOut} aria-label="Sign out"><LogOut className="size-4" /><span className="hidden sm:inline">Sign out</span></Button>
             </> : <>
               <Button asChild variant="ghost" size="sm"><Link href="/login">Sign in</Link></Button>
               <Button asChild size="sm" className="hidden sm:inline-flex"><Link href="/signup">Create account</Link></Button>

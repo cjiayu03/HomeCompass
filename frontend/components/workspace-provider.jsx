@@ -1,109 +1,1260 @@
 'use client';
 
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { defaultBrief, filterHomes, homes as fixtureHomes } from '@/lib/data';
 import { useAuth } from '@/components/auth-provider';
+import { ApiError, requestJson } from '@/lib/api-client';
+import { buildCriteria, applyLocalRequirements, briefFromCriteria } from '@/lib/planning';
 
 const WorkspaceContext = createContext(null);
+const resourceTypes = ['silver_zone', 'dementia_gtp', 'chas_clinic', 'childcare', 'student_care', 'kindergarten', 'school_zone', 'dengue_cluster'];
+const priorityWeightKeys = Object.keys(defaultBrief.priorityWeights);
+const HOME_PAGE_LIMIT = 50;
+const RESOURCE_PAGE_LIMIT = 500;
+const GUEST_SNAPSHOT_STORAGE_KEY = 'homecompass.guest-sync-pending';
+const GUEST_SYNC_KEY_STORAGE_KEY = 'homecompass.guest-sync-key';
+const GUEST_SYNC_FINGERPRINT_STORAGE_KEY = 'homecompass.guest-sync-fingerprint';
+const AUTHENTICATED_WORKSPACE_SEEN_STORAGE_KEY = 'homecompass.authenticated-workspace-seen';
+
+function accountWorkspaceStorageKey(userId) {
+  return `homecompass.account.${encodeURIComponent(userId)}.workspace`;
+}
+
+function accountWorkspaceOwnerKey(userId) {
+  return userId ? `account:${userId}` : 'guest';
+}
+
+function isValidPriorityWeights(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length === priorityWeightKeys.length
+    && priorityWeightKeys.every((key) => Object.hasOwn(value, key)
+      && typeof value[key] === 'number'
+      && Number.isFinite(value[key])
+      && value[key] >= 0
+      && value[key] <= 3);
+}
+
+function profileUpdatePayload(brief, onboardingCompleted) {
+  const distance = (value) => Number.isInteger(value) ? value : null;
+  const payload = {
+    adults: brief.adults,
+    children: brief.children,
+    older_adults: brief.olderAdults,
+    budget_cents: Math.round(Number(brief.budget) * 100),
+    locale: 'en-SG',
+    priority_weights: brief.priorityWeights,
+    preferred_towns: Array.isArray(brief.preferredTowns) ? brief.preferredTowns : [],
+    preferred_flat_type: typeof brief.preferredFlatType === 'string' && brief.preferredFlatType.trim()
+      ? brief.preferredFlatType.trim()
+      : null,
+    max_school_distance_m: distance(brief.schoolDistance),
+    max_childcare_distance_m: distance(brief.childcareDistance),
+    max_care_distance_m: distance(brief.careDistance),
+  };
+  if (onboardingCompleted === true) payload.onboarding_completed = true;
+  return payload;
+}
+
+function searchCriteriaFromBrief(brief) {
+  return buildCriteria(brief);
+}
+
+function mergeExplicitSearchCriteria(criteria, filters) {
+  const next = { ...criteria };
+  for (const key of [
+    'budget', 'town', 'towns', 'flat_type', 'bounds',
+    'max_school_distance_m', 'max_childcare_distance_m', 'max_care_distance_m',
+    'min_floor_area_sqm', 'max_floor_area_sqm', 'min_storey', 'max_storey',
+    'min_remaining_lease_years', 'max_price_per_sqm', 'observed_after',
+  ]) {
+    const value = filters?.[key];
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'string' && !value.trim()) continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    next[key] = value;
+  }
+  return next;
+}
+
+function initialState(dataMode) {
+  return { status: 'idle', dataMode, retrievedAt: null, sourceSummary: [], warnings: [], error: null };
+}
+
+function fixtureState(items) {
+  return { ...initialState('fixture'), status: items.length ? 'success' : 'empty', warnings: ['Illustrative UI fixtures; not official source records.'] };
+}
+
+function successState(payload, data, previous) {
+  return {
+    status: data.length ? 'success' : 'empty',
+    dataMode: payload.dataMode || previous.dataMode,
+    retrievedAt: payload.retrievedAt || null,
+    sourceSummary: payload.sourceSummary || [],
+    warnings: payload.warnings || [],
+    error: null,
+  };
+}
+
+function pageState(payload, items) {
+  const nextCursor = typeof payload?.nextCursor === 'string' && payload.nextCursor.length > 0
+    ? payload.nextCursor
+    : null;
+  const hasMore = items.length > 0 && payload?.hasMore === true && nextCursor !== null;
+  return {
+    limit: HOME_PAGE_LIMIT,
+    total: Number.isFinite(payload?.total) && payload.total >= 0 ? payload.total : items.length,
+    nextCursor: hasMore ? nextCursor : null,
+    hasMore,
+  };
+}
+
+function mergeHomesById(current, page) {
+  const seen = new Set(current.map((home) => home?.id).filter((id) => id !== null && id !== undefined).map(String));
+  const additions = page.filter((home) => {
+    if (home?.id === null || home?.id === undefined) return true;
+    const id = String(home.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+  return [...current, ...additions];
+}
+
+function normalizeViewportBounds(bounds) {
+  if (!bounds || typeof bounds !== 'object') return null;
+  const values = ['west', 'south', 'east', 'north'].map((key) => bounds[key]);
+  if (values.some((value) => typeof value !== 'number' || !Number.isFinite(value))) return null;
+  const [rawWest, rawSouth, rawEast, rawNorth] = values;
+  const normalized = {
+    west: Math.max(-180, Math.min(180, rawWest)),
+    south: Math.max(-90, Math.min(90, rawSouth)),
+    east: Math.max(-180, Math.min(180, rawEast)),
+    north: Math.max(-90, Math.min(90, rawNorth)),
+  };
+  if (normalized.west >= normalized.east || normalized.south >= normalized.north) return null;
+  return normalized;
+}
+
+function requireResultArray(payload, key) {
+  if (!Array.isArray(payload?.[key])) {
+    throw new ApiError('Unable to load this information. Please try again.', {
+      status: 200,
+      code: 'INVALID_RESPONSE',
+      payload,
+    });
+  }
+  return payload[key];
+}
+
+function initialSavedSearchState(status = 'idle') {
+  return { status, action: null, activeId: null, error: null, reruns: {} };
+}
+
+function initialHistoryState(status = 'idle', error = null) {
+  return { status, error };
+}
+
+function savedSearchError(error, fallbackMessage = 'Saved search information is unavailable. Please try again.') {
+  const apiError = error instanceof ApiError ? error : new ApiError(fallbackMessage, { code: 'UNKNOWN_ERROR' });
+  const detail = apiError.payload?.detail;
+  return {
+    message: typeof detail?.message === 'string' ? detail.message : apiError.message || fallbackMessage,
+    code: typeof detail?.code === 'string' ? detail.code : apiError.code || 'UNKNOWN_ERROR',
+    status: apiError.status,
+    missingPlaceIds: Array.isArray(detail?.missingPlaceIds) ? detail.missingPlaceIds : [],
+  };
+}
+
+function normalizeSavedSearchCriteria(criteria, fallback = {}) {
+  const source = criteria && typeof criteria === 'object' && !Array.isArray(criteria) ? criteria : fallback;
+  const normalized = { ...fallback, ...source };
+  delete normalized.cursor;
+  return normalized;
+}
+
+function searchResultMetadata(payload, items, fallbackPolicyVersion = null) {
+  return {
+    dataMode: payload?.dataMode || 'live',
+    retrievedAt: payload?.retrievedAt || null,
+    sourceSummary: Array.isArray(payload?.sourceSummary) ? payload.sourceSummary : [],
+    warnings: Array.isArray(payload?.warnings) ? payload.warnings : [],
+    count: Number.isInteger(payload?.count) && payload.count >= 0 ? payload.count : items.length,
+    total: Number.isInteger(payload?.total) && payload.total >= 0 ? payload.total : items.length,
+    scorePolicyVersion: payload?.scorePolicyVersion || fallbackPolicyVersion || null,
+  };
+}
+
+function errorState(error, previous) {
+  const apiError = error instanceof ApiError ? error : new ApiError('Unable to load this information. Please try again.', { code: 'UNKNOWN_ERROR' });
+  return { ...previous, status: 'error', error: { message: apiError.message, code: apiError.code, status: apiError.status } };
+}
+
+function normalizePlace(place) {
+  if (!place || typeof place !== 'object' || typeof place.id !== 'string') {
+    throw new ApiError('Unable to load this information. Please try again.', { code: 'INVALID_RESPONSE' });
+  }
+  return {
+    id: place.id,
+    label: place.label,
+    address: place.address || '',
+    latitude: place.latitude,
+    longitude: place.longitude,
+    kind: place.kind || 'other',
+    geocodeSource: place.geocodeSource || place.geocode_source || null,
+    geocodedAt: place.geocodedAt || place.geocoded_at || null,
+    maximumDistanceM: place.maximumDistanceM ?? place.maximum_distance_m ?? null,
+    updatedAt: place.updatedAt || place.updated_at || null,
+  };
+}
+
+function authenticatedPlaceState(status, error = null) {
+  return { status, error };
+}
+
+function isOneMapSelection(candidate) {
+  return candidate?.provider === 'OneMap'
+    && typeof candidate.selection_token === 'string'
+    && /^[a-f0-9]{64}$/i.test(candidate.selection_token)
+    && typeof candidate.address === 'string'
+    && candidate.address.trim().length > 0
+    && typeof candidate.latitude === 'number'
+    && Number.isFinite(candidate.latitude)
+    && typeof candidate.longitude === 'number'
+    && Number.isFinite(candidate.longitude);
+}
 
 function readStorage(key, fallback) {
   if (typeof window === 'undefined') return fallback;
   try { return JSON.parse(window.localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
 }
 
+function stringArray(value, limit) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((item) => typeof item === 'string' && item.trim()))].slice(0, limit);
+}
+
+function localBriefChanged(brief) {
+  return ['adults', 'children', 'olderAdults', 'budget'].some((key) => brief?.[key] !== defaultBrief[key])
+    || JSON.stringify(brief?.priorityWeights) !== JSON.stringify(defaultBrief.priorityWeights);
+}
+
+function guestBrief(brief) {
+  const result = {};
+  if (Number.isInteger(brief?.adults) && brief.adults >= 1 && brief.adults <= 30) result.adults = brief.adults;
+  if (Number.isInteger(brief?.children) && brief.children >= 0 && brief.children <= 30) result.children = brief.children;
+  if (Number.isInteger(brief?.olderAdults) && brief.olderAdults >= 0 && brief.olderAdults <= 30) result.olderAdults = brief.olderAdults;
+  const budgetCents = Math.round(Number(brief?.budget) * 100);
+  if (Number.isSafeInteger(budgetCents) && budgetCents >= 0 && budgetCents <= 1_000_000_000) result.budgetCents = budgetCents;
+  if (isValidPriorityWeights(brief?.priorityWeights)) result.priorityWeights = { ...brief.priorityWeights };
+  if (Object.keys(result).length) result.locale = 'en-SG';
+  return Object.keys(result).length ? result : null;
+}
+
+function normalizeGuestSnapshot(snapshot) {
+  return {
+    brief: snapshot?.brief && typeof snapshot.brief === 'object' && !Array.isArray(snapshot.brief)
+      ? { ...snapshot.brief }
+      : null,
+    shortlistHomeIds: stringArray(snapshot?.shortlistHomeIds, 200),
+    compareHomeIds: stringArray(snapshot?.compareHomeIds, 3),
+    history: Array.isArray(snapshot?.history) ? snapshot.history.slice(0, 100) : [],
+    places: Array.isArray(snapshot?.places) ? snapshot.places.slice(0, 20) : [],
+  };
+}
+
+function guestSnapshotFromStorage(brief, shortlistIds, compareIds) {
+  const pending = readStorage(GUEST_SNAPSHOT_STORAGE_KEY, null);
+  if (pending && typeof pending === 'object') return normalizeGuestSnapshot(pending);
+  return normalizeGuestSnapshot({
+    brief: localBriefChanged(brief) ? guestBrief(brief) : null,
+    shortlistHomeIds: shortlistIds,
+    compareHomeIds: compareIds,
+    history: readStorage('search-history', []),
+    places: readStorage('personal-places', []),
+  });
+}
+
+function briefFromGuestSnapshot(snapshot) {
+  const brief = { ...defaultBrief };
+  const saved = snapshot?.brief;
+  if (!saved) return brief;
+  if (Number.isInteger(saved.adults)) brief.adults = saved.adults;
+  if (Number.isInteger(saved.children)) brief.children = saved.children;
+  if (Number.isInteger(saved.olderAdults)) brief.olderAdults = saved.olderAdults;
+  if (Number.isFinite(saved.budgetCents)) brief.budget = saved.budgetCents / 100;
+  if (isValidPriorityWeights(saved.priorityWeights)) brief.priorityWeights = { ...saved.priorityWeights };
+  return brief;
+}
+
+function accountWorkspaceFromStorage(userId) {
+  const stored = readStorage(accountWorkspaceStorageKey(userId), {});
+  const brief = stored?.brief && typeof stored.brief === 'object' && !Array.isArray(stored.brief)
+    ? { ...defaultBrief, ...stored.brief }
+    : { ...defaultBrief };
+  if (!isValidPriorityWeights(brief.priorityWeights)) brief.priorityWeights = { ...defaultBrief.priorityWeights };
+  return {
+    brief,
+    shortlistIds: stringArray(stored?.shortlistIds, 200),
+    compareIds: stringArray(stored?.compareIds, 3),
+    pendingHistory: Array.isArray(stored?.pendingHistory) ? stored.pendingHistory.slice(0, 100) : [],
+  };
+}
+
+function persistAccountWorkspace(userId, patch) {
+  if (typeof window === 'undefined' || !userId) return;
+  const key = accountWorkspaceStorageKey(userId);
+  const stored = readStorage(key, {});
+  const workspace = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+  window.localStorage.setItem(key, JSON.stringify({ ...workspace, ...patch }));
+}
+
+function persistAccountPendingHistory(userId, history) {
+  if (typeof window === 'undefined' || !userId) return;
+  const key = accountWorkspaceStorageKey(userId);
+  const stored = readStorage(key, {});
+  const workspace = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+  const nextWorkspace = { ...workspace };
+  const pendingHistory = Array.isArray(history) ? history.slice(0, 100) : [];
+  if (pendingHistory.length) nextWorkspace.pendingHistory = pendingHistory;
+  else delete nextWorkspace.pendingHistory;
+  window.localStorage.setItem(key, JSON.stringify(nextWorkspace));
+}
+
+function persistAccountShortlist(userId, shortlistIds) {
+  persistAccountWorkspace(userId, { shortlistIds });
+}
+
+function hasGuestSnapshotData(snapshot) {
+  return Boolean(snapshot?.brief)
+    || snapshot?.shortlistHomeIds?.length > 0
+    || snapshot?.compareHomeIds?.length > 0
+    || snapshot?.history?.length > 0
+    || snapshot?.places?.length > 0;
+}
+
+function persistGuestSnapshot(snapshot) {
+  if (typeof window === 'undefined') return;
+  if (hasGuestSnapshotData(snapshot)) window.localStorage.setItem(GUEST_SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshot));
+  else window.localStorage.removeItem(GUEST_SNAPSHOT_STORAGE_KEY);
+}
+
+function removeSharedSearchHistory(history) {
+  if (typeof window === 'undefined' || !history.length) return;
+  const stored = readStorage('search-history', []);
+  if (!Array.isArray(stored) || !stored.length) return;
+  const remaining = [...stored];
+  for (const entry of history) {
+    const signature = JSON.stringify(entry);
+    const index = remaining.findIndex((storedEntry) => JSON.stringify(storedEntry) === signature);
+    if (index >= 0) remaining.splice(index, 1);
+  }
+  if (remaining.length) window.localStorage.setItem('search-history', JSON.stringify(remaining));
+  else window.localStorage.removeItem('search-history');
+}
+
+function stableSyncKey(payload) {
+  const fingerprint = JSON.stringify(payload);
+  const storedKey = window.localStorage.getItem(GUEST_SYNC_KEY_STORAGE_KEY);
+  const storedFingerprint = window.localStorage.getItem(GUEST_SYNC_FINGERPRINT_STORAGE_KEY);
+  if (storedKey && storedFingerprint === fingerprint) return storedKey;
+  const randomId = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const syncKey = `guest-${randomId}`;
+  window.localStorage.setItem(GUEST_SYNC_KEY_STORAGE_KEY, syncKey);
+  window.localStorage.setItem(GUEST_SYNC_FINGERPRINT_STORAGE_KEY, fingerprint);
+  return syncKey;
+}
+
+function resultCount(value) {
+  if (Array.isArray(value)) return value.length;
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function isAuthenticationFailure(error) {
+  return error?.code === 'AUTH_REQUIRED' || error?.status === 401;
+}
+
+function sectionCount(section) {
+  return Object.entries(section || {})
+    .filter(([key]) => key !== 'retryableHistoryIndexes')
+    .reduce((total, [, value]) => total + resultCount(value), 0);
+}
+
+function removeMergedSnapshot(snapshot, result, { confirmPlaces = false } = {}) {
+  const remaining = normalizeGuestSnapshot(snapshot);
+  const accepted = result?.accepted || {};
+  const skipped = result?.skipped || {};
+
+  if (remaining.brief) {
+    const acceptedFields = new Set(Array.isArray(accepted.briefFields) ? accepted.briefFields : []);
+    const apiFields = {
+      adults: 'adults',
+      children: 'children',
+      olderAdults: 'older_adults',
+      budgetCents: 'budget_cents',
+      locale: 'locale',
+    };
+    for (const [localField, apiField] of Object.entries(apiFields)) {
+      if (acceptedFields.has(apiField)) delete remaining.brief[localField];
+    }
+    if (remaining.brief.priorityWeights) {
+      for (const key of Object.keys(remaining.brief.priorityWeights)) {
+        if (acceptedFields.has(`priority_weights.${key}`)) delete remaining.brief.priorityWeights[key];
+      }
+      if (!Object.keys(remaining.brief.priorityWeights).length) delete remaining.brief.priorityWeights;
+    }
+    if (!Object.keys(remaining.brief).length) remaining.brief = null;
+  }
+
+  const shortlistAccounted = resultCount(accepted.shortlistHomeIds) + resultCount(skipped.shortlistHomeIds);
+  if (shortlistAccounted >= remaining.shortlistHomeIds.length) remaining.shortlistHomeIds = [];
+
+  const acceptedCompareIds = new Set(Array.isArray(accepted.compareHomeIds) ? accepted.compareHomeIds : []);
+  remaining.compareHomeIds = remaining.compareHomeIds.filter((id) => !acceptedCompareIds.has(id));
+
+  const retryableHistoryIndexes = new Set(Array.isArray(skipped.retryableHistoryIndexes)
+    ? skipped.retryableHistoryIndexes.filter((index) => Number.isInteger(index) && index >= 0 && index < remaining.history.length)
+    : []);
+  remaining.history = remaining.history.filter((_, index) => retryableHistoryIndexes.has(index));
+
+  if (confirmPlaces) {
+    const placesAccounted = resultCount(accepted.places) + resultCount(skipped.places);
+    if (placesAccounted >= remaining.places.length) remaining.places = [];
+  }
+
+  return remaining;
+}
+
+function syncResultNotice(result) {
+  const accepted = sectionCount(result?.accepted);
+  const skipped = sectionCount(result?.skipped);
+  const conflicts = Array.isArray(result?.conflicts) ? result.conflicts.length : 0;
+  const noun = (count, singular, plural = `${singular}s`) => `${count} ${count === 1 ? singular : plural}`;
+  return {
+    text: `Guest data sync complete: ${noun(accepted, 'item')} accepted, ${noun(skipped, 'item')} skipped, ${noun(conflicts, 'conflict')}. Account values were kept where they differed.`,
+    tone: conflicts || skipped ? 'warning' : 'success',
+  };
+}
+
 export function WorkspaceProvider({ children }) {
-  const { client, user } = useAuth();
+  const [hoveredHome, setHoveredHome] = useState(null);
+  const { user, loading: authLoading } = useAuth();
+  const userId = user?.id || null;
+  const targetWorkspaceOwner = accountWorkspaceOwnerKey(userId);
+  const fixtureMode = useMemo(() => process.env.NEXT_PUBLIC_HOME_DATA_MODE === 'fixture', []);
   const [brief, setBrief] = useState(defaultBrief);
   const [shortlistIds, setShortlistIds] = useState([]);
   const [compareIds, setCompareIds] = useState([]);
-  const [homes, setHomes] = useState(fixtureHomes);
+  const [homes, setHomes] = useState(() => fixtureMode ? fixtureHomes : []);
   const [resourceFeatures, setResourceFeatures] = useState([]);
+  const compareIdsRef = useRef([]);
   const [sourceStatus, setSourceStatus] = useState(null);
+  const [homeState, setHomeState] = useState(() => initialState(fixtureMode ? 'fixture' : 'live'));
+  const [resourceState, setResourceState] = useState(() => initialState(fixtureMode ? 'fixture' : 'live'));
+  const [pagination, setPagination] = useState({ limit: HOME_PAGE_LIMIT, total: 0, nextCursor: null, hasMore: false });
+  const [viewportBounds, setViewportBounds] = useState(null);
+  const [sourceState, setSourceState] = useState(() => initialState(fixtureMode ? 'fixture' : 'live'));
+  const requests = useRef({ home: null, resource: null, source: null, place: null, history: null, savedSearch: null });
+  const homesRef = useRef(homes);
+  const preservedDecisionHomesRef = useRef([]);
+  const activeHomePageRequest = useRef(null);
   const [query, setQuery] = useState('');
   const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [workspaceOwner, setWorkspaceOwner] = useState(null);
   const [profileOwner, setProfileOwner] = useState(null);
+  const [profileLoadState, setProfileLoadState] = useState('signed_out');
+  const [places, setPlaces] = useState([]);
+  const [placeState, setPlaceState] = useState(() => authenticatedPlaceState('idle'));
+  const [history, setHistory] = useState([]);
+  const [historyState, setHistoryState] = useState(() => initialHistoryState());
+  const [savedSearches, setSavedSearches] = useState([]);
+  const [preservedDecisionHomes, setPreservedDecisionHomes] = useState([]);
+  const activeSavedSearchRerunRef = useRef(null);
+  const [savedSearchState, setSavedSearchState] = useState(() => initialSavedSearchState());
+  const [lastSearchSnapshot, setLastSearchSnapshot] = useState(null);
+  const lastSearchSnapshotRef = useRef(null);
+  const searchInFlightRef = useRef(null);
+  const [syncState, setSyncState] = useState('local');
+  const [syncResult, setSyncResult] = useState(null);
+  const [pendingLocalPlaceCount, setPendingLocalPlaceCount] = useState(0);
+  const shortlistIdsRef = useRef(shortlistIds);
+  const guestSnapshotRef = useRef(null);
+  const syncInFlightRef = useRef(null);
+  const workspaceOwnerRef = useRef(null);
+  const workspaceGenerationRef = useRef(0);
+  const currentUserIdRef = useRef(userId);
+  const shortlistMutationQueueRef = useRef(Promise.resolve());
+  currentUserIdRef.current = userId;
+  const workspaceReady = !authLoading && hydrated && workspaceOwner === targetWorkspaceOwner
+    && workspaceOwnerRef.current === targetWorkspaceOwner;
+  const isCurrentWorkspace = useCallback((expectedUserId, expectedOwner, expectedGeneration) => (
+    currentUserIdRef.current === expectedUserId
+      && workspaceOwnerRef.current === expectedOwner
+      && workspaceGenerationRef.current === expectedGeneration
+  ), []);
+
+  useEffect(() => { homesRef.current = homes; }, [homes]);
+  useEffect(() => { compareIdsRef.current = compareIds; }, [compareIds]);
+  useEffect(() => { shortlistIdsRef.current = shortlistIds; }, [shortlistIds]);
 
   useEffect(() => {
-    setBrief(readStorage('family-brief', defaultBrief));
-    setShortlistIds(readStorage('shortlist', []));
-    setCompareIds(readStorage('compare-selection', []));
-    setHydrated(true);
-  }, []);
-  useEffect(() => { if (hydrated) window.localStorage.setItem('family-brief', JSON.stringify(brief)); }, [brief, hydrated]);
-  useEffect(() => { if (hydrated) window.localStorage.setItem('shortlist', JSON.stringify(shortlistIds)); }, [shortlistIds, hydrated]);
-  useEffect(() => { if (hydrated) window.localStorage.setItem('compare-selection', JSON.stringify(compareIds)); }, [compareIds, hydrated]);
+    if (authLoading || workspaceOwner === targetWorkspaceOwner) return;
 
-  useEffect(() => {
-    const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
-    if (!hydrated) return undefined;
-    let active = true;
-    const types = ['silver_zone', 'dementia_gtp', 'chas_clinic', 'childcare', 'student_care', 'kindergarten', 'school_zone', 'dengue_cluster'];
-    const params = new URLSearchParams({ limit: '5000' });
-    types.forEach((type) => params.append('resource_type', type));
-    Promise.allSettled([
-      fetch(`${apiBase}/api/v1/homes`).then((response) => response.ok ? response.json() : Promise.reject()),
-      fetch(`${apiBase}/api/v1/resources?${params}`).then((response) => response.ok ? response.json() : Promise.reject()),
-      fetch(`${apiBase}/api/v1/sources`).then((response) => response.ok ? response.json() : Promise.reject()),
-    ]).then(([homeResult, resourceResult, sourceResult]) => {
-      if (!active) return;
-      if (homeResult.status === 'fulfilled') setHomes(homeResult.value.items || []);
-      if (resourceResult.status === 'fulfilled') setResourceFeatures(resourceResult.value.features || []);
-      if (sourceResult.status === 'fulfilled') setSourceStatus(sourceResult.value);
+    requests.current.home?.abort();
+    requests.current.home = null;
+    requests.current.history?.abort();
+    requests.current.history = null;
+    requests.current.savedSearch?.abort();
+    requests.current.savedSearch = null;
+    activeHomePageRequest.current = null;
+    const nextHomes = fixtureMode ? fixtureHomes : [];
+    homesRef.current = nextHomes;
+    preservedDecisionHomesRef.current = [];
+    setPreservedDecisionHomes([]);
+    setHomes(nextHomes);
+    setQuery('');
+    setPagination({
+      limit: HOME_PAGE_LIMIT,
+      total: fixtureMode ? nextHomes.length : 0,
+      nextCursor: null,
+      hasMore: false,
     });
-    return () => { active = false; };
-  }, [hydrated]);
+    setHomeState(fixtureMode ? fixtureState(nextHomes) : initialState('live'));
+    setBusy(false);
+
+    let nextWorkspace;
+    let snapshot;
+    if (userId) {
+      window.localStorage.setItem(AUTHENTICATED_WORKSPACE_SEEN_STORAGE_KEY, 'true');
+      nextWorkspace = accountWorkspaceFromStorage(userId);
+      snapshot = normalizeGuestSnapshot(readStorage(GUEST_SNAPSHOT_STORAGE_KEY, null));
+    } else if (window.localStorage.getItem(AUTHENTICATED_WORKSPACE_SEEN_STORAGE_KEY) === 'true') {
+      snapshot = normalizeGuestSnapshot(readStorage(GUEST_SNAPSHOT_STORAGE_KEY, null));
+      nextWorkspace = {
+        brief: briefFromGuestSnapshot(snapshot),
+        shortlistIds: snapshot.shortlistHomeIds,
+        compareIds: snapshot.compareHomeIds,
+      };
+    } else {
+      const localBrief = readStorage('family-brief', defaultBrief);
+      const localShortlist = stringArray(readStorage('shortlist', []), 200);
+      const localCompare = stringArray(readStorage('compare-selection', []), 3);
+      snapshot = guestSnapshotFromStorage(localBrief, localShortlist, localCompare);
+      nextWorkspace = { brief: localBrief, shortlistIds: localShortlist, compareIds: localCompare };
+      persistGuestSnapshot(snapshot);
+    }
+
+    guestSnapshotRef.current = snapshot;
+    setPendingLocalPlaceCount(snapshot.places.length);
+    setBrief(nextWorkspace.brief);
+    setShortlistIds(nextWorkspace.shortlistIds);
+    shortlistIdsRef.current = nextWorkspace.shortlistIds;
+    setCompareIds(nextWorkspace.compareIds);
+    compareIdsRef.current = nextWorkspace.compareIds;
+    setProfileOwner(null);
+    setProfileLoadState(userId ? 'loading' : 'signed_out');
+    setPlaces([]);
+    setPlaceState(authenticatedPlaceState(userId ? 'idle' : 'signed_out'));
+    setHistory(userId ? [] : readStorage('search-history', []));
+    setHistoryState(initialHistoryState(userId ? 'idle' : 'signed_out'));
+    setSavedSearches([]);
+    setSavedSearchState(initialSavedSearchState(userId ? 'idle' : 'signed_out'));
+    setLastSearchSnapshot(null);
+    lastSearchSnapshotRef.current = null;
+    searchInFlightRef.current = null;
+    setSyncState('local');
+    setSyncResult(null);
+    if (workspaceOwnerRef.current !== targetWorkspaceOwner) workspaceGenerationRef.current += 1;
+    workspaceOwnerRef.current = targetWorkspaceOwner;
+    setWorkspaceOwner(targetWorkspaceOwner);
+    setHydrated(true);
+  }, [authLoading, fixtureMode, targetWorkspaceOwner, userId, workspaceOwner]);
 
   useEffect(() => {
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '';
-    if (!hydrated || !client || !user) { if (!user) setProfileOwner(null); return undefined; }
-    let active = true;
-    (async () => {
-      const { data: { session } } = await client.auth.getSession();
-      if (!session?.access_token) return;
+    if (!workspaceReady || targetWorkspaceOwner !== 'guest' || userId) return;
+    window.localStorage.setItem('family-brief', JSON.stringify(brief));
+    window.localStorage.setItem('shortlist', JSON.stringify(shortlistIds));
+    window.localStorage.setItem('compare-selection', JSON.stringify(compareIds));
+  }, [brief, compareIds, shortlistIds, targetWorkspaceOwner, userId, workspaceReady]);
+
+  useEffect(() => {
+    if (!workspaceReady || !userId) return;
+    persistAccountWorkspace(userId, { brief, shortlistIds, compareIds });
+  }, [brief, compareIds, shortlistIds, targetWorkspaceOwner, userId, workspaceReady]);
+
+  useEffect(() => {
+    if (!workspaceReady || targetWorkspaceOwner !== 'guest' || userId) return;
+    const snapshot = normalizeGuestSnapshot({
+      brief: localBriefChanged(brief) ? guestBrief(brief) : null,
+      shortlistHomeIds: shortlistIds,
+      compareHomeIds: compareIds,
+      history: readStorage('search-history', []),
+      places: readStorage('personal-places', []),
+    });
+    guestSnapshotRef.current = snapshot;
+    setPendingLocalPlaceCount(snapshot.places.length);
+    persistGuestSnapshot(snapshot);
+  }, [brief, compareIds, shortlistIds, targetWorkspaceOwner, userId, workspaceReady]);
+
+  const syncGuestData = useCallback(async ({ confirmPlaces = false } = {}) => {
+    const syncUserId = userId;
+    const syncOwnerKey = accountWorkspaceOwnerKey(syncUserId);
+    const syncGeneration = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(syncUserId, syncOwnerKey, syncGeneration);
+    if (!isCurrentOwner()) {
+      return { ok: false, stale: true };
+    }
+    if (syncInFlightRef.current?.userId === syncUserId) return syncInFlightRef.current.promise;
+    const runSync = async () => {
+      setSyncState('syncing');
+      setSyncResult(null);
       try {
-        const headers = { Authorization: `Bearer ${session.access_token}` };
+        if (!syncUserId) throw new ApiError('Sign in to sync guest data.', { code: 'AUTH_REQUIRED', status: 401 });
+        if (!isCurrentOwner()) {
+          return { ok: false, stale: true };
+        }
+
+        const snapshot = normalizeGuestSnapshot(guestSnapshotRef.current);
+        const accountPendingHistory = accountWorkspaceFromStorage(syncUserId).pendingHistory;
+        const historyForSync = [...accountPendingHistory, ...snapshot.history].slice(0, 100);
+        const submittedGuestHistoryCount = Math.max(0, historyForSync.length - accountPendingHistory.length);
+        const submittedGuestHistory = snapshot.history.slice(0, submittedGuestHistoryCount);
+        const unsubmittedGuestHistory = snapshot.history.slice(submittedGuestHistory.length);
+        const syncSnapshot = { ...snapshot, history: historyForSync };
+        const payload = {
+          brief: snapshot.brief,
+          shortlistHomeIds: snapshot.shortlistHomeIds,
+          compareHomeIds: snapshot.compareHomeIds,
+          history: syncSnapshot.history,
+          confirmPlaces: Boolean(confirmPlaces),
+          confirmBrief: false,
+        };
+        if (confirmPlaces) payload.places = snapshot.places;
+        payload.sync_key = stableSyncKey(payload);
+
+        persistAccountPendingHistory(syncUserId, syncSnapshot.history);
+        const guestSnapshot = { ...snapshot, history: unsubmittedGuestHistory };
+        guestSnapshotRef.current = guestSnapshot;
+        persistGuestSnapshot(guestSnapshot);
+        removeSharedSearchHistory(submittedGuestHistory);
+
+        const result = await requestJson('/api/v1/sync/guest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!isCurrentOwner()) {
+          return { ok: false, stale: true };
+        }
+        if (!result || typeof result !== 'object' || !result.accepted || !result.skipped || !Array.isArray(result.conflicts)) {
+          throw new ApiError('Account sync returned an incomplete result. Please retry.', { code: 'INVALID_RESPONSE' });
+        }
+        const skippedHistoryCount = resultCount(result.skipped.history);
+        if (skippedHistoryCount > 0 && !Array.isArray(result.skipped.retryableHistoryIndexes)) {
+          window.localStorage.removeItem(GUEST_SYNC_KEY_STORAGE_KEY);
+          window.localStorage.removeItem(GUEST_SYNC_FINGERPRINT_STORAGE_KEY);
+          throw new ApiError('Account sync could not identify which search history entries can be retried. Please retry.', { code: 'INVALID_RESPONSE' });
+        }
+
+        const remaining = removeMergedSnapshot(syncSnapshot, result, { confirmPlaces });
+        persistAccountPendingHistory(syncUserId, remaining.history);
+        const guestRemaining = { ...remaining, history: unsubmittedGuestHistory };
+        guestSnapshotRef.current = guestRemaining;
+        if (skippedHistoryCount > 0) {
+          window.localStorage.removeItem(GUEST_SYNC_KEY_STORAGE_KEY);
+          window.localStorage.removeItem(GUEST_SYNC_FINGERPRINT_STORAGE_KEY);
+        }
+        persistGuestSnapshot(guestRemaining);
+        setPendingLocalPlaceCount(guestRemaining.places.length);
+        setSyncResult(result);
+        setSyncState('synced');
+        const notice = syncResultNotice(result);
+        flash(notice.text, notice.tone);
+        return { ok: true, result };
+      } catch (error) {
+        if (!isCurrentOwner()) {
+          return { ok: false, stale: true, error };
+        }
+        setSyncState('error');
+        flash(isAuthenticationFailure(error)
+          ? 'Your session expired. Please sign in again. Guest data is still saved in this browser; retry account sync after signing in.'
+          : 'Guest data is still saved in this browser. Account sync failed; please retry.', 'warning');
+        return { ok: false, error };
+      }
+    };
+
+    const request = runSync();
+    const inFlight = { userId: syncUserId, promise: request };
+    syncInFlightRef.current = inFlight;
+    try {
+      return await request;
+    } finally {
+      if (syncInFlightRef.current === inFlight) syncInFlightRef.current = null;
+    }
+  }, [isCurrentWorkspace, userId, workspaceReady]);
+
+  useEffect(() => {
+    if (!workspaceReady) return undefined;
+    if (!userId) {
+      setProfileOwner(null);
+      setProfileLoadState('signed_out');
+      setSyncState('local');
+      setSyncResult(null);
+      return undefined;
+    }
+    let active = true;
+    const accountUserId = user.id;
+    const accountGeneration = workspaceGenerationRef.current;
+    const isActiveOwner = () => active && workspaceReady
+      && isCurrentWorkspace(accountUserId, targetWorkspaceOwner, accountGeneration);
+    (async () => {
+      setProfileOwner(null);
+      setProfileLoadState('loading');
+      await syncGuestData();
+      if (!isActiveOwner()) return;
+      const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+      try {
         const [shortlistResponse, profileResponse] = await Promise.all([
-          fetch(`${apiBase.replace(/\/$/, '')}/api/v1/shortlists`, { headers }),
-          fetch(`${apiBase.replace(/\/$/, '')}/api/v1/profile`, { headers }),
+          fetch(`${apiBase.replace(/\/$/, '')}/api/v1/shortlists`, { credentials: 'include' }).catch(() => null),
+          fetch(`${apiBase.replace(/\/$/, '')}/api/v1/profile`, { credentials: 'include' }).catch(() => null),
         ]);
-        if (!active) return;
-        if (shortlistResponse.ok) {
+        if (!isActiveOwner()) return;
+        if (shortlistResponse?.ok) {
           const payload = await shortlistResponse.json();
-          const imported = payload.items || [];
-          setShortlistIds(imported.map((home) => home.id));
-          if (imported.length) setHomes((current) => [...imported, ...current.filter((home) => !imported.some((item) => item.id === home.id))]);
+          if (!isActiveOwner()) return;
+          const imported = Array.isArray(payload.items) ? payload.items : [];
+          const ids = imported.map((home) => home.id).filter((id) => typeof id === 'string');
+          setShortlistIds(ids);
+          shortlistIdsRef.current = ids;
+          if (imported.length && !fixtureMode) setHomes((current) => [...imported, ...current.filter((home) => !imported.some((item) => item.id === home.id))]);
         }
-        if (profileResponse.ok) {
+        if (profileResponse?.ok) {
           const profile = await profileResponse.json();
-          setBrief((current) => ({ ...current, adults: profile.adults, children: profile.children, olderAdults: profile.olderAdults, budget: profile.budgetCents == null ? current.budget : Math.round(profile.budgetCents / 100) }));
-          setProfileOwner(user.id);
+          if (!isActiveOwner()) return;
+          setBrief((current) => ({
+            ...current,
+            adults: profile.adults,
+            children: profile.children,
+            olderAdults: profile.olderAdults,
+            budget: profile.budgetCents == null ? current.budget : Math.round(profile.budgetCents / 100),
+            priorityWeights: isValidPriorityWeights(profile.priorityWeights) ? { ...profile.priorityWeights } : current.priorityWeights,
+            preferredTowns: Array.isArray(profile.preferredTowns) ? profile.preferredTowns : [],
+            preferredFlatType: profile.preferredFlatType ?? null,
+            schoolDistance: profile.maxSchoolDistanceM ?? null,
+            childcareDistance: profile.maxChildcareDistanceM ?? null,
+            careDistance: profile.maxCareDistanceM ?? null,
+          }));
+          setProfileOwner(accountUserId);
+          setProfileLoadState('ready');
+        } else {
+          setProfileLoadState('error');
         }
-      } catch { /* Keep current browser data if the API is temporarily unreachable. */ }
+      } catch {
+        if (isActiveOwner()) setProfileLoadState('error');
+        /* Keep the current browser data if account hydration is temporarily unreachable. */
+      }
     })();
     return () => { active = false; };
-  }, [client, hydrated, user]);
+  }, [fixtureMode, isCurrentWorkspace, syncGuestData, targetWorkspaceOwner, userId, workspaceOwner, workspaceReady]);
+
+  const runRequest = useCallback(async (kind, getPayload, selectData, onSuccess, onError, { append = false } = {}) => {
+    const requestUserId = userId;
+    const requestOwner = targetWorkspaceOwner;
+    const requestGeneration = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady
+      && isCurrentWorkspace(requestUserId, requestOwner, requestGeneration);
+    if (!isCurrentOwner()) return null;
+
+    requests.current[kind]?.abort();
+    const controller = new AbortController();
+    requests.current[kind] = controller;
+    const setState = { home: setHomeState, resource: setResourceState, source: setSourceState }[kind];
+    const setData = { home: setHomes, resource: setResourceFeatures, source: setSourceStatus }[kind];
+    setState((current) => ({ ...current, status: 'loading', error: null }));
+    if (kind === 'home') setBusy(true);
+    try {
+      const payload = await getPayload(controller.signal);
+      if (!isCurrentOwner() || controller.signal.aborted || requests.current[kind] !== controller) return null;
+      const data = selectData(payload);
+      let appliedData = data;
+      if (kind === 'home' && append) {
+        appliedData = mergeHomesById(homesRef.current, data);
+        homesRef.current = appliedData;
+        setHomes(appliedData);
+      } else {
+        setData(data);
+        if (kind === 'home') homesRef.current = data;
+      }
+      if (kind === 'home') setPagination(pageState(payload, data));
+      setState((current) => successState(payload, kind === 'source' ? data.items || [] : appliedData, current));
+      onSuccess?.(payload, data);
+      return data;
+    } catch (error) {
+      if (!isCurrentOwner() || error?.name === 'AbortError' || controller.signal.aborted || requests.current[kind] !== controller) return null;
+      setState((current) => errorState(error, current));
+      onError?.(error);
+      return null;
+    } finally {
+      if (requests.current[kind] === controller) {
+        requests.current[kind] = null;
+        if (kind === 'home') setBusy(false);
+      }
+    }
+  }, [isCurrentWorkspace, targetWorkspaceOwner, userId, workspaceReady]);
+
+  const loadHomes = useCallback((onSuccess, onError) => runRequest('home',
+    (signal) => requestJson('/api/v1/homes', { signal }),
+    (payload) => requireResultArray(payload, 'items'), (payload, data) => {
+      activeHomePageRequest.current = null;
+      onSuccess?.(payload, data);
+    }, onError), [runRequest]);
+
+  const loadResources = useCallback((bounds = null) => {
+    const params = new URLSearchParams({ limit: String(RESOURCE_PAGE_LIMIT) });
+    if (bounds) params.set('bounds', [bounds.west, bounds.south, bounds.east, bounds.north].join(','));
+    resourceTypes.forEach((type) => params.append('resource_type', type));
+    return runRequest('resource', (signal) => requestJson(`/api/v1/resources?${params}`, { signal }),
+      (payload) => requireResultArray(payload, 'features'), (payload) => {
+        setResourceState((current) => ({
+          ...current,
+          bounds,
+          limit: RESOURCE_PAGE_LIMIT,
+          total: Number.isFinite(payload.total) ? payload.total : null,
+          hasMore: payload.hasMore === true,
+          nextCursor: typeof payload.nextCursor === 'string' ? payload.nextCursor : null,
+          counts: Array.isArray(payload.counts) ? payload.counts : [],
+        }));
+      });
+  }, [runRequest]);
+
+  const refreshViewport = useCallback((bounds) => {
+    const normalized = normalizeViewportBounds(bounds);
+    if (!normalized) return Promise.resolve(null);
+    setViewportBounds(normalized);
+    return loadResources(normalized);
+  }, [loadResources]);
+
+  const loadMoreHomes = useCallback(() => {
+    if (!pagination.hasMore || !pagination.nextCursor) return Promise.resolve(null);
+    const cursor = pagination.nextCursor;
+    const pageRequest = activeHomePageRequest.current;
+    const getPayload = pageRequest
+      ? (signal) => pageRequest(signal, cursor)
+      : (signal) => {
+        const params = new URLSearchParams({ limit: String(HOME_PAGE_LIMIT), cursor });
+        return requestJson(`/api/v1/homes?${params}`, { signal });
+      };
+    return runRequest('home', getPayload, (payload) => requireResultArray(payload, 'items'), null, null, { append: true });
+  }, [pagination, runRequest]);
+
+  const loadSources = useCallback(() => runRequest('source',
+    (signal) => requestJson('/api/v1/sources', { signal }), (payload) => payload), [runRequest]);
+
+  const requireSignedIn = useCallback(async (requiredAction = 'Sign in to manage and search using saved places.') => {
+    if (!userId) {
+      throw new ApiError(requiredAction, { code: 'AUTH_REQUIRED', status: 401 });
+    }
+    const placeUserId = userId;
+    const placeOwner = targetWorkspaceOwner;
+    const placeGeneration = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(placeUserId, placeOwner, placeGeneration);
+    if (!isCurrentOwner()) return null;
+    return isCurrentOwner();
+  }, [isCurrentWorkspace, targetWorkspaceOwner, userId, workspaceReady]);
+
+  const refreshSavedDecisions = useCallback(async () => {
+    const ownerUserId = userId;
+    const ownerKey = targetWorkspaceOwner;
+    const generation = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(ownerUserId, ownerKey, generation);
+    if (!isCurrentOwner()) return null;
+    if (!ownerUserId) {
+      setHistory([]);
+      setHistoryState(initialHistoryState('signed_out'));
+      setSavedSearches([]);
+      setSavedSearchState(initialSavedSearchState('signed_out'));
+      return null;
+    }
+
+    requests.current.history?.abort();
+    requests.current.savedSearch?.abort();
+    const historyController = new AbortController();
+    const savedSearchController = new AbortController();
+    requests.current.history = historyController;
+    requests.current.savedSearch = savedSearchController;
+    const isActiveRequest = (kind, controller) => isCurrentOwner()
+      && !controller.signal.aborted
+      && requests.current[kind] === controller;
+    setHistoryState((current) => ({ ...current, status: 'loading', error: null }));
+    setSavedSearchState((current) => ({ ...current, status: 'loading', action: null, activeId: null, error: null }));
+    try {
+      const isSignedIn = await requireSignedIn('Sign in to view search history and saved searches.');
+      if (!isSignedIn || !isActiveRequest('history', historyController) || !isActiveRequest('savedSearch', savedSearchController)) return null;
+      const headers = {};
+      const loadHistory = async () => {
+        try {
+          const payload = await requestJson('/api/v1/history', { signal: historyController.signal, headers });
+          if (!isActiveRequest('history', historyController)) return null;
+          const nextHistory = requireResultArray(payload, 'items');
+          setHistory(nextHistory);
+          setHistoryState(initialHistoryState(nextHistory.length ? 'success' : 'empty'));
+          return nextHistory;
+        } catch (error) {
+          if (!isActiveRequest('history', historyController) || error?.name === 'AbortError') return null;
+          const details = savedSearchError(error, 'Search history is unavailable. Please try again.');
+          setHistoryState(initialHistoryState(details.code === 'AUTH_REQUIRED' ? 'signed_out' : 'error', details));
+          return null;
+        }
+      };
+
+      const loadSavedSearches = async () => {
+        try {
+          const payload = await requestJson('/api/v1/saved-searches', { signal: savedSearchController.signal, headers });
+          if (!isActiveRequest('savedSearch', savedSearchController)) return null;
+          const nextSavedSearches = requireResultArray(payload, 'items');
+          setSavedSearches(nextSavedSearches);
+          setSavedSearchState((current) => ({
+            ...current,
+            status: nextSavedSearches.length ? 'success' : 'empty',
+            action: null,
+            activeId: null,
+            error: null,
+          }));
+          return nextSavedSearches;
+        } catch (error) {
+          if (!isActiveRequest('savedSearch', savedSearchController) || error?.name === 'AbortError') return null;
+          const details = savedSearchError(error, 'Saved searches could not be loaded. Please try again.');
+          setSavedSearchState((current) => ({
+            ...current,
+            status: details.code === 'AUTH_REQUIRED' ? 'signed_out' : 'error',
+            action: null,
+            activeId: null,
+            error: details,
+          }));
+          return null;
+        }
+      };
+      const [nextHistory, nextSavedSearches] = await Promise.all([loadHistory(), loadSavedSearches()]);
+      return { history: nextHistory, savedSearches: nextSavedSearches };
+    } catch (error) {
+      if (!isCurrentOwner() || error?.name === 'AbortError') return null;
+      const details = savedSearchError(error, 'Search history and saved searches could not be loaded. Please try again.');
+      if (isActiveRequest('history', historyController)) {
+        setHistoryState(initialHistoryState(details.code === 'AUTH_REQUIRED' ? 'signed_out' : 'error', details));
+      }
+      if (isActiveRequest('savedSearch', savedSearchController)) {
+        setSavedSearchState((current) => ({
+          ...current,
+          status: details.code === 'AUTH_REQUIRED' ? 'signed_out' : 'error',
+          action: null,
+          activeId: null,
+          error: details,
+        }));
+      }
+      return null;
+    } finally {
+      if (requests.current.history === historyController) requests.current.history = null;
+      if (requests.current.savedSearch === savedSearchController) requests.current.savedSearch = null;
+    }
+  }, [requireSignedIn, isCurrentWorkspace, targetWorkspaceOwner, userId, workspaceReady]);
+
+  const recordSearchHistory = useCallback(async (snapshot) => {
+    const ownerUserId = userId;
+    const ownerKey = targetWorkspaceOwner;
+    const generation = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(ownerUserId, ownerKey, generation);
+    if (!ownerUserId || !isCurrentOwner() || !snapshot?.criteria) return;
+    try {
+      const isSignedIn = await requireSignedIn('Sign in to save search history.');
+      if (!isCurrentOwner() || !isSignedIn) return;
+      const headers = { 'Content-Type': 'application/json' };
+      await requestJson('/api/v1/history', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          mode: snapshot.mode,
+          criteria: snapshot.criteria,
+          scoring_version: snapshot.metadata.scorePolicyVersion,
+        }),
+      });
+      if (!isCurrentOwner()) return;
+      const historyPayload = await requestJson('/api/v1/history', {
+        headers: {},
+      });
+      if (isCurrentOwner()) {
+        const nextHistory = requireResultArray(historyPayload, 'items');
+        setHistory(nextHistory);
+        setHistoryState(initialHistoryState(nextHistory.length ? 'success' : 'empty'));
+      }
+    } catch {
+      // A history write must not turn a successful source search into a failed search.
+    }
+  }, [requireSignedIn, isCurrentWorkspace, targetWorkspaceOwner, userId, workspaceReady]);
+
+  const refreshPlaces = useCallback(async () => {
+    const placeUserId = userId;
+    const placeOwner = targetWorkspaceOwner;
+    const placeGeneration = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(placeUserId, placeOwner, placeGeneration);
+    if (!isCurrentOwner()) return null;
+    if (!placeUserId) {
+      requests.current.place?.abort();
+      requests.current.place = null;
+      setPlaces([]);
+      setPlaceState(authenticatedPlaceState('signed_out'));
+      return [];
+    }
+
+    requests.current.place?.abort();
+    const controller = new AbortController();
+    requests.current.place = controller;
+    setPlaceState(authenticatedPlaceState('loading'));
+    try {
+      const isSignedIn = await requireSignedIn();
+      if (!isCurrentOwner() || !isSignedIn || controller.signal.aborted || requests.current.place !== controller) return null;
+      const payload = await requestJson('/api/v1/places', {
+        signal: controller.signal,
+      });
+      if (!isCurrentOwner() || controller.signal.aborted || requests.current.place !== controller) return null;
+      const items = requireResultArray(payload, 'items').map(normalizePlace);
+      setPlaces(items);
+      setPlaceState(authenticatedPlaceState(items.length ? 'success' : 'empty'));
+      return items;
+    } catch (error) {
+      if (!isCurrentOwner() || controller.signal.aborted || requests.current.place !== controller) return null;
+      if (error?.code === 'AUTH_REQUIRED') {
+        setPlaces([]);
+        setPlaceState(authenticatedPlaceState('signed_out', { message: error.message, code: error.code, status: error.status }));
+      } else {
+        const apiError = error instanceof ApiError ? error : new ApiError('Unable to load this information. Please try again.', { code: 'UNKNOWN_ERROR' });
+        setPlaceState(authenticatedPlaceState('error', { message: apiError.message, code: apiError.code, status: apiError.status }));
+      }
+      return null;
+    } finally {
+      if (requests.current.place === controller) requests.current.place = null;
+    }
+  }, [requireSignedIn, isCurrentWorkspace, targetWorkspaceOwner, userId, workspaceReady]);
+
+  const suggestPlaces = useCallback(async (queryText) => {
+    const placeUserId = userId;
+    const placeOwner = targetWorkspaceOwner;
+    const placeGeneration = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(placeUserId, placeOwner, placeGeneration);
+    try {
+      const isSignedIn = await requireSignedIn();
+      if (!isCurrentOwner() || !isSignedIn) return [];
+      const params = new URLSearchParams({ q: String(queryText || '').trim() });
+      const payload = await requestJson(`/api/v1/places/suggest?${params}`, {
+      });
+      if (!isCurrentOwner()) return [];
+      return requireResultArray(payload, 'items');
+    } catch (error) {
+      if (!isCurrentOwner()) return [];
+      throw error;
+    }
+  }, [requireSignedIn, isCurrentWorkspace, targetWorkspaceOwner, userId, workspaceReady]);
+
+  const createPlace = useCallback(async (candidate) => {
+    const placeUserId = userId;
+    const placeOwner = targetWorkspaceOwner;
+    const placeGeneration = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(placeUserId, placeOwner, placeGeneration);
+    if (!isCurrentOwner()) return null;
+    if (!isOneMapSelection(candidate)) {
+      throw new ApiError('Choose an address returned by OneMap before saving a place.', { code: 'PLACE_CANDIDATE_REQUIRED', status: 422 });
+    }
+    const label = typeof candidate.label === 'string' ? candidate.label.trim() : '';
+    const kinds = ['workplace', 'school', 'childcare', 'elder-care', 'other'];
+    const maximumDistanceM = candidate.maximumDistanceM == null || candidate.maximumDistanceM === ''
+      ? null
+      : Number(candidate.maximumDistanceM);
+    if (!label || !kinds.includes(candidate.kind)
+      || (maximumDistanceM != null && (!Number.isInteger(maximumDistanceM) || maximumDistanceM < 1 || maximumDistanceM > 100_000))) {
+      throw new ApiError('Enter a place label, type, and a valid maximum distance.', { code: 'INVALID_PLACE', status: 422 });
+    }
+    let payload;
+    try {
+      const isSignedIn = await requireSignedIn();
+      if (!isCurrentOwner() || !isSignedIn) return null;
+      payload = await requestJson('/api/v1/places', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label,
+          kind: candidate.kind,
+          address: candidate.address.trim(),
+          latitude: candidate.latitude,
+          longitude: candidate.longitude,
+          maximum_distance_m: maximumDistanceM,
+          geocode_source: 'OneMap',
+          selection_token: candidate.selection_token,
+        }),
+      });
+    } catch (error) {
+      if (!isCurrentOwner()) return null;
+      throw error;
+    }
+    if (!isCurrentOwner()) return null;
+    const place = normalizePlace(payload);
+    setPlaces((current) => current.some((item) => item.id === place.id)
+      ? current.map((item) => item.id === place.id ? place : item)
+      : [...current, place]);
+    setPlaceState(authenticatedPlaceState('success'));
+    return place;
+  }, [requireSignedIn, isCurrentWorkspace, targetWorkspaceOwner, userId, workspaceReady]);
+
+  const deletePlace = useCallback(async (id) => {
+    const placeUserId = userId;
+    const placeOwner = targetWorkspaceOwner;
+    const placeGeneration = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(placeUserId, placeOwner, placeGeneration);
+    if (!isCurrentOwner()) return null;
+    if (typeof id !== 'string' || !id.trim()) {
+      throw new ApiError('The selected place is invalid.', { code: 'INVALID_PLACE_ID', status: 422 });
+    }
+    let payload;
+    try {
+      const isSignedIn = await requireSignedIn();
+      if (!isCurrentOwner() || !isSignedIn) return null;
+      payload = await requestJson(`/api/v1/places/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+    } catch (error) {
+      if (!isCurrentOwner()) return null;
+      throw error;
+    }
+    if (!isCurrentOwner()) return null;
+    const remainingPlaces = places.filter((place) => place.id !== id);
+    setPlaces((current) => current.filter((place) => place.id !== id));
+    setBrief((current) => ({
+      ...current,
+      placeConstraints: (Array.isArray(current.placeConstraints) ? current.placeConstraints : [])
+        .filter((constraint) => constraint.placeId !== id),
+    }));
+    setPlaceState(authenticatedPlaceState(remainingPlaces.length ? 'success' : 'empty'));
+    return payload;
+  }, [requireSignedIn, isCurrentWorkspace, places, targetWorkspaceOwner, userId, workspaceReady]);
+
+  const retryHomes = useCallback(() => {
+    if (!fixtureMode) return loadHomes();
+    setHomes(fixtureHomes);
+    homesRef.current = fixtureHomes;
+    setHomeState(fixtureState(fixtureHomes));
+    setPagination({ limit: HOME_PAGE_LIMIT, total: fixtureHomes.length, nextCursor: null, hasMore: false });
+    activeHomePageRequest.current = null;
+    return Promise.resolve(fixtureHomes);
+  }, [fixtureMode, loadHomes]);
+
+  const retryResources = useCallback(() => {
+    if (!fixtureMode) return viewportBounds ? loadResources(viewportBounds) : loadResources();
+    setResourceState(fixtureState([]));
+    return Promise.resolve([]);
+  }, [fixtureMode, loadResources, viewportBounds]);
+
+  useEffect(() => {
+    if (!workspaceReady) return undefined;
+    if (fixtureMode) {
+      setHomeState(fixtureState(fixtureHomes));
+      homesRef.current = fixtureHomes;
+      setPagination({ limit: HOME_PAGE_LIMIT, total: fixtureHomes.length, nextCursor: null, hasMore: false });
+      activeHomePageRequest.current = null;
+      setResourceState(fixtureState([]));
+      setSourceState(fixtureState([]));
+      return undefined;
+    }
+    loadHomes();
+    loadResources();
+    loadSources();
+    return () => {
+      for (const kind of ['home', 'resource', 'source']) {
+        requests.current[kind]?.abort();
+        requests.current[kind] = null;
+      }
+    };
+  }, [fixtureMode, loadHomes, loadResources, loadSources, workspaceReady]);
+
+  useEffect(() => {
+    if (!workspaceReady) return undefined;
+    if (!userId) {
+      requests.current.place?.abort();
+      requests.current.place = null;
+      setPlaces([]);
+      setPlaceState(authenticatedPlaceState('signed_out'));
+      return undefined;
+    }
+    setPlaces([]);
+    refreshPlaces();
+    return () => {
+      requests.current.place?.abort();
+      requests.current.place = null;
+    };
+  }, [refreshPlaces, targetWorkspaceOwner, userId, workspaceOwner, workspaceReady]);
+
+  useEffect(() => {
+    if (!workspaceReady) return undefined;
+    refreshSavedDecisions();
+    return () => {
+      requests.current.history?.abort();
+      requests.current.history = null;
+      requests.current.savedSearch?.abort();
+      requests.current.savedSearch = null;
+    };
+  }, [refreshSavedDecisions, targetWorkspaceOwner, userId, workspaceOwner, workspaceReady]);
 
   useEffect(() => {
     const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '';
-    if (!hydrated || profileOwner !== user?.id || !client) return undefined;
+    if (!workspaceReady || profileOwner !== userId || !userId) return undefined;
+    const owner = targetWorkspaceOwner;
+    const generation = workspaceGenerationRef.current;
+    let active = true;
     const timer = window.setTimeout(async () => {
-      const { data: { session } } = await client.auth.getSession();
-      if (!session?.access_token) return;
       try {
+        if (!active || !isCurrentWorkspace(userId, owner, generation)) return;
         await fetch(`${apiBase.replace(/\/$/, '')}/api/v1/profile`, {
           method: 'PUT',
-          headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ adults: brief.adults, children: brief.children, older_adults: brief.olderAdults, budget_cents: Math.round(Number(brief.budget) * 100), locale: 'en-SG' }),
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(profileUpdatePayload(brief)),
         });
       } catch { /* Local current filters remain usable if profile sync is temporarily offline. */ }
     }, 500);
-    return () => window.clearTimeout(timer);
-  }, [brief.adults, brief.budget, brief.children, brief.olderAdults, client, hydrated, profileOwner, user?.id]);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [brief.adults, brief.budget, brief.careDistance, brief.childcareDistance, brief.children, brief.olderAdults, brief.preferredFlatType, brief.preferredTowns, brief.priorityWeights, brief.schoolDistance, isCurrentWorkspace, profileOwner, targetWorkspaceOwner, userId, workspaceReady]);
 
-  const selectedHomes = useMemo(() => homes.filter((home) => compareIds.includes(home.id)), [homes, compareIds]);
-  const shortlistHomes = useMemo(() => shortlistIds.map((id) => homes.find((home) => home.id === id)).filter(Boolean), [homes, shortlistIds]);
+  const saveProfile = useCallback(async ({ profile = brief, onboardingCompleted } = {}) => {
+    if (!userId) throw new ApiError('Sign in to save your home preferences.', { code: 'AUTH_REQUIRED', status: 401 });
+    const owner = targetWorkspaceOwner;
+    const generation = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && profileOwner === userId
+      && profileLoadState === 'ready'
+      && isCurrentWorkspace(userId, owner, generation);
+    if (!isCurrentOwner()) {
+      throw new ApiError('Your account preferences are still loading. Please try again in a moment.', { code: 'PROFILE_NOT_READY' });
+    }
+    const saved = await requestJson('/api/v1/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profileUpdatePayload(profile, onboardingCompleted)),
+    });
+    if (!isCurrentOwner()) throw new DOMException('The workspace owner changed.', 'AbortError');
+    return saved;
+  }, [brief, isCurrentWorkspace, profileLoadState, profileOwner, targetWorkspaceOwner, userId, workspaceReady]);
+
+  const decisionHomesById = useMemo(() => new Map(
+    [...preservedDecisionHomes, ...homes]
+      .filter((home) => home?.id !== null && home?.id !== undefined)
+      .map((home) => [String(home.id), home]),
+  ), [homes, preservedDecisionHomes]);
+  const selectedHomes = useMemo(() => compareIds
+    .map((id) => decisionHomesById.get(String(id)))
+    .filter(Boolean), [compareIds, decisionHomesById]);
+  const shortlistHomes = useMemo(() => shortlistIds
+    .map((id) => decisionHomesById.get(String(id)))
+    .filter(Boolean), [decisionHomesById, shortlistIds]);
 
   function flash(text, tone = 'info') {
     setNotice({ text, tone });
@@ -111,89 +1262,567 @@ export function WorkspaceProvider({ children }) {
     flash.timeout = window.setTimeout(() => setNotice(null), 4800);
   }
 
-  async function toggleShortlist(home) {
-    const isSaved = shortlistIds.includes(home.id);
-    setShortlistIds((current) => isSaved ? current.filter((id) => id !== home.id) : [...current, home.id]);
-    const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL;
-    if (user && client) {
+  function enqueueShortlistMutation(operation) {
+    const result = shortlistMutationQueueRef.current.then(operation, operation);
+    shortlistMutationQueueRef.current = result.catch(() => false);
+    return result;
+  }
+
+  function toggleShortlist(home) {
+    const mutationUserId = userId;
+    const mutationOwner = targetWorkspaceOwner;
+    const mutationGeneration = workspaceGenerationRef.current;
+    return enqueueShortlistMutation(async () => {
+      const isCurrentOwner = () => workspaceReady
+        && isCurrentWorkspace(mutationUserId, mutationOwner, mutationGeneration);
+      if (!isCurrentOwner()) return false;
+
+      const previous = [...shortlistIdsRef.current];
+      const restoreStaleAccountCache = () => {
+        persistAccountShortlist(mutationUserId, previous);
+        return false;
+      };
+      const isSaved = previous.includes(home.id);
+      const next = isSaved ? previous.filter((id) => id !== home.id) : [...previous, home.id];
+      shortlistIdsRef.current = next;
+      setShortlistIds(next);
+
+      if (!mutationUserId) {
+        flash(isSaved ? `${home.address} removed from this browser.` : `${home.address} saved in this browser.`, isSaved ? 'info' : 'success');
+        return true;
+      }
+
       try {
-        const { data: { session } } = await client.auth.getSession();
-        if (!session?.access_token) throw new Error('Your session expired.');
-        const response = await fetch(`${apiBase.replace(/\/$/, '')}/api/v1/shortlists${isSaved ? `/${encodeURIComponent(home.id)}` : ''}`, {
+        if (!isCurrentOwner()) return restoreStaleAccountCache();
+        const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
+        const response = await fetch(`${apiBase}/api/v1/shortlists${isSaved ? `/${encodeURIComponent(home.id)}` : ''}`, {
           method: isSaved ? 'DELETE' : 'POST',
-          headers: { ...(isSaved ? {} : { 'Content-Type': 'application/json' }), Authorization: `Bearer ${session.access_token}` },
+          credentials: 'include',
+          headers: isSaved ? {} : { 'Content-Type': 'application/json' },
           body: isSaved ? undefined : JSON.stringify({ home_id: home.id }),
         });
-        if (response.ok) { flash(isSaved ? `${home.address} removed from your account shortlist.` : `${home.address} saved to your account.`, 'success'); return; }
-        if (response.status === 404) { flash('This illustrative sample stays in this browser; only imported source records can sync to your account.', 'warning'); return; }
-        throw new Error('The account could not be updated.');
-      } catch {
-        flash(isSaved ? `${home.address} removed here; account sync failed.` : `${home.address} is saved here only because account sync failed.`, 'warning');
-        return;
+        if (!response.ok) throw new ApiError('The account could not be updated.', { status: response.status, code: 'HTTP_ERROR' });
+        if (!isCurrentOwner()) return false;
+        flash(isSaved ? `${home.address} removed from your account shortlist.` : `${home.address} saved to your account.`, 'success');
+        return true;
+      } catch (error) {
+        if (!isCurrentOwner()) return restoreStaleAccountCache();
+        shortlistIdsRef.current = previous;
+        setShortlistIds(previous);
+        const unavailableSample = error?.status === 404;
+        const authMessage = 'Your session expired. Please sign in again.';
+        flash(isAuthenticationFailure(error)
+          ? `${authMessage} Your previous shortlist was restored. Please retry after signing in.`
+          : unavailableSample
+            ? 'This illustrative sample cannot be saved to your account. Your previous shortlist was restored. Please try again with a source record.'
+            : `${isSaved ? 'Removing' : 'Saving'} ${home.address} failed. Your previous shortlist was restored. Please try again.`, 'warning');
+        return false;
       }
-    }
-    flash(isSaved ? `${home.address} removed from this browser.` : `${home.address} saved in this browser.`, isSaved ? 'info' : 'success');
+    });
+  }
+
+  function reorderShortlist(nextIds) {
+    const mutationUserId = userId;
+    const mutationOwner = targetWorkspaceOwner;
+    const mutationGeneration = workspaceGenerationRef.current;
+    return enqueueShortlistMutation(async () => {
+      const isCurrentOwner = () => workspaceReady
+        && isCurrentWorkspace(mutationUserId, mutationOwner, mutationGeneration);
+      if (!isCurrentOwner()) return false;
+
+      const previous = [...shortlistIdsRef.current];
+      const restoreStaleAccountCache = () => {
+        persistAccountShortlist(mutationUserId, previous);
+        return false;
+      };
+      const next = stringArray(nextIds, 200);
+      if (next.length !== previous.length || next.some((id) => !previous.includes(id))) return false;
+      shortlistIdsRef.current = next;
+      setShortlistIds(next);
+      if (!mutationUserId) {
+        flash('Shortlist order updated in this browser.', 'info');
+        return true;
+      }
+
+      try {
+        if (!isCurrentOwner()) return restoreStaleAccountCache();
+        const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
+        const response = await fetch(`${apiBase}/api/v1/shortlists/order`, {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ordered_home_ids: next }),
+        });
+        if (!response.ok) throw new ApiError('The account could not be updated.', { status: response.status, code: 'HTTP_ERROR' });
+        if (!isCurrentOwner()) return false;
+        flash('Shortlist order saved to your account.', 'success');
+        return true;
+      } catch (error) {
+        if (!isCurrentOwner()) return restoreStaleAccountCache();
+        shortlistIdsRef.current = previous;
+        setShortlistIds(previous);
+        flash(isAuthenticationFailure(error)
+          ? 'Your session expired. Please sign in again. Your previous shortlist order was restored. Please retry after signing in.'
+          : 'Shortlist order could not be saved. Your previous order was restored. Please try again.', 'warning');
+        return false;
+      }
+    });
   }
 
   function toggleCompare(home) {
+    if (!workspaceReady || !isCurrentWorkspace(userId, targetWorkspaceOwner, workspaceGenerationRef.current)) return;
     const isSelected = compareIds.includes(home.id);
     if (!isSelected && compareIds.length >= 3) { flash('Comparison is limited to three homes.', 'warning'); return; }
-    setCompareIds((current) => isSelected ? current.filter((id) => id !== home.id) : [...current, home.id]);
+    const next = isSelected ? compareIds.filter((id) => id !== home.id) : [...compareIds, home.id];
+    compareIdsRef.current = next;
+    setCompareIds(next);
     flash(isSelected ? `${home.address} removed from comparison.` : `${home.address} added to comparison.`, 'info');
   }
 
   function applyLocalSearch(nextQuery = query) {
-    const results = filterHomes(fixtureHomes, nextQuery, brief);
+    if (!fixtureMode) return homes;
+    const currentBrief = workspaceReady ? brief : defaultBrief;
+    const results = applyLocalRequirements(filterHomes(fixtureHomes, nextQuery, currentBrief), currentBrief);
     setHomes(results);
+    homesRef.current = results;
+    setPagination({ limit: HOME_PAGE_LIMIT, total: results.length, nextCursor: null, hasMore: false });
+    activeHomePageRequest.current = null;
+    setHomeState(fixtureState(results));
     flash(results.length ? `${results.length} labelled fixture candidates found.` : 'No homes match every current filter. Adjust the filters to search again.', results.length ? 'info' : 'warning');
     return results;
   }
 
   async function applySearch(nextQuery = query) {
-    setBusy(true);
-    const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL || '').replace(/\/$/, '');
-    try {
-        let criteria = { query: nextQuery, budget: brief.budget, max_school_distance_m: brief.schoolDistance, max_care_distance_m: brief.careDistance };
-        let interpretationNotice = '';
+    if (fixtureMode) return applyLocalSearch(nextQuery);
+    const currentBrief = workspaceReady ? brief : defaultBrief;
+    const placeConstraints = (Array.isArray(currentBrief.placeConstraints) ? currentBrief.placeConstraints : [])
+      .filter((constraint) => typeof constraint?.placeId === 'string' && constraint.placeId
+        && Number.isInteger(Number(constraint.maxDistanceM))
+        && Number(constraint.maxDistanceM) >= 0
+        && Number(constraint.maxDistanceM) <= 100_000)
+      .map((constraint) => ({ place_id: constraint.placeId, max_distance_m: Number(constraint.maxDistanceM) }));
+    const priorityWeights = { ...currentBrief.priorityWeights };
+    let interpretationNotice = '';
+    let pageRequestForSearch = null;
+    let requestCriteriaForSearch = null;
+    const searchRequest = runRequest('home', async (signal) => {
+        let criteria = { query: nextQuery, ...searchCriteriaFromBrief(currentBrief) };
         if (nextQuery.trim()) {
           try {
-            const interpreted = await fetch(`${apiBase.replace(/\/$/, '')}/api/v1/ai/interpret`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: nextQuery }) });
-            if (interpreted.ok) {
-              const parsed = await interpreted.json();
-              criteria = { ...parsed.filters, budget: brief.budget, max_school_distance_m: brief.schoolDistance, max_care_distance_m: brief.careDistance };
-              if (parsed.needs_clarification && parsed.clarifying_question) interpretationNotice = parsed.clarifying_question;
-            } else {
-              const errorPayload = await interpreted.json().catch(() => ({}));
-              interpretationNotice = errorPayload.detail?.message || 'Phrase interpretation is unavailable; searching the words as typed.';
-            }
-          } catch { interpretationNotice = 'Phrase interpretation is unavailable; searching the words as typed.'; }
+            const headers = { 'Content-Type': 'application/json' };
+            if (userId && !await requireSignedIn()) throw new DOMException('The workspace owner changed.', 'AbortError');
+            const parsed = await requestJson('/api/v1/ai/interpret', { signal, method: 'POST', headers, body: JSON.stringify({ text: nextQuery }) });
+            const interpreted = parsed.filters && typeof parsed.filters === 'object' && !Array.isArray(parsed.filters)
+              ? parsed.filters
+              : {};
+            criteria = { ...mergeExplicitSearchCriteria(criteria, interpreted), query: nextQuery };
+            if (typeof interpreted.town === 'string' && interpreted.town.trim()) delete criteria.towns;
+            if (parsed.needs_clarification && parsed.clarifying_question) interpretationNotice = parsed.clarifying_question;
+          } catch (error) {
+            if (error?.name === 'AbortError' || signal.aborted) throw error;
+            if (userId && isAuthenticationFailure(error)) throw error;
+            interpretationNotice = 'Phrase interpretation is unavailable; searching the words as typed.';
+          }
         }
-        const response = await fetch(`${apiBase.replace(/\/$/, '')}/api/v1/search`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(criteria),
-        });
-        if (!response.ok) throw new Error('Search service unavailable');
-        const payload = await response.json();
-        const results = payload.items || [];
-        setHomes(results);
+        if (signal.aborted) return null;
+        pageRequestForSearch = async (pageSignal, cursor) => {
+          const headers = { 'Content-Type': 'application/json' };
+          if (placeConstraints.length && !await requireSignedIn()) throw new DOMException('The workspace owner changed.', 'AbortError');
+          const requestCriteria = {
+            ...criteria,
+            priority_weights: priorityWeights,
+            place_constraints: placeConstraints,
+            limit: HOME_PAGE_LIMIT,
+            ...(cursor ? { cursor } : {}),
+          };
+          if (!cursor) requestCriteriaForSearch = requestCriteria;
+          return requestJson('/api/v1/search', {
+            signal: pageSignal,
+            method: 'POST',
+            headers,
+            body: JSON.stringify(requestCriteria),
+          });
+        };
+        return pageRequestForSearch(signal, null);
+      }, (payload) => requireResultArray(payload, 'items'), (payload, results) => {
+        activeHomePageRequest.current = pageRequestForSearch;
+        const normalizedCriteria = normalizeSavedSearchCriteria(payload?.criteria, requestCriteriaForSearch || {});
+        const metadata = searchResultMetadata(payload, results);
+        const snapshot = {
+          mode: nextQuery.trim() ? 'natural_language' : 'structured',
+          criteria: normalizedCriteria,
+          priorityWeights: normalizedCriteria.priority_weights || priorityWeights,
+          placeConstraints: normalizedCriteria.place_constraints || placeConstraints,
+          sourceSnapshotIds: Array.isArray(payload?.sourceSnapshotIds) ? payload.sourceSnapshotIds : [],
+          metadata,
+          lastRunAt: new Date().toISOString(),
+        };
+        lastSearchSnapshotRef.current = snapshot;
+        setLastSearchSnapshot(snapshot);
+        if (userId) recordSearchHistory(snapshot);
         if (payload.unappliedCriteria?.length) flash(`Location-based filters were not applied because transaction coordinates and verified proximity matching are not ready (${payload.unappliedCriteria.join(', ')}). ${results.length} historical records remain; these are not live listings.`, 'warning');
         else if (interpretationNotice) flash(interpretationNotice, 'warning');
         else flash(results.length ? `${results.length} dated resale records found. They are not current listings.` : 'No source records match these applied filters.', results.length ? 'info' : 'warning');
-        setBusy(false);
-        return results;
-    } catch {
-      // Keep the planning workflow useful when the optional API is offline.
+      }, (error) => flash(isAuthenticationFailure(error)
+        ? (userId ? 'Your session expired. Please sign in again.' : 'Sign in to search using saved places.')
+        : 'Search service unavailable. Previous source records remain in view; please retry.', 'warning'));
+    searchInFlightRef.current = searchRequest;
+    try {
+      return await searchRequest;
+    } finally {
+      if (searchInFlightRef.current === searchRequest) searchInFlightRef.current = null;
     }
-    const results = applyLocalSearch(nextQuery);
-    flash('The source service is unavailable. These illustrative examples are for UI preview only.', 'warning');
-    setBusy(false);
-    return results;
   }
 
-  function resetSearch() { setQuery(''); setHomes(fixtureHomes); flash('Search reset to the full labelled fixture set.', 'info'); }
+  function reportSavedSearchError(error, fallbackMessage, id = null) {
+    const details = savedSearchError(error, fallbackMessage);
+    const missingPlace = details.code === 'SAVED_SEARCH_PLACE_UNAVAILABLE';
+    setSavedSearchState((current) => ({
+      ...current,
+      status: missingPlace ? 'missing_place' : details.code === 'AUTH_REQUIRED' ? 'signed_out' : 'error',
+      action: null,
+      activeId: id,
+      error: details,
+    }));
+    return null;
+  }
 
-  const value = { brief, setBrief, homes, setHomes, resourceFeatures, sourceStatus, query, setQuery, notice, setNotice, busy, shortlistIds, setShortlistIds, shortlistHomes, compareIds, setCompareIds, selectedHomes, toggleShortlist, toggleCompare, applyLocalSearch, applySearch, resetSearch, flash };
+  async function saveSearch(name) {
+    const ownerUserId = userId;
+    const ownerKey = targetWorkspaceOwner;
+    const generation = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(ownerUserId, ownerKey, generation);
+    if (!isCurrentOwner()) return null;
+    const cleanName = typeof name === 'string' ? name.trim() : '';
+    if (!ownerUserId) {
+      return reportSavedSearchError(new ApiError('Sign in to save a search.', { code: 'AUTH_REQUIRED', status: 401 }), 'Sign in to save a search.');
+    }
+    if (!cleanName) {
+      return reportSavedSearchError(new ApiError('Enter a name for this search.', { code: 'INVALID_SAVED_SEARCH_NAME', status: 422 }), 'Enter a name for this search.');
+    }
+    if (searchInFlightRef.current) await searchInFlightRef.current;
+    const snapshot = lastSearchSnapshotRef.current;
+    if (!isCurrentOwner()) return null;
+    if (!snapshot || snapshot.metadata.dataMode !== 'live' || !snapshot.metadata.scorePolicyVersion) {
+      return reportSavedSearchError(new ApiError('Run a successful live search with score-policy metadata before saving it.', { code: 'SEARCH_NOT_READY', status: 409 }), 'Run a successful live search before saving it.');
+    }
+    setSavedSearchState((current) => ({ ...current, action: 'saving', activeId: null, error: null }));
+    try {
+      const isSignedIn = await requireSignedIn('Sign in to save a search.');
+      if (!isCurrentOwner() || !isSignedIn) return null;
+      const itemPayload = await requestJson('/api/v1/saved-searches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: cleanName,
+          mode: snapshot.mode,
+          criteria: snapshot.criteria,
+          priority_weights: snapshot.priorityWeights,
+          place_constraints: snapshot.placeConstraints,
+          scoring_version: snapshot.metadata.scorePolicyVersion,
+          last_run_at: snapshot.lastRunAt,
+          last_source_snapshot_ids: snapshot.sourceSnapshotIds,
+          last_result_meta: snapshot.metadata,
+        }),
+      });
+      if (!isCurrentOwner()) return null;
+      const item = itemPayload?.item || itemPayload;
+      if (!item || typeof item.id !== 'string') throw new ApiError('The saved search response was invalid.', { code: 'INVALID_RESPONSE' });
+      setSavedSearches((current) => [item, ...current.filter((saved) => saved.id !== item.id)]);
+      setSavedSearchState((current) => ({ ...current, status: 'success', action: null, activeId: item.id, error: null }));
+      return item;
+    } catch (error) {
+      if (!isCurrentOwner()) return null;
+      return reportSavedSearchError(error, 'This search could not be saved. Please try again.');
+    }
+  }
+
+  async function renameSavedSearch(id, name) {
+    const cleanName = typeof name === 'string' ? name.trim() : '';
+    if (!cleanName) return reportSavedSearchError(new ApiError('Enter a name for this search.', { code: 'INVALID_SAVED_SEARCH_NAME', status: 422 }), 'Enter a name for this search.', id);
+    const ownerUserId = userId;
+    const ownerKey = targetWorkspaceOwner;
+    const generation = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(ownerUserId, ownerKey, generation);
+    if (!isCurrentOwner()) return null;
+    if (!ownerUserId) return reportSavedSearchError(new ApiError('Sign in to rename saved searches.', { code: 'AUTH_REQUIRED', status: 401 }), 'Sign in to rename saved searches.', id);
+    setSavedSearchState((current) => ({ ...current, action: 'renaming', activeId: id, error: null }));
+    try {
+      const isSignedIn = await requireSignedIn('Sign in to rename saved searches.');
+      if (!isCurrentOwner() || !isSignedIn) return null;
+      const payload = await requestJson(`/api/v1/saved-searches/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: cleanName }),
+      });
+      if (!isCurrentOwner()) return null;
+      const item = payload?.item || payload;
+      setSavedSearches((current) => current.map((saved) => saved.id === id ? { ...saved, ...item, name: item.name || cleanName } : saved));
+      setSavedSearchState((current) => ({ ...current, status: savedSearches.length ? 'success' : 'empty', action: null, activeId: id, error: null }));
+      return item;
+    } catch (error) {
+      if (!isCurrentOwner()) return null;
+      return reportSavedSearchError(error, 'This saved search could not be renamed. Please try again.', id);
+    }
+  }
+
+  async function deleteSavedSearch(id) {
+    const ownerUserId = userId;
+    const ownerKey = targetWorkspaceOwner;
+    const generation = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(ownerUserId, ownerKey, generation);
+    if (!isCurrentOwner()) return null;
+    if (!ownerUserId) return reportSavedSearchError(new ApiError('Sign in to delete saved searches.', { code: 'AUTH_REQUIRED', status: 401 }), 'Sign in to delete saved searches.', id);
+    setSavedSearchState((current) => ({ ...current, action: 'deleting', activeId: id, error: null }));
+    try {
+      const isSignedIn = await requireSignedIn('Sign in to delete saved searches.');
+      if (!isCurrentOwner() || !isSignedIn) return null;
+      const payload = await requestJson(`/api/v1/saved-searches/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+      if (!isCurrentOwner()) return null;
+      const nextSearches = savedSearches.filter((saved) => saved.id !== id);
+      setSavedSearches(nextSearches);
+      setSavedSearchState((current) => ({
+        ...current,
+        status: nextSearches.length ? 'success' : 'empty',
+        action: null,
+        activeId: id,
+        error: null,
+        reruns: Object.fromEntries(Object.entries(current.reruns).filter(([savedId]) => savedId !== id)),
+      }));
+      return payload;
+    } catch (error) {
+      if (!isCurrentOwner()) return null;
+      return reportSavedSearchError(error, 'This saved search could not be deleted. Please try again.', id);
+    }
+  }
+
+  async function rerunSavedSearch(id) {
+    const ownerUserId = userId;
+    const ownerKey = targetWorkspaceOwner;
+    const generation = workspaceGenerationRef.current;
+    const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(ownerUserId, ownerKey, generation);
+    if (!isCurrentOwner()) return null;
+    if (!ownerUserId) return reportSavedSearchError(new ApiError('Sign in to rerun saved searches.', { code: 'AUTH_REQUIRED', status: 401 }), 'Sign in to rerun saved searches.', id);
+    const saved = savedSearches.find((item) => item.id === id);
+    if (!saved) return reportSavedSearchError(new ApiError('This saved search is no longer available.', { code: 'SAVED_SEARCH_NOT_FOUND', status: 404 }), 'This saved search is no longer available.', id);
+    const attempt = {};
+    activeSavedSearchRerunRef.current = attempt;
+    const previousHomes = homesRef.current;
+    const criteria = normalizeSavedSearchCriteria(saved.criteria, {});
+    let responsePayload = null;
+    setSavedSearchState((current) => ({ ...current, action: 'rerunning', activeId: id, error: null }));
+    const pageRequest = async (signal, cursor) => {
+      const headers = { 'Content-Type': 'application/json' };
+      if (Array.isArray(criteria.place_constraints) && criteria.place_constraints.length) {
+        const isSignedIn = await requireSignedIn('Sign in to search using saved places.');
+        if (!isSignedIn || signal.aborted) throw new DOMException('The workspace owner changed.', 'AbortError');
+      }
+      return requestJson('/api/v1/search', {
+        signal,
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ ...criteria, cursor }),
+      });
+    };
+
+    const items = await runRequest('home', async (signal) => {
+      const isSignedIn = await requireSignedIn('Sign in to rerun saved searches.');
+      if (!isSignedIn || signal.aborted) throw new DOMException('The workspace owner changed.', 'AbortError');
+      const payload = await requestJson(`/api/v1/saved-searches/${encodeURIComponent(id)}/run`, {
+        signal,
+        method: 'POST',
+      });
+      const metadata = payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {};
+      return { ...metadata, ...payload };
+    }, (payload) => {
+      responsePayload = payload;
+      return requireResultArray(payload, 'items');
+    }, (payload, results) => {
+      const resultMetadata = payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {};
+      const metadata = searchResultMetadata(payload, results);
+      const result = {
+        priorMetadata: payload?.priorMetadata || null,
+        metadata: { ...resultMetadata, ...metadata },
+        difference: payload?.difference || null,
+      };
+      const sourceSnapshotIds = Array.isArray(payload?.sourceSnapshotIds) ? payload.sourceSnapshotIds : [];
+      const lastRunAt = payload?.lastRunAt || new Date().toISOString();
+      const selectedIds = [...new Set([...shortlistIdsRef.current, ...compareIdsRef.current].map(String))];
+      const knownHomesById = new Map(
+        [...preservedDecisionHomesRef.current, ...previousHomes, ...results]
+          .filter((home) => home?.id !== null && home?.id !== undefined)
+          .map((home) => [String(home.id), home]),
+      );
+      const nextPreservedHomes = selectedIds.map((homeId) => knownHomesById.get(homeId)).filter(Boolean);
+      preservedDecisionHomesRef.current = nextPreservedHomes;
+      setPreservedDecisionHomes(nextPreservedHomes);
+      activeHomePageRequest.current = pageRequest;
+      if (typeof criteria.query === 'string') setQuery(criteria.query);
+      setBrief((current) => briefFromCriteria(current,criteria));
+      const nextSnapshot = {
+        mode: saved.mode || 'structured',
+        criteria,
+        priorityWeights: criteria.priority_weights || saved.scorePolicy?.priorityWeights || {},
+        placeConstraints: criteria.place_constraints || [],
+        sourceSnapshotIds,
+        metadata,
+        lastRunAt,
+      };
+      lastSearchSnapshotRef.current = nextSnapshot;
+      setLastSearchSnapshot(nextSnapshot);
+      const nextSearches = savedSearches.map((item) => item.id === id ? {
+        ...item,
+        lastRunAt,
+        lastSourceSnapshotIds: sourceSnapshotIds,
+        lastResultMeta: result.metadata,
+      } : item);
+      setSavedSearches(nextSearches);
+      setSavedSearchState((current) => ({
+        ...current,
+        status: nextSearches.length ? 'success' : 'empty',
+        action: null,
+        activeId: id,
+        error: null,
+        reruns: { ...current.reruns, [id]: result },
+      }));
+      activeSavedSearchRerunRef.current = null;
+      flash(results.length ? `${results.length} fresh source records returned. They are not current listings.` : 'No source records match this saved search.', results.length ? 'info' : 'warning');
+    }, (error) => {
+      reportSavedSearchError(error, 'This saved search could not be rerun. Your current results remain in view.', id);
+    });
+
+    if (!items && isCurrentOwner() && activeSavedSearchRerunRef.current === attempt) {
+      activeSavedSearchRerunRef.current = null;
+      setSavedSearchState((current) => current.action === 'rerunning' && current.activeId === id
+        ? { ...current, action: null }
+        : current);
+    }
+    return responsePayload;
+  }
+
+  function resetSearch() {
+    if (fixtureMode) {
+      setQuery('');
+      setHomes(fixtureHomes);
+      homesRef.current = fixtureHomes;
+      setPagination({ limit: HOME_PAGE_LIMIT, total: fixtureHomes.length, nextCursor: null, hasMore: false });
+      activeHomePageRequest.current = null;
+      setHomeState(fixtureState(fixtureHomes));
+      flash('Search reset to the full labelled fixture set.', 'info');
+      return;
+    }
+    loadHomes(() => {
+      setQuery('');
+      flash('Default source records reloaded.', 'info');
+    }, () => flash('Unable to reload source records. Previous results remain in view.', 'warning'));
+  }
+
+  function setOwnerState(setter, nextValue) {
+    const ownerUserId = userId;
+    const ownerKey = targetWorkspaceOwner;
+    const generation = workspaceGenerationRef.current;
+    if (!workspaceReady || !isCurrentWorkspace(ownerUserId, ownerKey, generation)) return;
+    setter((current) => {
+      if (!isCurrentWorkspace(ownerUserId, ownerKey, generation)) return current;
+      return typeof nextValue === 'function' ? nextValue(current) : nextValue;
+    });
+  }
+
+  const exposedBrief = workspaceReady ? brief : defaultBrief;
+  const exposedHomes = workspaceReady ? homes : (fixtureMode ? fixtureHomes : []);
+  const exposedHomeState = workspaceReady ? homeState : initialState(fixtureMode ? 'fixture' : 'live');
+  const exposedPagination = workspaceReady ? pagination : {
+    limit: HOME_PAGE_LIMIT,
+    total: fixtureMode ? fixtureHomes.length : 0,
+    nextCursor: null,
+    hasMore: false,
+  };
+  const exposedQuery = workspaceReady ? query : '';
+  const exposedBusy = workspaceReady ? busy : false;
+  const exposedShortlistIds = workspaceReady ? shortlistIds : [];
+  const exposedCompareIds = workspaceReady ? compareIds : [];
+  const exposedPlaces = workspaceReady ? places : [];
+  const exposedPlaceState = workspaceReady ? placeState : authenticatedPlaceState('idle');
+  const exposedHistory = workspaceReady ? history : [];
+  const exposedHistoryState = workspaceReady
+    ? historyState
+    : initialHistoryState(!authLoading && !userId ? 'signed_out' : 'idle');
+  const exposedSavedSearches = workspaceReady ? savedSearches : [];
+  const exposedSavedSearchState = workspaceReady
+    ? savedSearchState
+    : initialSavedSearchState(!authLoading && !userId ? 'signed_out' : 'idle');
+  const exposedLastSearchSnapshot = workspaceReady ? lastSearchSnapshot : null;
+  const exposedSyncState = workspaceReady ? syncState : 'local';
+  const exposedSyncResult = workspaceReady ? syncResult : null;
+  const exposedNotice = workspaceReady ? notice : null;
+  const exposedPendingPlaceCount = workspaceReady ? pendingLocalPlaceCount : 0;
+  const setCurrentBrief = (nextValue) => setOwnerState(setBrief, nextValue);
+  const setCurrentHomes = (nextValue) => setOwnerState(setHomes, nextValue);
+  const setCurrentQuery = (nextValue) => setOwnerState(setQuery, nextValue);
+  const setCurrentShortlistIds = (nextValue) => setOwnerState(setShortlistIds, nextValue);
+  const setCurrentCompareIds = (nextValue) => setOwnerState(setCompareIds, nextValue);
+  const value = {
+    hoveredHome,
+    setHoveredHome,
+    brief: exposedBrief,
+    setBrief: setCurrentBrief,
+    homes: exposedHomes,
+    setHomes: setCurrentHomes,
+    homeState: exposedHomeState,
+    pagination: exposedPagination,
+    loadMoreHomes,
+    resourceFeatures,
+    resourceState,
+    viewportBounds,
+    refreshViewport,
+    sourceStatus,
+    sourceState,
+    fixtureMode,
+    retryHomes,
+    retryResources,
+    query: exposedQuery,
+    setQuery: setCurrentQuery,
+    notice: exposedNotice,
+    setNotice,
+    busy: exposedBusy,
+    shortlistIds: exposedShortlistIds,
+    setShortlistIds: setCurrentShortlistIds,
+    shortlistHomes: workspaceReady ? shortlistHomes : [],
+    compareIds: exposedCompareIds,
+    setCompareIds: setCurrentCompareIds,
+    selectedHomes: workspaceReady ? selectedHomes : [],
+    toggleShortlist,
+    reorderShortlist,
+    toggleCompare,
+    applyLocalSearch,
+    applySearch,
+    resetSearch,
+    profileLoadState: workspaceReady ? profileLoadState : userId ? 'loading' : 'signed_out',
+    saveProfile,
+    flash,
+    places: exposedPlaces,
+    placeState: exposedPlaceState,
+    refreshPlaces,
+    suggestPlaces,
+    createPlace,
+    deletePlace,
+    history: exposedHistory,
+    historyState: exposedHistoryState,
+    savedSearches: exposedSavedSearches,
+    savedSearchState: exposedSavedSearchState,
+    lastSearchSnapshot: exposedLastSearchSnapshot,
+    refreshSavedDecisions,
+    saveSearch,
+    renameSavedSearch,
+    deleteSavedSearch,
+    rerunSavedSearch,
+    syncState: exposedSyncState,
+    syncResult: exposedSyncResult,
+    syncGuestData,
+    pendingLocalPlaceCount: exposedPendingPlaceCount,
+  };
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;
 }
 

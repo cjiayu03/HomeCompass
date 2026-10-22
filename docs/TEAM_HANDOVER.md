@@ -1,6 +1,6 @@
 # Team handover
 
-Updated 8 October 2026.
+Updated 20 October 2026.
 
 ## Baseline and evidence
 
@@ -16,7 +16,7 @@ no push, PR or repository protection changes have been made. Recheck remote stat
 Pre-push checks passed: 74 backend tests, a clean frontend build on Node 22.23.3,
 Compose configuration parsing and Gitleaks scans of the candidate and Git history.
 GitHub CI has not run yet. Live database
-imports, Supabase flows, Gemini, Docker runtime and performance/recovery targets still need
+imports, local-auth flows, Gemini, Docker runtime and performance/recovery targets still need
 verification. No database contents or provider credentials are included. README records
 startup and checks; CONTRIBUTING.md records the backlog/review workflow; SECURITY.md covers env handling.
 
@@ -26,7 +26,7 @@ startup and checks; CONTRIBUTING.md records the backlog/review workflow; SECURIT
 |---|---|---|
 | Shared browser state | frontend/components/workspace-provider.jsx | Fix same-origin save path, separate record cache from search results, isolate private state per account |
 | Search/ranking | backend/app/main.py, domain.py, schemas.py | Current score is null; search sorts by observed_on. Agree scoring policy before implementing ranking |
-| API ownership | backend/app/security.py, main.py, database.py | Verify real two-account isolation, persistence and deletion retry with Supabase |
+| API ownership | backend/app/security.py, main.py, database.py | Verify real two-account isolation, persistence, and local account deletion |
 | Saved UI | frontend/app/(workspace)/shortlist/page.jsx, compare/page.jsx | Verify reorder/sort and 2–3 record comparisons across searches/reloads |
 | Map | frontend/components/map-panel.jsx, map-view.jsx | Add interactive geocoding and owner pins; batch geocoding is separate |
 | Government imports | backend/app/sources/*.py | Reproduce source snapshots/geocoding, replace wildcard download host workaround with verified hosts |
@@ -48,7 +48,7 @@ Confirmed defects by source inspection:
 Resolve live listings versus historical records; minimum five versus up-to-N results;
 minimum versus maximum personal-pin distance; scoring normalization/weights/missing values/ties;
 dengue buffer/freshness; childcare eligibility; languages; history retention;
-Supabase topology; hosting; Gemini model/budget/rates.
+local-auth recovery operations; hosting; Gemini model/budget/rates.
 
 Shared browser storage currently retains household/profile/shortlist data across account
 changes. Fix account scoping and clear private state before enabling real multi-user use.

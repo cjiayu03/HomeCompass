@@ -5,8 +5,12 @@
     "frontend"
   ],
   "scripts": {
+    "local": "bash ops/run-local.sh",
     "dev": "npm --workspace frontend run dev",
     "build": "npm --workspace frontend run build",
-    "start": "npm --workspace frontend run start"
+    "start": "npm --workspace frontend run start",
+    "verify:frontend": "npm --workspace frontend run test && NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm --workspace frontend run build",
+    "verify:backend": "cd backend && python -m pytest -q",
+    "verify": "npm run verify:backend && npm run verify:frontend"
   }
 }

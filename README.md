@@ -1,68 +1,25 @@
-# HomeCompass
+# 2006-SCSL-S1 — `HomeCompass`
 
-HomeCompass is an SC2006 prototype for exploring Singapore HDB resale homes and neighbourhood information. Browse homes on a map, check source information, and try the shortlist and comparison views. Sample results are illustrative.
+Prepared by xyz. This repository contains the historical Lab 1/Lab 2 files, Lab 3–5 course materials, and a Next.js/React + FastAPI implementation for a local or Docker/self-hosted demo.
 
-## Run the frontend
+Start at [`INDEX.md`](INDEX.md). The editable Markdown/Mermaid/PlantUML sources are intentionally retained so diagrams and written documents can be reviewed before exporting PDFs/JPEGs.
 
-Requires Node.js 22 or later and npm. From the repository root:
-
-```bash
-npm ci
-npm run dev
-```
-
-Open http://localhost:3000. The frontend can show sample results without a backend. Saved data and source information need the API and database.
-
-## Run the full application
-
-Install Docker, then copy `.env.example` to `.env`. Set a local database password in `POSTGRES_PASSWORD` and use the same password in `DATABASE_URL`, with `database` as its host. From the repository root:
+## Local run
 
 ```bash
-docker compose config --quiet
-docker compose up --build -d
+npm install
+npm run build
+npm run verify:premium
 ```
 
-Open http://localhost:3000. Check API status at http://localhost:8000/health. To stop the services:
+For the integrated self-hosted stack, follow [`ops/README.md`](ops/README.md) and run `docker compose up --build -d` after creating a private `.env` from `.env.example`. You do not need Docker for native local work: start local PostGIS, run the backend, and use `npm run dev`/`npm run start` for the frontend. Email/password accounts and database-backed sessions are stored locally; existing Supabase accounts are not imported. Set `AUTH_COOKIE_SECURE=true` when serving the API over HTTPS (keep the local HTTP default for development). Password recovery requires the operator command documented in [`backend/README.md`](backend/README.md). The app also includes a guarded Gemini Interactions adapter. Import the HDB resale snapshot and registered government resource layers with `python -m app.sources.data_gov_sg` and `python -m app.sources.data_gov_resources` from `backend/`.
 
-```bash
-docker compose down
-```
+To host the web app and API on Vercel, follow [`VERCEL_DEPLOYMENT.md`](VERCEL_DEPLOYMENT.md). It deploys the Next.js frontend and FastAPI backend as two projects and requires a managed PostGIS database for persistent records.
 
-## Run the API without Docker
+The five fallback records are explicitly illustrative UI samples; their addresses, prices, map points and metrics are not official data. The local database has the HDB resale snapshot plus 14 imported public government layers, surfaced on the Sources page and map. Although the raw HDB and MOE files have no point geometry, the configured OneMap geocoder located all 9,750 distinct HDB addresses (241,148 historical transaction rows) and all 337 current MOE schools in the local database on 29 September 2026; no home address or school remains unlocated. New source imports need geocoding again. Fee joins, routes, scoring policy, AI spend cap, retention, public ingress and live production operations remain open. See [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md) before describing the current build as production-ready.
 
-Requires Python 3.12. From the repository root:
+For frontend-only local work: `npm run dev`. For the API, see [`backend/README.md`](backend/README.md). Never commit `.env`, API keys, or service-role credentials. The project has not been pushed or deployed.
 
-```bash
-python3.12 -m venv .venv
-.venv/bin/python -m pip install -r backend/requirements.txt
-cd backend
-../.venv/bin/python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
+## Submission note
 
-The API health check and documentation are at `/health` and `/docs`. Without PostGIS, persistent data routes are unavailable.
-
-## Import data (optional)
-
-With the Docker stack running, you can import the source snapshots:
-
-```bash
-docker compose run --rm api python -m app.sources.data_gov_sg
-docker compose run --rm api python -m app.sources.data_gov_resources
-docker compose run --rm api python -m app.sources.onemap_geocode --home-limit 100 --school-limit 400
-```
-
-Geocoding needs a valid server-side `ONEMAP_ACCESS_TOKEN`. Imported resale records are historical transactions, not current listings.
-
-## Run checks
-
-```bash
-cd backend
-../.venv/bin/python -m pytest -q
-cd ..
-npm ci
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000 npm run build
-```
-
-## Environment files
-
-Use `.env.example` as a template for local configuration. Keep `.env` and `frontend/.env.local` on your computer; never commit real credentials. Values beginning with `NEXT_PUBLIC_` are visible to browser users.
+Export reviewed Markdown and diagram sources to readable PDF/JPEG files for the course's requested upload format, while retaining mandatory source code, tests and the original AI ZIP required by the later lab manuals. Do not include `/home/ubuntu/sc2006/team-private/` in a TA bundle.

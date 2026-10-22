@@ -13,7 +13,10 @@ export const defaultBrief = {
   children: 1,
   olderAdults: 1,
   budget: 550000,
+  preferredTowns: [],
+  preferredFlatType: null,
   schoolDistance: 1000,
+  childcareDistance: null,
   careDistance: 1200,
   pinLabel: 'Workplace',
   pinLocation: 'Raffles Place',
@@ -30,8 +33,17 @@ export const navigation = [
 
 export function filterHomes(source, query, brief) {
   const q = query.trim().toLowerCase();
+  const preferredTowns = Array.isArray(brief.preferredTowns)
+    ? brief.preferredTowns.map((town) => town.toLocaleLowerCase())
+    : [];
+  const preferredFlatType = typeof brief.preferredFlatType === 'string'
+    ? brief.preferredFlatType.toLocaleUpperCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim()
+    : '';
   return source.filter((home) => {
     const matchesQuery = !q || `${home.address} ${home.town} ${home.school} ${home.childcare} ${home.care} ${home.highlights.join(' ')}`.toLowerCase().includes(q) || /school|child|care|clinic|quiet|elder/.test(q);
-    return matchesQuery && home.price <= Number(brief.budget || Infinity);
+    const matchesTown = brief.requirements?.towns===false || !preferredTowns.length || preferredTowns.includes(String(home.town || '').toLocaleLowerCase());
+    const homeFlatType = String(home.type || '').toLocaleUpperCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
+    const matchesFlatType = brief.requirements?.flatType===false || !preferredFlatType || homeFlatType === preferredFlatType;
+    return matchesQuery && matchesTown && matchesFlatType && (brief.requirements?.budget===false || home.price <= Number(brief.budget || Infinity));
   });
 }

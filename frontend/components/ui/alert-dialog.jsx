@@ -9,7 +9,7 @@ export const AlertDialogCancel = AlertDialogPrimitive.Cancel;
 export const AlertDialogAction = AlertDialogPrimitive.Action;
 
 export function AlertDialogContent({ className, ...props }) {
-  return <AlertDialogPrimitive.Portal><AlertDialogPrimitive.Overlay className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm" /><AlertDialogPrimitive.Content className={cn('glass-panel fixed left-1/2 top-1/2 z-[100] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border p-6 overscroll-contain', className)} {...props} /></AlertDialogPrimitive.Portal>;
+  return <AlertDialogPrimitive.Portal><AlertDialogPrimitive.Overlay className="fixed inset-0 z-[90] bg-black/45" /><AlertDialogPrimitive.Content className={cn('fixed left-1/2 top-1/2 z-[100] w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border bg-popover p-6 text-popover-foreground shadow-xl overscroll-contain', className)} {...props} /></AlertDialogPrimitive.Portal>;
 }
 
 export function AlertDialogHeader({ className, ...props }) { return <div className={cn('flex flex-col gap-2 text-left', className)} {...props} />; }

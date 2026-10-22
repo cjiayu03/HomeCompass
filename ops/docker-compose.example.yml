@@ -1,0 +1,4 @@
+# The runnable self-hosted stack lives at the repository root in docker-compose.yml.
+# This file is kept as the operations-folder pointer for course deliverable traceability.
+include:
+  - ../docker-compose.yml

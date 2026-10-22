@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import os
-from uuid import UUID
+from ipaddress import ip_address
 
-import httpx
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import asyncpg
+from fastapi import Depends, HTTPException, Request
 
-from .database import ensure_user, require_pool
+from .database import ensure_user, require_pool, resolve_local_session
+from .local_auth import hash_session_token
 
-bearer = HTTPBearer(auto_error=False)
+SESSION_COOKIE_NAME = "homecompass_session"
+
+
+class InvalidSessionError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=401,
+            detail={"code": "INVALID_SESSION", "message": "Your session is invalid or expired."},
+        )
 
 
 def is_configured_value(value: str | None) -> bool:
@@ -19,51 +27,74 @@ def is_configured_value(value: str | None) -> bool:
     return not any(marker in normalized for marker in ("your-project", "replace-me", "changeme"))
 
 
-def supabase_auth_config() -> tuple[str | None, str | None]:
-    project_url = os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-    api_key = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-    if not is_configured_value(project_url) or not is_configured_value(api_key):
-        return None, None
-    return project_url, api_key
+def session_cookie_secure() -> bool:
+    value = os.getenv("AUTH_COOKIE_SECURE", "false").strip().lower()
+    return value not in {"0", "false", "no", "off"}
 
 
-def supabase_auth_configured() -> bool:
-    project_url, api_key = supabase_auth_config()
-    return bool(project_url and api_key)
+def rate_limit_key(user: dict | None, request: Request) -> str:
+    if user is not None and user.get("id") is not None:
+        return f"user:{user['id']}"
 
-
-async def require_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)) -> dict:
-    if credentials is None or credentials.scheme.lower() != "bearer":
-        raise HTTPException(status_code=401, detail={"code": "AUTH_REQUIRED", "message": "Sign in to access this resource."}, headers={"WWW-Authenticate": "Bearer"})
-    project_url, api_key = supabase_auth_config()
-    if not project_url or not api_key:
-        raise HTTPException(status_code=503, detail={"code": "AUTH_UNCONFIGURED", "message": "Supabase authentication is not configured on the API."})
+    client = request.client
+    host = client.host if client is not None else ""
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(
-                f"{project_url.rstrip('/')}/auth/v1/user",
-                headers={"apikey": api_key, "Authorization": f"Bearer {credentials.credentials}"},
-            )
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=503, detail={"code": "AUTH_PROVIDER_UNAVAILABLE", "message": "The identity provider could not be reached."}) from exc
-    if response.status_code == 401 or response.status_code == 403:
-        raise HTTPException(status_code=401, detail={"code": "INVALID_SESSION", "message": "Your session is invalid or expired."}, headers={"WWW-Authenticate": "Bearer"})
-    if response.status_code != 200:
-        raise HTTPException(status_code=503, detail={"code": "AUTH_PROVIDER_ERROR", "message": "The identity provider could not verify this session."})
+        address = ip_address(host.split("%", 1)[0]).compressed
+    except ValueError:
+        address = "unknown"
+    return f"client:{address}"
+
+
+async def resolve_session_token(token: str) -> dict | None:
     try:
-        payload = response.json()
-        user_id = UUID(payload["id"])
-    except (ValueError, KeyError, TypeError) as exc:
-        raise HTTPException(status_code=401, detail={"code": "INVALID_SESSION", "message": "The identity provider returned an invalid account."}) from exc
-    return {"id": user_id, "email": payload.get("email")}
+        session = await resolve_local_session(hash_session_token(token))
+    except ValueError:
+        return None
+    except HTTPException:
+        raise
+    except (asyncpg.PostgresError, OSError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "DATABASE_UNAVAILABLE",
+                "message": "Persistent storage is unavailable. Please try again.",
+            },
+        ) from exc
+    if session is None:
+        return None
+    return {"id": session["user_id"], "session_id": session["session_id"]}
+
+
+async def require_user(request: Request) -> dict:
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "AUTH_REQUIRED", "message": "Sign in to access this resource."},
+        )
+    user = await resolve_session_token(token)
+    if user is None:
+        raise InvalidSessionError()
+    return user
 
 
 async def require_active_user(user: dict = Depends(require_user)) -> dict:
     pool = require_pool()
-    async with pool.acquire() as connection:
-        async with connection.transaction():
-            await ensure_user(connection, user)
-            state = await connection.fetchval("SELECT status FROM account_deletion WHERE user_id = $1", user["id"])
-            if state in {"pending_auth_delete", "complete"}:
-                raise HTTPException(status_code=403, detail={"code": "ACCOUNT_DELETION_PENDING", "message": "This account is being deleted."})
+    try:
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                await ensure_user(connection, user)
+                state = await connection.fetchval("SELECT status FROM account_deletion WHERE user_id = $1", user["id"])
+                if state in {"pending_auth_delete", "complete"}:
+                    raise HTTPException(status_code=403, detail={"code": "ACCOUNT_DELETION_PENDING", "message": "This account is being deleted."})
+    except HTTPException:
+        raise
+    except (asyncpg.PostgresError, OSError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "DATABASE_UNAVAILABLE",
+                "message": "Persistent storage is unavailable. Please try again.",
+            },
+        ) from exc
     return user

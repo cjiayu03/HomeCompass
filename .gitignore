@@ -5,6 +5,10 @@ frontend/.next/
 frontend/AGENTS.md
 frontend/CLAUDE.md
 .venv/
+.local/
+frontend/test-results/
+frontend/playwright-report/
+premium-audit.json
 __pycache__/
 .pytest_cache/
 .env

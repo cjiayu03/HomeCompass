@@ -29,6 +29,9 @@ def load_local_project_env(env_file: Path | None = None) -> None:
         if parts.hostname not in {"db", "database"}:
             return
         port = parts.port
+        configured_local_port = os.getenv("POSTGRES_PORT", "").strip()
+        if configured_local_port:
+            port = int(configured_local_port)
     except ValueError:
         return
 

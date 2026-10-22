@@ -1,0 +1,124 @@
+// Decision previews use evidence returned by the API; no model calls or inferred amenities.
+export const advancedFields = {
+  minFloorArea: ['min_floor_area_sqm', 'Minimum area', 'm²'],
+  maxFloorArea: ['max_floor_area_sqm', 'Maximum area', 'm²'],
+  minStorey: ['min_storey', 'Minimum storey', ''],
+  maxStorey: ['max_storey', 'Maximum storey', ''],
+  minLease: ['min_remaining_lease_years', 'Minimum estimated lease', 'years'],
+  maxPricePerSqm: ['max_price_per_sqm', 'Maximum price / m²', 'SGD'],
+  observedAfter: ['observed_after', 'Transactions from', ''],
+};
+
+export function buildCriteria(brief) {
+  const hard = key => brief.requirements?.[key] !== false;
+  const criteria = {};
+  if (hard('budget')) criteria.budget = brief.budget;
+  if (hard('towns') && brief.preferredTowns?.length) criteria.towns = brief.preferredTowns;
+  if (hard('flatType') && brief.preferredFlatType) criteria.flat_type = brief.preferredFlatType;
+  for(const [key,api] of [['schoolDistance','max_school_distance_m'],['childcareDistance','max_childcare_distance_m'],['careDistance','max_care_distance_m']]) if(hard(key)&&Number.isInteger(brief[key])) criteria[api]=brief[key];
+  for(const [key,[api]] of Object.entries(advancedFields)) if(hard(key) && brief[key]!=='' && brief[key]!=null) criteria[api]=key==='observedAfter' ? brief[key] : Number(brief[key]);
+  return criteria;
+}
+
+export function briefFromCriteria(current, criteria) {
+  const requirements={...current.requirements,budget:criteria.budget!=null,towns:Boolean(criteria.towns?.length||criteria.town),flatType:Boolean(criteria.flat_type)};
+  const next={...current,budget:criteria.budget??current.budget,preferredTowns:criteria.towns||(criteria.town?[criteria.town]:[]),preferredFlatType:criteria.flat_type||null};
+  for(const [key,api] of [['schoolDistance','max_school_distance_m'],['childcareDistance','max_childcare_distance_m'],['careDistance','max_care_distance_m']]){next[key]=criteria[api]??null;requirements[key]=criteria[api]!=null;}
+  for(const [key,[api]] of Object.entries(advancedFields)){next[key]=criteria[api]??null;requirements[key]=true;}
+  return {...next,requirements,priorityWeights:criteria.priority_weights||current.priorityWeights,placeConstraints:(criteria.place_constraints||[]).map(c=>({placeId:c.place_id,maxDistanceM:c.max_distance_m}))};
+}
+
+export function distanceM(a, b) {
+  const latA = Number(a?.lat ?? a?.latitude), lngA = Number(a?.lng ?? a?.longitude);
+  const latB = Number(b?.lat ?? b?.latitude), lngB = Number(b?.lng ?? b?.longitude);
+  if ([a?.lat ?? a?.latitude, a?.lng ?? a?.longitude, b?.lat ?? b?.latitude, b?.lng ?? b?.longitude].some(v => v == null) || ![latA,lngA,latB,lngB].every(Number.isFinite)) return null;
+  const radians = Math.PI / 180;
+  const q = Math.sin((latB-latA)*radians/2)**2 + Math.cos(latA*radians)*Math.cos(latB*radians)*Math.sin((lngB-lngA)*radians/2)**2;
+  return 6371000 * 2 * Math.atan2(Math.sqrt(q),Math.sqrt(Math.max(0,1-q)));
+}
+
+export function evaluateHome(home, brief) {
+  const matches = [], compromises = [], missing = [];
+  const budget = Number(brief.budget);
+  if (Number.isFinite(home.price) && budget > 0) {
+    (home.price <= budget ? matches : compromises).push(home.price <= budget ? `Within budget by $${Math.round(budget-home.price).toLocaleString()}` : `$${Math.round(home.price-budget).toLocaleString()} above budget`);
+  } else missing.push('Price');
+  const components = home.scoreDetails?.components || [];
+  for (const c of components) {
+    if (c.name === 'affordability') continue;
+    const label = ({school:'School access',childcare:'Childcare access',care:'Care access'})[c.name] || c.name;
+    const target=Number(brief[`${c.name}Distance`]);
+    const meters=home.amenityDistancesM?.[c.name];
+    if(meters!=null&&target>0)(meters<=target?matches:compromises).push(`${label}: ${Math.round(meters)} m straight-line (${target} m target)`);
+    else if (!Number.isFinite(c.normalizedValue) || c.evidenceStatus === 'missing') missing.push(label);
+    else (c.normalizedValue >= 60 ? matches : compromises).push(`${label}: ${Math.round(c.normalizedValue)}/100`);
+  }
+  if (!components.length) missing.push('Verified amenity distances');
+  if (Number(brief.minFloorArea) > 0) {
+    if (home.floorAreaSqm == null) missing.push('Floor area');
+    else (home.floorAreaSqm >= Number(brief.minFloorArea) ? matches : compromises).push(`${home.floorAreaSqm} m² floor area`);
+  }
+  if (Number(brief.minLease) > 0) {
+    if (home.remainingLeaseYears == null) missing.push('Estimated remaining lease');
+    else (home.remainingLeaseYears >= Number(brief.minLease) ? matches : compromises).push(`About ${home.remainingLeaseYears} years of lease`);
+  }
+  if(brief.preferredTowns?.length)(brief.preferredTowns.some(t=>t.toLowerCase()===String(home.town).toLowerCase())?matches:compromises).push(`${home.town}: ${brief.preferredTowns.some(t=>t.toLowerCase()===String(home.town).toLowerCase())?'preferred town':'outside preferred towns'}`);
+  const normalize=v=>String(v||'').replace(/[-_]/g,' ').toUpperCase();
+  if(brief.preferredFlatType)(normalize(home.type)===normalize(brief.preferredFlatType)?matches:compromises).push(`${home.type}: ${normalize(home.type)===normalize(brief.preferredFlatType)?'preferred flat type':'alternative flat type'}`);
+  const floors=String(home.storeyRange||'').match(/\d+/g)?.map(Number);
+  for(const [key,label,value,comparison] of [
+    ['maxFloorArea','Maximum floor area',home.floorAreaSqm,(v,t)=>v<=t],
+    ['minStorey','Minimum storey',floors?.[0],(v,t)=>v>=t],
+    ['maxStorey','Maximum storey',floors?.at(-1),(v,t)=>v<=t],
+    ['maxPricePerSqm','Price per m²',home.pricePerSqm,(v,t)=>v<=t],
+    ['observedAfter','Transaction date',home.observedOn,(v,t)=>v>=t],
+  ]) {
+    if(brief[key]!=null&&brief[key]!=='') {
+      if(value==null)missing.push(label);
+      else (comparison(value,brief[key])?matches:compromises).push(`${label}: ${value} (${comparison(value,brief[key])?'meets target':'outside target'})`);
+    }
+  }
+  return {matches, compromises, missing:[...new Set(missing)]};
+}
+
+export function previewRank(home, brief, weights, areaRange) {
+  const details = home.scoreDetails?.components || [];
+  let total = 0, covered = 0, possible = 0;
+  const clamp=n=>Math.max(0,Math.min(100,n));
+  const budget=[Number.isFinite(home.price)&&Number(brief.budget)>0 ? clamp((1-home.price/(Number(brief.budget)*1.5))*100) : null];
+  if(Number(brief.maxPricePerSqm)>0)budget.push(Number.isFinite(home.pricePerSqm)?clamp(Number(brief.maxPricePerSqm)/home.pricePerSqm*100):null);
+  if(brief.observedAfter)budget.push(home.observedOn ? home.observedOn>=brief.observedAfter?100:0 : null);
+  const space=[Number.isFinite(home.floorAreaSqm) ? (Number(brief.minFloorArea)>0?clamp(home.floorAreaSqm/Number(brief.minFloorArea)*100):areaRange[1]===areaRange[0]?50:100*(home.floorAreaSqm-areaRange[0])/(areaRange[1]-areaRange[0])) : null];
+  if(Number(brief.maxFloorArea)>0)space.push(home.floorAreaSqm!=null?clamp(Number(brief.maxFloorArea)/home.floorAreaSqm*100):null);
+  if(Number(brief.minLease)>0)space.push(home.remainingLeaseYears!=null?clamp(home.remainingLeaseYears/Number(brief.minLease)*100):null);
+  const normalize=v=>String(v||'').replace(/[-_]/g,' ').toUpperCase();
+  if(brief.preferredFlatType)space.push(normalize(home.type)===normalize(brief.preferredFlatType)?100:0);
+  const floors=String(home.storeyRange||'').match(/\d+/g)?.map(Number);
+  if(Number(brief.minStorey)>0)space.push(floors?clamp(floors[0]/Number(brief.minStorey)*100):null);
+  if(Number(brief.maxStorey)>0)space.push(floors?clamp(Number(brief.maxStorey)/floors.at(-1)*100):null);
+  const location=['school','childcare','care'].map(name=>{
+    const target=Number(brief[`${name}Distance`]),distance=home.amenityDistancesM?.[name];
+    if(target>0&&distance!=null)return clamp(100*(1-distance/(target*2)));
+    const c=details.find(c=>c.name===name);
+    return Number.isFinite(c?.normalizedValue)?c.normalizedValue:null;
+  });
+  if(brief.preferredTowns?.length)location.push(brief.preferredTowns.some(t=>t.toLowerCase()===String(home.town).toLowerCase())?100:0);
+  const terms=[[weights.budget,budget],[weights.space,space],[weights.location,location]].flatMap(([weight,values])=>values.map(value=>[weight/values.length,value]));
+  for (const [weight, value] of terms) { possible+=weight; if (value != null) {total+=weight*value; covered+=weight;} }
+  return {score:covered ? Math.round(total/covered) : null,coverage:possible ? covered/possible : 0};
+}
+
+export function applyLocalRequirements(homes, brief) {
+  return homes.filter(home => {
+    const n=(key)=>brief.requirements?.[key]===false ? 0 : Number(brief[key])||0;
+    if (n('minFloorArea') && !(home.floorAreaSqm >= n('minFloorArea'))) return false;
+    if (n('maxFloorArea') && !(home.floorAreaSqm != null && home.floorAreaSqm <= n('maxFloorArea'))) return false;
+    if (n('minLease') && !(home.remainingLeaseYears >= n('minLease'))) return false;
+    if (n('maxPricePerSqm') && !(home.pricePerSqm != null && home.pricePerSqm <= n('maxPricePerSqm'))) return false;
+    const floors=String(home.storeyRange||'').match(/\d+/g)?.map(Number);
+    if(n('minStorey') && !(floors && floors[0]>=n('minStorey'))) return false;
+    if(n('maxStorey') && !(floors && floors.at(-1)<=n('maxStorey'))) return false;
+    if(brief.requirements?.observedAfter!==false && brief.observedAfter && !(home.observedOn && home.observedOn>=brief.observedAfter)) return false;
+    return true;
+  });
+}
