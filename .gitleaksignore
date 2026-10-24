@@ -1,0 +1,2 @@
+# False positive: generic-api-key matched prose about session-token metadata.
+29b61ba3698068b5d49b44ff75e860eb7f011bcf:docs/superpowers/specs/2026-10-21-homecompass-local-auth-design.md:generic-api-key:25
