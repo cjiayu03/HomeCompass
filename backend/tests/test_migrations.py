@@ -1,6 +1,12 @@
 import pytest
 
-from app.migrations import MigrationSetError, checked_in_migrations, validate_migration_set
+from app.migrations import (
+    LATEST_MIGRATION_VERSION,
+    SCHEMA_VERIFIED_MIGRATION_VERSION,
+    MigrationSetError,
+    checked_in_migrations,
+    validate_migration_set,
+)
 
 
 EXPECTED_MIGRATIONS = [
@@ -11,11 +17,17 @@ EXPECTED_MIGRATIONS = [
     (5, "005_family_places.sql"),
     (6, "006_account_sync.sql"),
     (7, "007_saved_searches.sql"),
+    (8, "008_local_auth.sql"),
+    (9, "009_onboarding_profile.sql"),
+    (10, "010_planning_workspace.sql"),
 ]
 
 
 def test_checked_in_migrations_are_ordered_and_contiguous():
     assert checked_in_migrations() == EXPECTED_MIGRATIONS
+    latest_version = EXPECTED_MIGRATIONS[-1][0]
+    assert LATEST_MIGRATION_VERSION == latest_version
+    assert SCHEMA_VERIFIED_MIGRATION_VERSION == latest_version
 
 
 def test_validate_migration_set_rejects_duplicate_versions():

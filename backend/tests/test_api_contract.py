@@ -13,7 +13,7 @@ from app.local_env import load_local_project_env
 from app.main import app, score_preview
 from app.rate_limit import RateLimiter
 from app.schemas import FamilyProfileUpdate, QueryInterpretation, ScoreRequest
-from app.security import is_configured_value, rate_limit_key, require_active_user, supabase_auth_config
+from app.security import is_configured_value, rate_limit_key, require_active_user
 from app.sources.data_gov_sg import HDB_RESALE_DATASET_ID
 
 
@@ -58,7 +58,7 @@ class _Connection:
         self.resource_counts = resource_counts or []
 
     async def fetch(self, sql, *values):
-        if "FROM candidate_home h JOIN source_snapshot" in sql:
+        if "FROM page_homes h JOIN source_snapshot" in sql:
             return self.home_rows
         if "SELECT r.resource_type, count(*)" in sql:
             return self.resource_counts
@@ -205,7 +205,7 @@ def test_private_and_search_routes_fail_closed_without_configuration(monkeypatch
     assert calls == []
 
 
-def test_ai_interpret_with_bearer_fails_when_auth_is_unconfigured_without_calling_ai(monkeypatch):
+def test_ai_interpret_rejects_bearer_without_local_session_cookie(monkeypatch):
     for name in (
         "SUPABASE_URL",
         "NEXT_PUBLIC_SUPABASE_URL",
@@ -232,8 +232,8 @@ def test_ai_interpret_with_bearer_fails_when_auth_is_unconfigured_without_callin
 
     response = asyncio.run(request_ai())
 
-    assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "AUTH_UNCONFIGURED"
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "AUTH_REQUIRED"
     assert calls == []
 
 
@@ -310,11 +310,11 @@ def test_rate_limit_key_uses_user_id_or_sanitized_client_ip():
     assert rate_limit_key(None, invalid_request) == "client:unknown"
 
 
-def test_supabase_example_placeholders_are_treated_as_unconfigured(monkeypatch):
-    monkeypatch.setenv("SUPABASE_URL", "https://your-project.supabase.co")
-    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "replace-me")
-    assert supabase_auth_config() == (None, None)
+def test_example_configuration_placeholders_are_treated_as_unconfigured():
+    assert not is_configured_value("https://your-project.example")
+    assert not is_configured_value("replace-me")
     assert not is_configured_value("replace-me-server-only")
+    assert is_configured_value("configured-value")
 
 
 def test_gemini_example_key_is_not_treated_as_ready(monkeypatch):
@@ -364,6 +364,11 @@ class _ProfileConnection:
         return _Transaction(self)
 
     async def fetch(self, sql, *values):
+        if "WITH current_hdb_snapshot AS" in sql:
+            return [
+                {"kind": "town", "value": "BISHAN"},
+                {"kind": "flat_type", "value": "4 ROOM"},
+            ]
         assert "FROM criterion_weight" in sql
         profile_id = values[0]
         assert profile_id == "profile-1"
@@ -398,6 +403,12 @@ def _profile_row():
         "budget_cents": 50_000_000,
         "locale": "en-SG",
         "updated_at": datetime(2026, 10, 20, tzinfo=timezone.utc),
+        "preferred_towns": [],
+        "preferred_flat_type": None,
+        "max_school_distance_m": None,
+        "max_childcare_distance_m": None,
+        "max_care_distance_m": None,
+        "onboarding_completed": False,
     }
 
 

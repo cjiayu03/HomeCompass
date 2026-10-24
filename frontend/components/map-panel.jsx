@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { Crosshair, ExternalLink, LocateFixed, Layers3 } from 'lucide-react';
+import { LocateFixed, Layers3, UsersRound } from 'lucide-react';
 import { Component, useCallback, useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -42,7 +42,6 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
   const nearest=useMemo(()=>!selectedHome?[]:resources.filter(f=>f.geometry?.type==='Point').map(f=>({name:f.properties?.name||f.properties?.resourceType,distance:distanceM(selectedHome,{lng:f.geometry.coordinates[0],lat:f.geometry.coordinates[1]})})).filter(f=>f.distance!=null).sort((a,b)=>a.distance-b.distance).slice(0,3),[selectedHome,resources]);
   const [visibleResourceTypes, setVisibleResourceTypes] = useState(['silver_zone', 'dengue_cluster']);
   const mappedCount = homes.filter((home) => home.lat !== null && home.lat !== undefined && home.lng !== null && home.lng !== undefined && Number.isFinite(Number(home.lat)) && Number.isFinite(Number(home.lng))).length;
-  const visibleFeatureCount = resources.filter((feature) => visibleResourceTypes.includes(feature.properties?.resourceType)).length;
   const counts = resources.reduce((result, feature) => { const type = feature.properties?.resourceType; result[type] = (result[type] || 0) + 1; return result; }, {});
   function toggleLayer(type, checked) { setVisibleResourceTypes((current) => checked ? [...new Set([...current, type])] : current.filter((item) => item !== type)); }
   return (
@@ -50,59 +49,74 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
       <div className="absolute inset-0 z-0">{mapMode === '3d'
         ? <MapBoundary onUnavailable={fallback}><Map3DView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onUnavailable={fallback} onSelect={onSelect} centerRequest={centerRequest} onViewportChange={refreshViewport} /></MapBoundary>
         : <MapView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onSelect={onSelect} centerRequest={centerRequest} onViewportChange={refreshViewport} />}</div>
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between p-3">
-        <div className="glass-card pointer-events-auto rounded-lg px-3 py-2">
-          <div className="flex items-center gap-2 text-xs font-semibold"><span className="size-2 rounded-full bg-primary" />{mapMode === '3d' ? '3D neighborhood' : 'OpenStreetMap'}</div>
-          <div className="mt-2 inline-flex rounded-lg border bg-background/80 p-0.5" role="group" aria-label="Map view mode">
-            <Button variant={mapMode === '2d' ? 'soft' : 'ghost'} className="h-11 min-w-11 px-3 text-sm" aria-pressed={mapMode === '2d'} onClick={() => setMapMode('2d')}>2D</Button>
-            <Button variant={mapMode === '3d' ? 'soft' : 'ghost'} className="h-11 min-w-11 px-3 text-sm" aria-pressed={mapMode === '3d'} onClick={() => setMapMode('3d')}>3D</Button>
-          </div>
-          <p className="mt-1 max-w-52 text-xs leading-4 text-muted-foreground">{mapMode === '3d' ? 'Building shapes and heights are approximate.' : 'Hover a home card to locate it · drag to browse'}</p>
-          {hoveredHome && (hoveredHome.lat == null || hoveredHome.lng == null || !Number.isFinite(Number(hoveredHome.lat)) || !Number.isFinite(Number(hoveredHome.lng))) && <p role="status" className="mt-2 max-w-52 text-xs">{hoveredHome.address}: map location unavailable.</p>}
-          <button className="mt-2 min-h-11 rounded-lg border px-3 py-2 text-sm font-semibold hover:bg-secondary" aria-pressed={reach} onClick={()=>setReach(v=>!v)}>Family reach {reach?'on':'off'}</button>
-          {reach&&<p className="mt-1 max-w-52 text-[11px] leading-4 text-muted-foreground">{anchors.length?`${inReach} loaded records within all ${anchors.length} distance rings. Straight-line distances, not routes.`:'Select saved places and distance limits in Filters to draw their reach.'}</p>}
-          {mapNotice&&<p role="status" className="mt-2 max-w-52 text-[11px] leading-4">{mapNotice}<button className="ml-2 underline" onClick={()=>setMapNotice('')}>Dismiss</button></p>}
-        </div>
-        <div className="pointer-events-auto flex gap-2">
-          <details className="glass-card relative rounded-lg px-3 py-2 text-xs">
-            <summary className="flex cursor-pointer list-none items-center gap-2 font-semibold"><Layers3 className="size-3.5 text-primary" />Layers <span className="rounded-md bg-secondary px-1.5 py-0.5 text-[10px]">{visibleResourceTypes.length}</span></summary>
-            <div className="absolute right-0 top-11 z-[80] w-64 rounded-xl border bg-popover p-3 text-popover-foreground shadow-float">
-              <div className="mb-2 flex items-center justify-between">
-                <p className="font-semibold">Map layers</p>
-                <div className="flex gap-2">
-                  <button className="text-[10px] text-primary hover:underline" onClick={() => setVisibleResourceTypes(mapLayers.filter(([type]) => counts[type]).map(([type]) => type))}>All</button>
-                  <button className="text-[10px] text-muted-foreground hover:underline" onClick={() => setVisibleResourceTypes([])}>Clear</button>
+      <div className="pointer-events-none absolute right-0 top-0 z-10 flex items-start gap-2 p-3">
+        <details className="pointer-events-auto">
+          <summary aria-label={`Map options${reach ? ', family reach on' : ''}${resourceState?.status === 'error' ? ', nearby data unavailable' : ''}${mapNotice ? ', map warning' : ''}`} className="glass-card flex h-11 cursor-pointer list-none items-center gap-2 rounded-xl px-3 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+            <Layers3 aria-hidden="true" className="size-4 text-primary" />
+            Map options
+            {reach && <span className="rounded-md bg-primary/10 px-2 py-1 text-xs text-primary">Reach on</span>}
+            {(resourceState?.status === 'error' || mapNotice) && <span aria-hidden="true" className="size-2 rounded-full bg-destructive" />}
+          </summary>
+          <div className="absolute right-3 top-14 z-[80] max-h-[17rem] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto overscroll-contain rounded-xl border bg-popover p-3 text-popover-foreground shadow-float sm:max-h-[20rem]">
+            <section aria-labelledby="map-view-heading">
+              <h3 id="map-view-heading" className="mb-2 text-sm font-semibold">Map view</h3>
+              <div className="grid grid-cols-2 gap-1 rounded-lg border bg-secondary/50 p-1" role="group" aria-label="Map view mode">
+                <Button variant={mapMode === '2d' ? 'soft' : 'ghost'} className="h-11 w-full rounded-lg px-3 text-sm" aria-pressed={mapMode === '2d'} onClick={() => setMapMode('2d')}>2D</Button>
+                <Button variant={mapMode === '3d' ? 'soft' : 'ghost'} className="h-11 w-full rounded-lg px-3 text-sm" aria-pressed={mapMode === '3d'} onClick={() => setMapMode('3d')}>3D</Button>
+              </div>
+              {mapMode === '3d' && <p className="mt-1 text-xs leading-4 text-muted-foreground">Building shapes and heights are approximate.</p>}
+              {mapNotice && <div className="mt-2 rounded-lg border border-destructive/25 bg-destructive/5 p-2 text-xs leading-4" role="status"><span>{mapNotice}</span><Button variant="link" size="sm" className="ml-2 h-8 px-1 text-xs" onClick={() => setMapNotice('')}>Dismiss</Button></div>}
+              {mappedCount < homes.length && <p className="mt-2 text-xs leading-4 text-muted-foreground" role="status">{mappedCount} of {homes.length} homes have map locations.</p>}
+            </section>
+
+            <section className="mt-3 border-t pt-3" aria-labelledby="family-reach-heading">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 id="family-reach-heading" className="text-sm font-semibold">Family reach</h3>
+                  <p className="text-xs text-muted-foreground">Distance rings from saved places</p>
+                </div>
+                <Button variant={reach ? 'soft' : 'outline'} className="h-11 min-w-20 rounded-lg px-3 text-sm" aria-pressed={reach} onClick={() => setReach((value) => !value)}>
+                  <UsersRound aria-hidden="true" className="size-4" />{reach ? 'On' : 'Off'}
+                </Button>
+              </div>
+              {reach && <p className="mt-2 text-xs leading-4 text-muted-foreground">{anchors.length ? `${inReach} loaded records within all ${anchors.length} distance rings. Straight-line distances, not routes.` : 'Select saved places and distance limits in Filters to draw their reach.'}</p>}
+            </section>
+
+            <section className="mt-3 border-t pt-3" aria-labelledby="map-layers-heading">
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <h3 id="map-layers-heading" className="text-sm font-semibold">Nearby layers</h3>
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" className="h-11 rounded-md px-2 text-xs" onClick={() => setVisibleResourceTypes(mapLayers.filter(([type]) => counts[type]).map(([type]) => type))}>All</Button>
+                  <Button variant="ghost" className="h-11 rounded-md px-2 text-xs" onClick={() => setVisibleResourceTypes([])}>Clear</Button>
                 </div>
               </div>
-              <div className="space-y-1">
+              <div className="space-y-0.5">
                 {mapLayers.map(([type, label, color]) => (
-                  <label key={type} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-secondary/70">
-                    <input type="checkbox" className="size-3.5 accent-primary" checked={visibleResourceTypes.includes(type)} disabled={!counts[type]} onChange={(event) => toggleLayer(type, event.target.checked)} />
-                    <span className="size-2 rounded-full" style={{ backgroundColor: color }} />
-                    <span className="min-w-0 flex-1">{label}</span>
-                    <span className="text-[10px] text-muted-foreground">{(counts[type] || 0).toLocaleString()}</span>
+                  <label key={type} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg px-2 hover:bg-secondary/70">
+                    <input type="checkbox" className="size-4 accent-primary" checked={visibleResourceTypes.includes(type)} disabled={!counts[type]} onChange={(event) => toggleLayer(type, event.target.checked)} />
+                    <span aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                    <span className="min-w-0 flex-1 text-xs">{label}</span>
+                    <span className="text-xs text-muted-foreground">{(counts[type] || 0).toLocaleString()}</span>
                   </label>
                 ))}
               </div>
-              <p className="mt-2 border-t pt-2 text-[10px] leading-4 text-muted-foreground">Distances use located points in the current snapshots; route times are not provided.</p>
-            </div>
-          </details>
-          <Button size="icon" variant="outline" aria-label="Center map on Singapore" onClick={() => setCenterRequest((value) => value + 1)}><LocateFixed className="size-4" /></Button>
-        </div>
+            </section>
+
+            {resourceState?.status === 'loading' && <p className="mt-3 border-t pt-3 text-xs text-muted-foreground" role="status">Loading nearby map data…</p>}
+            {resourceState?.status === 'error' && <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3 text-xs" role="alert"><span>Nearby map data could not load.</span><Button variant="outline" className="h-9 rounded-lg px-3 text-xs" onClick={retryResources}>Retry</Button></div>}
+          </div>
+        </details>
+        <Button size="icon" variant="outline" className="h-11 w-11" aria-label="Center map on Singapore" onClick={() => setCenterRequest((value) => value + 1)}><LocateFixed className="size-4" /></Button>
       </div>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex items-end justify-between p-3">
-        <div className="glass-card pointer-events-auto max-w-[48%] rounded-lg px-3 py-2 text-[11px] text-muted-foreground">
-          {selectedHome&&<details className="mb-2 max-w-56"><summary className="cursor-pointer font-semibold text-foreground">{selectedHome.address}</summary><p className="mt-1">Nearest points in the loaded source features:</p>{nearest.length?nearest.map((r,i)=><p key={i}>{r.name}: {Math.round(r.distance)} m</p>):<p>No nearby point evidence loaded.</p>}<p className="mt-1">Straight-line estimates; viewport data may be incomplete.</p></details>}
-          <div className="mb-1 flex flex-wrap items-center gap-2 font-semibold text-foreground"><span className="size-2 rounded-full bg-primary" />Home <span className="size-2 rounded-full bg-accent-foreground" />Selected <span className="size-2 rounded-full bg-[#7887a2]" />Services <span className="size-2 rounded-full bg-[#b65360]" />Dengue</div>
-          <p>{mapMode === '3d' ? 'OpenFreeMap · OpenMapTiles · © OpenStreetMap contributors' : '© OpenStreetMap contributors'}</p>
-        </div>
-        <div className="glass-card pointer-events-auto flex max-w-[48%] flex-col items-end gap-1 rounded-lg px-3 py-2 text-[11px] font-medium">
-          <span className="flex flex-wrap items-center gap-2"><Crosshair className="size-3.5 text-primary" />{mappedCount} mapped / {homes.length} homes <a className="text-primary hover:underline" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer" aria-label="OpenStreetMap attribution"><ExternalLink className="inline size-3" /></a></span>
-          <span aria-live="polite" className="text-right text-[10px] text-muted-foreground">{resourceState?.status==='loading'?'Loading services…':`${visibleFeatureCount} layer features visible`}</span>
-          {resourceState?.status==='error'&&<button className="text-right text-[11px] text-destructive underline" onClick={retryResources}>Service data unavailable · retry</button>}
-          <a href="/sources" className="text-[10px] text-primary underline">Source dates & coverage</a>
-        </div>
-      </div>
+
+      {selectedHome && <div className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[min(24rem,calc(100%-1.5rem))]">
+        <details className="glass-card pointer-events-auto rounded-lg px-3 py-2 text-xs">
+          <summary className="cursor-pointer font-semibold text-foreground">{selectedHome.address}</summary>
+          <p className="mt-1">Nearest points in the loaded source features:</p>
+          {nearest.length ? nearest.map((resource, index) => <p key={index}>{resource.name}: {Math.round(resource.distance)} m</p>) : <p>No nearby point evidence loaded.</p>}
+          <p className="mt-1">Straight-line estimates; viewport data may be incomplete.</p>
+        </details>
+      </div>}
     </section>
   );
 }

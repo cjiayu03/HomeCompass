@@ -19,7 +19,7 @@ class _PaginationConnection:
         self.resource_queries = []
 
     async def fetchrow(self, sql, *values):
-        if "count(*) AS total" in sql and "FROM candidate_home h JOIN source_snapshot" in sql:
+        if "count(*) AS total" in sql and "FROM candidate_home h" in sql:
             bounds = _bounds_from_query(sql, values, "h.geometry")
             return {"total": sum(_inside(row, bounds) for row in self.homes)}
         if "geocoded" in sql and "FROM candidate_home" in sql:
@@ -31,7 +31,7 @@ class _PaginationConnection:
     async def fetch(self, sql, *values):
         if "SELECT r.resource_type, count(*)" in sql:
             return self.resource_counts
-        if "FROM candidate_home h JOIN source_snapshot" in sql:
+        if "FROM page_homes h JOIN source_snapshot" in sql:
             self.home_queries.append((sql, values))
             rows = [row for row in self.homes if _inside(row, _bounds_from_query(sql, values, "h.geometry"))]
             rows.sort(key=lambda row: (
@@ -287,7 +287,10 @@ def test_search_uses_validated_bounds_and_pagination_without_losing_criteria(mon
     assert payload["criteria"]["limit"] == 1
     assert payload["total"] == 1
     assert payload["unappliedCriteria"] == []
-    assert "historical transaction observations" in payload["limitations"][-1]
+    assert any(
+        "historical transaction observations" in limitation
+        for limitation in payload["limitations"]
+    )
 
 
 def test_resource_pages_continue_by_type_name_id_and_keep_geojson_provenance(monkeypatch):

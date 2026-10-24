@@ -19,7 +19,7 @@ class _Connection:
         raise AssertionError(f"Unexpected query: {sql}")
 
     async def fetch(self, sql, *_values):
-        if "FROM candidate_home h JOIN source_snapshot" in sql:
+        if "FROM page_homes h JOIN source_snapshot" in sql:
             return self.rows
         raise AssertionError(f"Unexpected query: {sql}")
 
@@ -114,7 +114,10 @@ def test_live_search_scores_raw_price_and_distances_with_request_weights(monkeyp
     assert components["affordability"]["normalizedValue"] == 55
     assert payload["scorePolicyVersion"] == POLICY_VERSION
     assert payload["unappliedCriteria"] == []
-    assert "historical transaction observations" in payload["limitations"][-1]
+    assert any(
+        "historical transaction observations" in limitation
+        for limitation in payload["limitations"]
+    )
 
 
 def test_missing_geometry_stays_missing_and_low_coverage_score_is_null(monkeypatch):

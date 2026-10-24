@@ -1,9 +1,6 @@
 import json
 from pathlib import Path
 
-from app.migrations import checked_in_migrations
-
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -41,14 +38,3 @@ def test_npm_verification_scripts_cover_only_private_application_checks():
             fragment in normalized_command
             for fragment in forbidden_script_fragments
         ), f"{script_name} invokes an out-of-scope course path: {command}"
-
-
-def test_verification_contract_counts_only_the_seven_application_migrations():
-    migrations = checked_in_migrations()
-
-    assert len(migrations) == 7
-    assert [version for version, _ in migrations] == list(range(1, 8))
-    assert all(
-        (REPOSITORY_ROOT / "database" / "migrations" / filename).is_file()
-        for _, filename in migrations
-    )

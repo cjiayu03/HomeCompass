@@ -44,7 +44,7 @@ class _SearchConnection:
             self.ownership_query = (sql, values)
             requested_ids = set(values[1])
             return [{"id": place_id} for place_id in self.owned_ids if place_id in requested_ids]
-        if "FROM candidate_home h JOIN source_snapshot" in sql:
+        if "FROM page_homes h JOIN source_snapshot" in sql:
             self.search_query = sql
             self.search_values = values
             if "selected_place_constraints AS" in sql:
