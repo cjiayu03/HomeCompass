@@ -13,7 +13,7 @@ from app.local_env import load_local_project_env
 from app.main import app, score_preview
 from app.rate_limit import RateLimiter
 from app.schemas import FamilyProfileUpdate, QueryInterpretation, ScoreRequest
-from app.security import is_configured_value, rate_limit_key, require_active_user, supabase_auth_config
+from app.security import is_configured_value, rate_limit_key, require_active_user
 from app.sources.data_gov_sg import HDB_RESALE_DATASET_ID
 
 
@@ -310,11 +310,11 @@ def test_rate_limit_key_uses_user_id_or_sanitized_client_ip():
     assert rate_limit_key(None, invalid_request) == "client:unknown"
 
 
-def test_supabase_example_placeholders_are_treated_as_unconfigured(monkeypatch):
-    monkeypatch.setenv("SUPABASE_URL", "https://your-project.supabase.co")
-    monkeypatch.setenv("SUPABASE_PUBLISHABLE_KEY", "replace-me")
-    assert supabase_auth_config() == (None, None)
+def test_example_configuration_placeholders_are_treated_as_unconfigured():
+    assert not is_configured_value("https://your-project.example")
+    assert not is_configured_value("replace-me")
     assert not is_configured_value("replace-me-server-only")
+    assert is_configured_value("configured-value")
 
 
 def test_gemini_example_key_is_not_treated_as_ready(monkeypatch):
