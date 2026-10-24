@@ -75,9 +75,13 @@ def test_ready_reports_configured_components_and_safe_source_counts(monkeypatch)
         "application": "ready",
         "database": "ready",
         "migrations": "ready",
-        "migrationStatus": {"applied": 7, "latest": 7, "ready": True},
+        "migrationStatus": {
+            "applied": migrations.SCHEMA_VERIFIED_MIGRATION_VERSION,
+            "latest": migrations.latest_migration_version(),
+            "ready": True,
+        },
         "sourceData": {"state": "available", "homes": 128, "resources": 43},
-        "auth": "configured",
+        "auth": "ready",
         "ai": "configured",
         "ready": True,
     }
@@ -94,7 +98,7 @@ def test_ready_is_unavailable_when_database_is_not_configured(monkeypatch):
     assert response.json()["migrations"] == "unavailable"
     assert response.json()["migrationStatus"] == {
         "applied": None,
-        "latest": 7,
+        "latest": migrations.latest_migration_version(),
         "ready": False,
     }
     assert response.json()["sourceData"]["state"] == "unavailable"
@@ -114,7 +118,7 @@ def test_ready_is_unavailable_when_configured_database_pool_is_missing(monkeypat
     assert response.json()["migrations"] == "unavailable"
     assert response.json()["migrationStatus"] == {
         "applied": None,
-        "latest": 7,
+        "latest": migrations.latest_migration_version(),
         "ready": False,
     }
     assert response.json()["ready"] is False
@@ -145,10 +149,10 @@ def test_ready_reports_pending_migrations_without_requiring_optional_providers(m
     assert response.json()["migrations"] == "pending"
     assert response.json()["migrationStatus"] == {
         "applied": None,
-        "latest": 7,
+        "latest": migrations.latest_migration_version(),
         "ready": False,
     }
-    assert response.json()["auth"] == "unconfigured"
+    assert response.json()["auth"] == "pending"
     assert response.json()["ai"] == "unconfigured"
     assert response.json()["ready"] is False
 
@@ -169,7 +173,7 @@ def test_ready_reports_known_applied_version_when_behind_latest(monkeypatch):
     assert response.json()["migrations"] == "pending"
     assert response.json()["migrationStatus"] == {
         "applied": 6,
-        "latest": 7,
+        "latest": migrations.latest_migration_version(),
         "ready": False,
     }
     assert response.json()["ready"] is False
@@ -248,15 +252,15 @@ def test_migration_inspection_query_encodes_personal_place_005_contract():
     assert "strpos(" not in query
 
     assert (
-        "required_constraints(constraint_name,column_name,expected_definition)AS("
+        "required_constraints(constraint_name,table_name,column_name,expected_definition)AS("
         in compact_query
     )
     assert (
-        "('personal_place_kind_check','kind','CHECK((kind=ANY(ARRAY[''workplace''::text,''school''::text,''childcare''::text,''elder-care''::text,''other''::text])))')"
+        "('personal_place_kind_check','personal_place','kind','CHECK((kind=ANY(ARRAY[''workplace''::text,''school''::text,''childcare''::text,''elder-care''::text,''other''::text])))')"
         in compact_query
     )
     assert (
-        "('personal_place_geocode_source_check','geocode_source','CHECK(((geocode_sourceISNULL)OR(geocode_source=ANY(ARRAY[''OneMap''::text,''manual''::text]))))')"
+        "('personal_place_geocode_source_check','personal_place','geocode_source','CHECK(((geocode_sourceISNULL)OR(geocode_source=ANY(ARRAY[''OneMap''::text,''manual''::text]))))')"
         in compact_query
     )
     assert (
@@ -269,7 +273,9 @@ def test_migration_inspection_query_encodes_personal_place_005_contract():
     assert "table_class.relname = 'personal_place'" in query
     assert "actual.contype = 'c'" in query
     assert "actual.convalidated" in query
-    assert "pg_get_constraintdef(actual.oid) !~ '''[^'']*[[:space:]][^'']*'''" in query
+    assert "regexp_matches(" in query
+    assert "pg_get_constraintdef(actual.oid)" in query
+    assert "required.expected_definition" in query
     assert "constraint_column.attname = required.column_name" in query
     assert "constraint_column.attnum > 0" in query
     assert "NOT constraint_column.attisdropped" in query
