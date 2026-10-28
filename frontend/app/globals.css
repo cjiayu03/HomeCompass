@@ -297,6 +297,8 @@
 .map-marker > span { transform: rotate(45deg); }
 .map-marker.selected { background: #78927e; width: 36px; height: 36px; }
 .map-marker.pin { background: #374151; }
+.map-resource-icon { display: grid; width: 40px; height: 40px; place-items: center; filter: drop-shadow(0 2px 4px rgb(15 23 42 / 0.3)); }
+.map-resource-icon > svg { display: block; width: 40px; height: 40px; }
 
 .maplibregl-popup-content {
   background: hsl(var(--popover));

@@ -6,17 +6,70 @@ import { Minus, Plus, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { money, scoreLabel } from '@/lib/utils';
 import { LoadingScene } from '@/components/loading-scene';
+import {
+  getResourceDisplayName,
+  getResourcePresentation,
+  getResourceTypeLabel,
+  MAP_RESOURCE_TYPES,
+  resourceMarkerDataUrl,
+} from '@/lib/map-resource-presentation';
 
 const MAP_STYLE = 'https://tiles.openfreemap.org/styles/bright';
 const BUILDING_TILES = 'https://tiles.openfreemap.org/planet';
 
 setWorkerUrl(new URL('maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url).toString());
 
-const RESOURCE_COLORS = {
-  silver_zone: '#68886c', dementia_gtp: '#697d91', chas_clinic: '#7887a2', childcare: '#8a7898',
-  student_care: '#6e8b7c', kindergarten: '#627f90', moe_school: '#596f88', school_zone: '#8291a6',
-  dengue_cluster: '#b65360',
-};
+const RESOURCE_COLOR_MATCH = [
+  'match', ['get', 'resourceType'],
+  ...MAP_RESOURCE_TYPES.flatMap((type) => [type, getResourcePresentation(type).color]),
+  '#718096',
+];
+
+function resourceVisibilityFilter(types) {
+  return types.length ? ['in', ['get', 'resourceType'], ['literal', types]] : ['==', 1, 0];
+}
+
+function resourceIconImageId(type) {
+  return type ? `hc-resource-icon-${type}` : 'hc-resource-icon-default';
+}
+
+function loadResourceIconImages(map, isCurrentMap) {
+  const types = [...MAP_RESOURCE_TYPES, null];
+  return Promise.all(types.map((type) => new Promise((resolve) => {
+    if (typeof Image === 'undefined' || typeof map.addImage !== 'function') {
+      resolve(false);
+      return;
+    }
+    const imageId = resourceIconImageId(type);
+    if (map.hasImage?.(imageId)) {
+      resolve(true);
+      return;
+    }
+    const image = new Image();
+    image.onload = () => {
+      try {
+        if (!isCurrentMap()) {
+          resolve(false);
+          return;
+        }
+        map.addImage(imageId, image, { pixelRatio: 2 });
+        resolve(true);
+      } catch {
+        resolve(false);
+      }
+    };
+    image.onerror = () => resolve(false);
+    image.src = resourceMarkerDataUrl(type);
+  }))).then((loadedImages) => loadedImages.every(Boolean));
+}
+
+function resourceIconMatchExpression() {
+  return [
+    'match', ['get', 'resourceType'],
+    ...MAP_RESOURCE_TYPES.flatMap((type) => [type, resourceIconImageId(type)]),
+    resourceIconImageId(null),
+  ];
+}
 
 function hasCoordinates(item) {
   return item?.lat !== null && item?.lat !== undefined
@@ -84,7 +137,9 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
   const onViewportChangeRef = useRef(onViewportChange);
   const homesRef = useRef(homes);
   const addressFocusedRef = useRef(addressFocused);
+  const visibleResourceTypesRef = useRef(visibleResourceTypes);
   useEffect(() => { addressFocusedRef.current = addressFocused; }, [addressFocused]);
+  useEffect(() => { visibleResourceTypesRef.current = visibleResourceTypes; }, [visibleResourceTypes]);
   const [mapReady, setMapReady] = useState(false);
   const [mapIssue, setMapIssue] = useState('');
 
@@ -169,25 +224,35 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
       });
 
       map.addSource('hc-resources', { type: 'geojson', data: resourceData });
-      const resourceColor = ['match', ['get', 'resourceType'], ...Object.entries(RESOURCE_COLORS).flat(), '#718096'];
-      const isVisible = visibleResourceTypes.length
-        ? ['in', ['get', 'resourceType'], ['literal', visibleResourceTypes]]
-        : ['==', 1, 0];
+      const isVisible = resourceVisibilityFilter(visibleResourceTypesRef.current);
       map.addLayer({
         id: 'hc-resource-polygons', type: 'fill', source: 'hc-resources',
         filter: ['all', ['==', ['geometry-type'], 'Polygon'], isVisible],
-        paint: { 'fill-color': resourceColor, 'fill-opacity': 0.12 },
+        paint: { 'fill-color': RESOURCE_COLOR_MATCH, 'fill-opacity': 0.12 },
       });
       map.addLayer({
         id: 'hc-resource-lines', type: 'line', source: 'hc-resources',
         filter: ['all', ['in', ['geometry-type'], ['literal', ['LineString', 'MultiLineString', 'Polygon', 'MultiPolygon']]], isVisible],
-        paint: { 'line-color': resourceColor, 'line-width': 1.5, 'line-opacity': 0.82 },
+        paint: { 'line-color': RESOURCE_COLOR_MATCH, 'line-width': 1.5, 'line-opacity': 0.82 },
       });
       map.addLayer({
         id: 'hc-resource-points', type: 'circle', source: 'hc-resources',
         filter: ['all', ['==', ['geometry-type'], 'Point'], isVisible],
-        paint: { 'circle-radius': 5, 'circle-color': resourceColor, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 },
+        paint: { 'circle-radius': 5, 'circle-color': RESOURCE_COLOR_MATCH, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 },
       });
+
+      const openResourcePopup = (event) => {
+        const properties = event.features?.[0]?.properties || {};
+        const sourceDate = properties.retrievedAt
+          ? `Source snapshot: ${new Date(properties.retrievedAt).toLocaleDateString()}`
+          : 'Source date unavailable';
+        const displayName = getResourceDisplayName(properties);
+        const typeLabel = getResourceTypeLabel(properties.resourceType);
+        new Popup({ closeButton: true, maxWidth: '260px' })
+          .setLngLat(event.lngLat)
+          .setDOMContent(popupContent(displayName, displayName === typeLabel ? '' : typeLabel, sourceDate, properties.sourceUrl))
+          .addTo(map);
+      };
 
       map.on('click', 'hc-home-points', (event) => {
         const feature = event.features?.[0];
@@ -204,16 +269,7 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
       });
 
       for (const layerId of ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points']) {
-        map.on('click', layerId, (event) => {
-          const properties = event.features?.[0]?.properties || {};
-          const sourceDate = properties.retrievedAt
-            ? `Source snapshot: ${new Date(properties.retrievedAt).toLocaleDateString()}`
-            : 'Source date unavailable';
-          new Popup({ closeButton: true, maxWidth: '260px' })
-            .setLngLat(event.lngLat)
-            .setDOMContent(popupContent(properties.name, properties.resourceType, sourceDate, properties.sourceUrl))
-            .addTo(map);
-        });
+        map.on('click', layerId, openResourcePopup);
       }
       for (const layerId of ['hc-home-points', 'hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points']) {
         map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
@@ -233,6 +289,27 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
         map.jumpTo({ center: [Number(locatedHomes[0].lng), Number(locatedHomes[0].lat)], zoom: 14 });
       }
       reportViewport();
+
+      void loadResourceIconImages(map, () => mapRef.current === map).then((loaded) => {
+        if (!loaded || mapRef.current !== map) return;
+        if (map.getLayer?.('hc-resource-icons')) return;
+        map.addLayer({
+          id: 'hc-resource-icons',
+          type: 'symbol',
+          source: 'hc-resources',
+          filter: ['all', ['==', ['geometry-type'], 'Point'], resourceVisibilityFilter(visibleResourceTypesRef.current)],
+          layout: {
+            'icon-image': resourceIconMatchExpression(),
+            'icon-size': 1.2,
+            'icon-allow-overlap': false,
+            'icon-ignore-placement': false,
+          },
+        });
+        map.setLayoutProperty('hc-resource-points', 'visibility', 'none');
+        map.on('click', 'hc-resource-icons', openResourcePopup);
+        map.on('mouseenter', 'hc-resource-icons', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'hc-resource-icons', () => { map.getCanvas().style.cursor = ''; });
+      });
     });
 
     return () => {
@@ -255,15 +332,14 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
     const map = mapRef.current;
     if (!mapReady || !map?.getSource('hc-resources')) return;
     setSourceData(map, 'hc-resources', resourceData);
-    const isVisible = visibleResourceTypes.length
-      ? ['in', ['get', 'resourceType'], ['literal', visibleResourceTypes]]
-      : ['==', 1, 0];
-    for (const layerId of ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points']) {
+    const isVisible = resourceVisibilityFilter(visibleResourceTypes);
+    for (const layerId of ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points', 'hc-resource-icons']) {
+      if (layerId === 'hc-resource-icons' && !map.getLayer?.(layerId)) continue;
       const geometryFilter = layerId === 'hc-resource-polygons'
         ? ['==', ['geometry-type'], 'Polygon']
         : layerId === 'hc-resource-lines'
           ? ['in', ['geometry-type'], ['literal', ['LineString', 'MultiLineString', 'Polygon', 'MultiPolygon']]]
-          : ['==', ['geometry-type'], 'Point'];
+        : ['==', ['geometry-type'], 'Point'];
       map.setFilter(layerId, ['all', geometryFilter, isVisible]);
     }
   }, [mapReady, resourceData, visibleResourceTypes]);

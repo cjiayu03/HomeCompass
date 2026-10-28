@@ -9,6 +9,7 @@ import { useWorkspace } from '@/components/workspace-provider';
 import { MapAddressSearch } from '@/components/map-address-search';
 import { distanceM } from '@/lib/planning';
 import { LoadingScene } from '@/components/loading-scene';
+import { getResourceDisplayName, MAP_RESOURCE_LAYERS } from '@/lib/map-resource-presentation';
 
 class MapBoundary extends Component {
   state={failed:false};
@@ -19,12 +20,6 @@ class MapBoundary extends Component {
 
 const MapView = dynamic(() => import('@/components/map-view'), { ssr: false, loading: () => <div className="grid h-full min-h-0 place-items-center bg-background"><LoadingScene label="Unfolding the map…" /></div> });
 const Map3DView = dynamic(() => import('@/components/map-3d-view'), { ssr: false, loading: () => <div className="grid h-full min-h-0 place-items-center bg-background"><LoadingScene label="Building your 3D neighbourhood…" /></div> });
-
-const mapLayers = [
-  ['silver_zone', 'Silver Zones', '#68886c'], ['dementia_gtp', 'Dementia-friendly points', '#697d91'],
-  ['chas_clinic', 'CHAS clinics', '#7887a2'], ['childcare', 'Child care', '#8a7898'], ['student_care', 'Student care', '#6e8b7c'],
-  ['kindergarten', 'Kindergartens', '#627f90'], ['school_zone', 'School zones', '#8291a6'], ['dengue_cluster', 'Active dengue clusters', '#b65360'],
-];
 
 function viewportLabel(bounds) {
   if (!bounds) return 'initial bounded sample; pan or zoom to load this viewport';
@@ -50,7 +45,7 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
   const fallback=useCallback(message=>{setMapNotice(message);setMapMode('2d');},[]);
   const anchors=useMemo(()=>reach?(brief.placeConstraints||[]).map(c=>{const place=places.find(p=>p.id===c.placeId);return place&&place.latitude!=null&&place.longitude!=null?{id:place.id,label:place.label,lat:Number(place.latitude),lng:Number(place.longitude),radius:Number(c.maxDistanceM)}:null;}).filter(a=>a&&Number.isFinite(a.lat)&&Number.isFinite(a.lng)&&Number.isFinite(a.radius)&&a.radius>=0):[],[reach,brief.placeConstraints,places]);
   const inReach=anchors.length?homes.filter(home=>anchors.every(a=>{const d=distanceM(a,home);return d!=null&&d<=a.radius;})).length:0;
-  const nearest=useMemo(()=>!selectedHome?[]:resources.filter(f=>f.geometry?.type==='Point').map(f=>({name:f.properties?.name||f.properties?.resourceType,distance:distanceM(selectedHome,{lng:f.geometry.coordinates[0],lat:f.geometry.coordinates[1]})})).filter(f=>f.distance!=null).sort((a,b)=>a.distance-b.distance).slice(0,3),[selectedHome,resources]);
+  const nearest=useMemo(()=>!selectedHome?[]:resources.filter(f=>f.geometry?.type==='Point').map(f=>({name:getResourceDisplayName(f.properties),distance:distanceM(selectedHome,{lng:f.geometry.coordinates[0],lat:f.geometry.coordinates[1]})})).filter(f=>f.distance!=null).sort((a,b)=>a.distance-b.distance).slice(0,3),[selectedHome,resources]);
   const [visibleResourceTypes, setVisibleResourceTypes] = useState(['silver_zone', 'dengue_cluster']);
   const mappedCount = homes.filter((home) => home.lat !== null && home.lat !== undefined && home.lng !== null && home.lng !== undefined && Number.isFinite(Number(home.lat)) && Number.isFinite(Number(home.lng))).length;
   const counts = resources.reduce((result, feature) => { const type = feature.properties?.resourceType; result[type] = (result[type] || 0) + 1; return result; }, {});
@@ -98,16 +93,16 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
               <div className="mb-1 flex items-center justify-between gap-3">
                 <h3 id="map-layers-heading" className="text-sm font-semibold">Nearby layers</h3>
                 <div className="flex items-center gap-1">
-                  <Button variant="ghost" className="h-11 rounded-md px-2 text-xs" onClick={() => setVisibleResourceTypes(mapLayers.filter(([type]) => counts[type]).map(([type]) => type))}>All</Button>
+                  <Button variant="ghost" className="h-11 rounded-md px-2 text-xs" onClick={() => setVisibleResourceTypes(MAP_RESOURCE_LAYERS.filter(({ type }) => counts[type]).map(({ type }) => type))}>All</Button>
                   <Button variant="ghost" className="h-11 rounded-md px-2 text-xs" onClick={() => setVisibleResourceTypes([])}>Clear</Button>
                 </div>
               </div>
               <div className="space-y-0.5">
-                {mapLayers.map(([type, label, color]) => (
+                {MAP_RESOURCE_LAYERS.map(({ type, pluralLabel, color, Icon }) => (
                   <label key={type} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg px-2 hover:bg-secondary/70">
                     <input type="checkbox" className="size-4 accent-primary" checked={visibleResourceTypes.includes(type)} disabled={!counts[type]} onChange={(event) => toggleLayer(type, event.target.checked)} />
-                    <span aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
-                    <span className="min-w-0 flex-1 text-xs">{label}</span>
+                    <Icon aria-hidden="true" className="size-4 shrink-0" style={{ color }} />
+                    <span className="min-w-0 flex-1 text-xs">{pluralLabel}</span>
                     <span className="text-xs text-muted-foreground">{(counts[type] || 0).toLocaleString()}</span>
                   </label>
                 ))}

@@ -9,10 +9,10 @@ import { DataStatus } from '@/components/data-status';
 
 const labels = {
   hdb_resale: 'HDB resale transactions', hdb_building: 'HDB building footprints', hdb_property: 'HDB property information',
-  silver_zone: 'LTA Silver Zones', dementia_gtp: 'Dementia-friendly points', chas_clinic: 'CHAS clinics', moe_school: 'MOE school directory',
-  school_zone: 'LTA school zones', childcare: 'Child Care Services', kindergarten: 'Kindergartens', childcare_registry: 'ECDA centre directory',
-  childcare_fees: 'ECDA centre services and fees', childcare_charges: 'ECDA incidental charges', student_care: 'Student Care Services',
-  dengue_cluster: 'NEA active dengue clusters', geocoding_and_routing: 'OneMap geocoding and routing',
+  silver_zone: 'Silver Zones', dementia_gtp: 'Dementia-friendly points', chas_clinic: 'CHAS clinics', moe_school: 'MOE school directory',
+  school_zone: 'School zones', childcare: 'Childcare centres', kindergarten: 'Kindergartens', childcare_registry: 'ECDA centre directory',
+  childcare_fees: 'ECDA centre services and fees', childcare_charges: 'ECDA incidental charges', student_care: 'Student care centres',
+  dengue_cluster: 'Active dengue clusters', geocoding_and_routing: 'OneMap geocoding and routing',
 };
 
 function stateLabel(state) {

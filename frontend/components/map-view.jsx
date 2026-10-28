@@ -7,6 +7,13 @@ import { Badge } from '@/components/ui/badge';
 import { clusterPointFeatures } from '@/lib/geo-cluster';
 import { MapViewportListener } from '@/components/map-viewport-listener';
 import { money, scoreLabel } from '@/lib/utils';
+import {
+  createResourceMarkerSvg,
+  getResourceDisplayName,
+  getResourcePresentation,
+  getResourceTypeLabel,
+  getResourceTypePluralLabel,
+} from '@/lib/map-resource-presentation';
 
 function makeMarkerIcon(selected, hovered) {
   return L.divIcon({ className: '', html: `<span class="map-marker ${selected ? 'selected' : ''} ${hovered ? 'hovered' : ''}"><span>${selected ? '★' : '•'}</span></span>`, iconSize: selected ? [39, 39] : [34, 34], iconAnchor: selected ? [7, 34] : [6, 30], popupAnchor: [10, -28] });
@@ -64,14 +71,31 @@ function hasCoordinates(home) {
   return home?.lat !== null && home?.lat !== undefined && home?.lng !== null && home?.lng !== undefined && Number.isFinite(Number(home.lat)) && Number.isFinite(Number(home.lng));
 }
 
-const resourceColors = {
-  silver_zone: '#68886c', dementia_gtp: '#697d91', chas_clinic: '#7887a2', childcare: '#8a7898',
-  student_care: '#6e8b7c', kindergarten: '#627f90', moe_school: '#596f88', school_zone: '#8291a6',
-  dengue_cluster: '#b65360',
-};
+const resourceMarkerIcons = new Map();
 
-function resourceLabel(type) {
-  return ({ silver_zone: 'Silver Zone', dementia_gtp: 'Dementia-friendly point', chas_clinic: 'CHAS clinic', childcare: 'Child care', student_care: 'Student care', kindergarten: 'Kindergarten', moe_school: 'MOE school', school_zone: 'School zone', dengue_cluster: 'Active dengue cluster' })[type] || type;
+function resourceMarkerIcon(type) {
+  if (resourceMarkerIcons.has(type)) return resourceMarkerIcons.get(type);
+  const presentation = getResourcePresentation(type);
+  const icon = L.divIcon({
+    className: '',
+    html: `<span class="map-resource-icon" role="img" aria-label="${presentation.label}">${createResourceMarkerSvg(type)}</span>`,
+    iconSize: [40, 40],
+    iconAnchor: [20, 20],
+  });
+  resourceMarkerIcons.set(type, icon);
+  return icon;
+}
+
+function clusterResourceFeatures(features, cellSize) {
+  const groups = new Map();
+  for (const feature of features) {
+    const type = feature.properties?.resourceType || 'other';
+    if (!groups.has(type)) groups.set(type, []);
+    groups.get(type).push(feature);
+  }
+  return Array.from(groups, ([type, group]) => clusterPointFeatures(group, { cellSize })
+    .map((feature) => feature.properties?.cluster ? { ...feature, id: `${type}:${feature.id}` } : feature))
+    .flat();
 }
 
 function readViewport(map) {
@@ -101,31 +125,37 @@ function ResourceFeatures({ features, visibleTypes }) {
       ? visibleCellSize
       : 0.02 / (2 ** Math.max(viewport.zoom - 11, 0));
   }, [viewport]);
-  const mapped = useMemo(() => clusterPointFeatures(
+  const mapped = useMemo(() => clusterResourceFeatures(
     (Array.isArray(features) ? features : []).filter((feature) => feature?.geometry && visibleTypes.includes(feature.properties?.resourceType)),
-    { cellSize },
+    cellSize,
   ), [features, visibleTypes, cellSize]);
   const collection = useMemo(() => ({ type: 'FeatureCollection', features: mapped }), [mapped]);
   const renderKey = useMemo(() => JSON.stringify(mapped), [mapped]);
   const style = (feature) => {
     const type = feature?.properties?.resourceType;
-    const color = resourceColors[type] || '#718096';
+    const color = getResourcePresentation(type).color;
     return { color, weight: type === 'dengue_cluster' ? 2 : 1.25, opacity: 0.8, fillColor: color, fillOpacity: type === 'dengue_cluster' ? 0.14 : 0.08, dashArray: type === 'school_zone' ? '4 5' : undefined };
   };
   const onEachFeature = (feature, layer) => {
     const properties = feature?.properties || {};
     const popup = document.createElement('div');
     const name = document.createElement('strong');
-    name.textContent = properties.cluster ? `${properties.count} locations` : properties.name || 'Source feature';
+    const typeLabel = getResourceTypeLabel(properties.resourceType);
+    const displayName = getResourceDisplayName(properties);
+    name.textContent = properties.cluster
+      ? `${properties.count} ${getResourceTypePluralLabel(properties.resourceType)}`
+      : displayName;
     popup.appendChild(name);
-    if (properties.cluster && properties.name) {
+    if (properties.cluster && displayName !== typeLabel) {
       const representative = document.createElement('p');
-      representative.textContent = `Representative: ${properties.name}`;
+      representative.textContent = `Example: ${displayName}`;
       popup.appendChild(representative);
     }
-    const type = document.createElement('p');
-    type.textContent = resourceLabel(properties.resourceType);
-    popup.appendChild(type);
+    if (!properties.cluster && displayName !== typeLabel) {
+      const type = document.createElement('p');
+      type.textContent = typeLabel;
+      popup.appendChild(type);
+    }
     const date = document.createElement('small');
     date.textContent = `Source snapshot: ${properties.retrievedAt ? new Date(properties.retrievedAt).toLocaleDateString() : 'date unavailable'}`;
     popup.appendChild(date);
@@ -145,15 +175,22 @@ function ResourceFeatures({ features, visibleTypes }) {
   const pointToLayer = (feature, latlng) => {
     if (feature?.properties?.cluster) {
       const count = Number.isInteger(feature.properties.count) ? feature.properties.count : 0;
+      const color = getResourcePresentation(feature.properties.resourceType).color;
       const icon = L.divIcon({
         className: '',
-        html: `<span style="display:grid;place-items:center;width:36px;height:36px;border:2px solid #fff;border-radius:999px;background:#42624f;color:#fff;font-size:12px;font-weight:800;box-shadow:0 4px 12px rgba(15,23,42,.32)">${count}</span>`,
+        html: `<span style="display:grid;place-items:center;width:36px;height:36px;border:2px solid #fff;border-radius:999px;background:${color};color:#fff;font-size:12px;font-weight:800;box-shadow:0 4px 12px rgba(15,23,42,.32)" role="img" aria-label="${count} ${getResourceTypePluralLabel(feature.properties.resourceType)}">${count}</span>`,
         iconSize: [36, 36],
         iconAnchor: [18, 18],
       });
       return L.marker(latlng, { icon });
     }
-    return L.circleMarker(latlng, { radius: 5, color: '#ffffff', weight: 1.5, fillColor: resourceColors[feature?.properties?.resourceType] || '#718096', fillOpacity: 0.92 });
+    const type = feature?.properties?.resourceType;
+    const label = getResourceTypeLabel(type);
+    return L.marker(latlng, {
+      icon: resourceMarkerIcon(type),
+      title: label,
+      alt: `Map marker for ${label}`,
+    });
   };
   return <GeoJSON key={renderKey} data={collection} style={style} pointToLayer={pointToLayer} onEachFeature={onEachFeature} />;
 }

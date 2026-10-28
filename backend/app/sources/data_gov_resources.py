@@ -100,12 +100,15 @@ class _TableText(HTMLParser):
 
     def __init__(self) -> None:
         super().__init__()
-        self.cells: list[str] = []
+        self.rows: list[list[str]] = []
+        self._row: list[str] | None = None
         self._in_cell = False
         self._parts: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() in {"td", "th"}:
+        if tag.lower() == "tr":
+            self._row = []
+        elif tag.lower() in {"td", "th"}:
             self._in_cell = True
             self._parts = []
 
@@ -115,8 +118,12 @@ class _TableText(HTMLParser):
 
     def handle_endtag(self, tag: str) -> None:
         if tag.lower() in {"td", "th"} and self._in_cell:
-            self.cells.append(" ".join(" ".join(self._parts).split()))
+            if self._row is not None:
+                self._row.append(" ".join(" ".join(self._parts).split()))
             self._in_cell = False
+        elif tag.lower() == "tr" and self._row is not None:
+            self.rows.append(self._row)
+            self._row = None
 
 
 def _flatten_description(properties: dict[str, Any]) -> dict[str, Any]:
@@ -126,8 +133,12 @@ def _flatten_description(properties: dict[str, Any]) -> dict[str, Any]:
         return flattened
     parser = _TableText()
     parser.feed(description)
-    for index in range(0, len(parser.cells) - 1, 2):
-        key, value = parser.cells[index:index + 2]
+    for row in parser.rows:
+        if len(row) != 2:
+            continue
+        key, value = row
+        if key.casefold() == "attributes":
+            continue
         if key and key not in flattened:
             flattened[key] = value
     flattened.pop("Description", None)
