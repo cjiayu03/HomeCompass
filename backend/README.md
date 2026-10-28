@@ -41,6 +41,8 @@ The importer calls data.gov.sg's initiate-download and poll-download endpoints, 
 
 ## OneMap geocoding
 
+`POST /api/v1/map/address-search` accepts a `query` for a temporary map location and is available to guests. It returns up to ten OneMap addresses with coordinates, without saving them or returning personal-place selection tokens. It requires `ONEMAP_ACCESS_TOKEN`. The process-local limit is 20 requests per minute per client address; deployments behind a proxy may share that limit across visitors and multiple workers do not share limiter state.
+
 The raw HDB resale and MOE school files do not supply point geometry. Register for SLA OneMap, set `ONEMAP_ACCESS_TOKEN` in the repository-root `.env` (server-side only), then geocode small sequential batches:
 
 ```bash

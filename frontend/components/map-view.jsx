@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Circle, CircleMarker, GeoJSON, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
+import { Circle, CircleMarker, GeoJSON, MapContainer, Marker, Popup, TileLayer, Tooltip, ZoomControl, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { Badge } from '@/components/ui/badge';
 import { clusterPointFeatures } from '@/lib/geo-cluster';
@@ -46,9 +46,9 @@ function FitHomes({ homes, addressTarget }) {
   return null;
 }
 
-function FlyToAddress({ target, request }) {
+function FlyToAddress({ target, request, focused }) {
   const map = useMap();
-  useEffect(() => { if (target) map.flyTo([target.latitude, target.longitude], Math.max(map.getZoom(), 15), { duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 0.65 }); }, [map, request]);
+  useEffect(() => { if (target && focused) map.flyTo([target.latitude, target.longitude], Math.max(map.getZoom(), 15), { duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 0.65 }); }, [map, request, focused]);
   return null;
 }
 
@@ -158,14 +158,14 @@ function ResourceFeatures({ features, visibleTypes }) {
   return <GeoJSON key={renderKey} data={collection} style={style} pointToLayer={pointToLayer} onEachFeature={onEachFeature} />;
 }
 
-export default function MapView({ homes, resources = [], visibleResourceTypes = [], selectedHome, hoveredHome, anchors=[], onSelect, centerRequest, addressTarget, addressRequest, onViewportChange }) {
+export default function MapView({ homes, resources = [], visibleResourceTypes = [], selectedHome, hoveredHome, anchors=[], onSelect, centerRequest, addressTarget, addressRequest, addressFocused, onViewportChange }) {
   const mappedHomes = useMemo(() => homes.filter(hasCoordinates), [homes]);
   const icons = useMemo(() => Object.fromEntries(mappedHomes.map((home) => [home.id, makeMarkerIcon(home.id === selectedHome?.id,home.id===hoveredHome?.id)])), [mappedHomes, selectedHome?.id,hoveredHome?.id]);
   const tileUrl = process.env.NEXT_PUBLIC_MAP_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
-  return <MapContainer center={[1.3521, 103.8198]} zoom={11} scrollWheelZoom zoomControl className="h-full min-h-0 w-full">
-    <TileLayer attribution="&copy; OpenStreetMap contributors" url={tileUrl} />
-    <ResizeMap/><MapViewportListener onBoundsChange={onViewportChange} /><FitHomes homes={mappedHomes} addressTarget={addressTarget} /><FlyToSelected home={selectedHome} /><ResetSingapore request={centerRequest} /><FlyToAddress target={addressTarget} request={addressRequest} /><ResourceFeatures features={resources} visibleTypes={visibleResourceTypes} /><HoverPreview home={hoveredHome} addressTarget={addressTarget} />
-    {addressTarget && <CircleMarker center={[addressTarget.latitude, addressTarget.longitude]} radius={9} pathOptions={{color: '#ffffff', weight: 3, fillColor: '#256b4b', fillOpacity: 1}}><Popup>{addressTarget.address}</Popup></CircleMarker>}
+  return <MapContainer center={[1.3521, 103.8198]} zoom={11} scrollWheelZoom zoomControl={false} className="h-full min-h-0 w-full">
+    <ZoomControl position="bottomright" /><TileLayer attribution="&copy; OpenStreetMap contributors" url={tileUrl} />
+    <ResizeMap/><MapViewportListener onBoundsChange={onViewportChange} /><FitHomes homes={mappedHomes} addressTarget={addressFocused} /><FlyToSelected home={selectedHome} /><ResetSingapore request={centerRequest} /><FlyToAddress target={addressTarget} request={addressRequest} focused={addressFocused} /><ResourceFeatures features={resources} visibleTypes={visibleResourceTypes} /><HoverPreview home={hoveredHome} addressTarget={addressFocused} />
+    {addressTarget && <CircleMarker className="map-address-pin" center={[addressTarget.latitude, addressTarget.longitude]} radius={9} pathOptions={{color: '#ffffff', weight: 3, fillColor: '#256b4b', fillOpacity: 1}}><Popup>{addressTarget.address}</Popup></CircleMarker>}
     {anchors.map((anchor,i)=><Circle key={anchor.id} center={[anchor.lat,anchor.lng]} radius={anchor.radius} pathOptions={{color:['#42624f','#627f90','#8a7898'][i%3],fillOpacity:0.08,weight:2,dashArray:'5 5'}}><Popup>{anchor.label}: {anchor.radius.toLocaleString()} m straight-line reach</Popup></Circle>)}
     {mappedHomes.map((home) => <Marker key={home.id} title={home.address} alt={`Map marker for ${home.address}`} position={[home.lat, home.lng]} icon={icons[home.id]} zIndexOffset={home.id===hoveredHome?.id?1000:0} eventHandlers={{ click: () => onSelect(home) }}><Popup><div className="flex flex-col gap-2"><div><p className="font-semibold">{home.address}</p><p className="text-xs opacity-70">{home.town} · {money(home.price)}</p></div>{home.score !== null && home.score !== undefined && Number.isFinite(Number(home.score)) && <Badge>{home.score}/100 · {scoreLabel(home.score)}</Badge>}<p className="text-xs leading-4 opacity-75">{home.school || 'School distance unavailable'}<br />{home.childcare || 'Childcare distance unavailable'}<br />{home.care || 'Care distance unavailable'}</p></div></Popup></Marker>)}
   </MapContainer>;

@@ -210,3 +210,75 @@ test('3D marker selection and popup contrast work in both themes', async ({ page
     expect((levels[1] + 0.05) / (levels[0] + 0.05)).toBeGreaterThanOrEqual(4.5);
   }
 });
+
+
+for (const viewport of [{ width: 1366, height: 768 }, { width: 390, height: 844 }]) {
+  test(`map address search keeps controls usable at ${viewport.width}px`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.route('**/api/v1/map/address-search', route => route.fulfill({ json: { items: [{ address: '1 Example Road', latitude: 1.31, longitude: 103.85, provider: 'OneMap' }] } }));
+    await page.goto('/explore');
+    if (viewport.width < 1024) await page.getByRole('button', { name: 'Map', exact: true }).click();
+    const map = page.locator('section[aria-label="Movable OpenStreetMap view"]');
+    await expect(map).toBeVisible();
+    const optionsControl = page.getByLabel('Map options', { exact: false });
+    await optionsControl.click();
+    await page.getByRole('button', { name: 'Off', exact: true }).click();
+    await page.getByLabel('Map options, family reach on').click();
+    const input = page.getByLabel('Find an address or postal code');
+    await input.fill('123456');
+    await page.getByRole('button', { name: 'Search map addresses' }).click();
+    const suggestion = page.getByRole('button', { name: /1 Example Road/ });
+    await expect(suggestion).toBeVisible();
+    const options = page.getByLabel('Map options', { exact: false });
+    const zoom = page.locator('.leaflet-control-zoom-in');
+    await expect(options).toBeVisible();
+    await expect(zoom).toBeVisible();
+    const inputBox = await input.boundingBox(), optionsBox = await options.boundingBox(), zoomBox = await zoom.boundingBox();
+    const overlaps = (a, b) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+    expect(overlaps(inputBox, optionsBox)).toBe(false);
+    expect(overlaps(inputBox, zoomBox)).toBe(false);
+    await options.click();
+    await expect(page.getByLabel('Address suggestions')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '3D', exact: true })).toBeVisible();
+    await page.getByLabel('Map options, family reach on').click();
+    await page.getByRole('button', { name: 'Search map addresses' }).click();
+    await expect(suggestion).toBeVisible();
+    await suggestion.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('button', { name: /Show 1 Example Road on map again/ })).toBeVisible();
+    const pin = page.locator('.map-address-pin');
+    await expect(pin).toBeVisible();
+    await expect.poll(async () => {
+      const a = await pin.boundingBox(), b = await map.boundingBox();
+      return Math.abs((a.x + a.width / 2) - (b.x + b.width / 2)) < 30 && Math.abs((a.y + a.height / 2) - (b.y + b.height / 2)) < 30;
+    }).toBe(true);
+    await page.getByRole('button', { name: /Show 1 Example Road on map again/ }).click();
+    await expect(pin).toBeVisible();
+    await page.getByRole('button', { name: 'Clear selected address' }).click();
+    await expect(pin).toHaveCount(0);
+  });
+}
+
+
+test('address remains available after choosing a home and a 3D fallback', async ({ page }) => {
+  test.setTimeout(30000);
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.route('**/api/v1/map/address-search', route => route.fulfill({ json: { items: [{ address: '1 Example Road', latitude: 1.31, longitude: 103.85, provider: 'OneMap' }] } }));
+  await page.route('https://tiles.openfreemap.org/**', route => route.abort());
+  await page.goto('/explore');
+  await page.getByLabel('Find an address or postal code').fill('123456');
+  await page.getByRole('button', { name: 'Search map addresses' }).click();
+  await page.getByRole('button', { name: /1 Example Road/ }).click();
+  await expect(page.locator('.map-address-pin')).toBeVisible();
+  const card = page.locator('section[aria-label="Candidate places"] article').first();
+  await card.getByRole('button', { name: /Show .* on map/ }).click();
+  await expect(page.locator('.map-marker.selected')).toBeVisible();
+  await page.getByRole('button', { name: /Show 1 Example Road on map again/ }).click();
+  await expect(page.locator('.map-address-pin')).toBeVisible();
+  await page.getByLabel('Map options', { exact: false }).click();
+  await page.getByRole('button', { name: '3D', exact: true }).click();
+  await expect(page.locator('section[aria-label="Movable OpenStreetMap view"]')).toBeVisible({ timeout: 20000 });
+  await page.getByLabel('Map options', { exact: false }).click();
+  await expect(page.getByRole('button', { name: /Show 1 Example Road on map again/ })).toBeVisible();
+  await expect(page.locator('.map-address-pin')).toBeVisible();
+});

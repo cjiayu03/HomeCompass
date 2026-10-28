@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { LocateFixed, Layers3, UsersRound } from 'lucide-react';
-import { Component, useCallback, useMemo, useState } from 'react';
+import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useWorkspace } from '@/components/workspace-provider';
@@ -37,9 +37,16 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
   const [mapNotice,setMapNotice]=useState('');
   const [centerRequest, setCenterRequest] = useState(0);
   const [mapMode, setMapMode] = useState('2d');
+  const [mapOptionsOpen, setMapOptionsOpen] = useState(false);
   const [addressTarget, setAddressTarget] = useState(null);
   const [addressRequest, setAddressRequest] = useState(0);
-  function selectAddress(candidate) { setAddressTarget(candidate); setAddressRequest(value => value + 1); }
+  const [addressFocused, setAddressFocused] = useState(false);
+  const previousHomeId = useRef(selectedHome?.id);
+  useEffect(() => {
+    if (selectedHome?.id !== previousHomeId.current) setAddressFocused(false);
+    previousHomeId.current = selectedHome?.id;
+  }, [selectedHome?.id]);
+  function selectAddress(candidate) { setAddressTarget(candidate); setAddressFocused(true); setAddressRequest(value => value + 1); }
   const fallback=useCallback(message=>{setMapNotice(message);setMapMode('2d');},[]);
   const anchors=useMemo(()=>reach?(brief.placeConstraints||[]).map(c=>{const place=places.find(p=>p.id===c.placeId);return place&&place.latitude!=null&&place.longitude!=null?{id:place.id,label:place.label,lat:Number(place.latitude),lng:Number(place.longitude),radius:Number(c.maxDistanceM)}:null;}).filter(a=>a&&Number.isFinite(a.lat)&&Number.isFinite(a.lng)&&Number.isFinite(a.radius)&&a.radius>=0):[],[reach,brief.placeConstraints,places]);
   const inReach=anchors.length?homes.filter(home=>anchors.every(a=>{const d=distanceM(a,home);return d!=null&&d<=a.radius;})).length:0;
@@ -51,15 +58,15 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
   return (
     <section className={cn('relative isolate z-0 h-[clamp(360px,50dvh,440px)] min-h-0 overflow-hidden rounded-xl border bg-secondary shadow-soft lg:h-full', className)} aria-label={mapMode === '3d' ? 'Movable 3D neighborhood map' : 'Movable OpenStreetMap view'}>
       <div className="absolute inset-0 z-0">{mapMode === '3d'
-        ? <MapBoundary onUnavailable={fallback}><Map3DView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onUnavailable={fallback} onSelect={onSelect} centerRequest={centerRequest} onViewportChange={refreshViewport} /></MapBoundary>
-        : <MapView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onSelect={onSelect} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} onViewportChange={refreshViewport} />}</div>
-      <MapAddressSearch selectedAddress={addressTarget} onSelect={selectAddress} onClear={() => setAddressTarget(null)} />
+        ? <MapBoundary onUnavailable={fallback}><Map3DView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onUnavailable={fallback} onSelect={onSelect} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} /></MapBoundary>
+        : <MapView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onSelect={onSelect} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} />}</div>
+      <MapAddressSearch selectedAddress={addressTarget} onSelect={selectAddress} onClear={() => { setAddressTarget(null); setAddressFocused(false); }} optionsOpen={mapOptionsOpen} onSearchStart={() => setMapOptionsOpen(false)} />
       <div className="pointer-events-none absolute right-0 top-0 z-10 flex items-start gap-2 p-3">
-        <details className="pointer-events-auto">
+        <details className="pointer-events-auto" open={mapOptionsOpen} onToggle={event => setMapOptionsOpen(event.currentTarget.open)}>
           <summary aria-label={`Map options${reach ? ', family reach on' : ''}${resourceState?.status === 'error' ? ', nearby data unavailable' : ''}${mapNotice ? ', map warning' : ''}`} className="glass-card flex h-11 cursor-pointer list-none items-center gap-2 rounded-xl px-3 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
             <Layers3 aria-hidden="true" className="size-4 text-primary" />
-            Map options
-            {reach && <span className="rounded-md bg-primary/10 px-2 py-1 text-xs text-primary">Reach on</span>}
+            <span className="hidden sm:inline">Map options</span>
+            {reach && <span aria-hidden="true" className="size-2 rounded-full bg-primary" />}
             {(resourceState?.status === 'error' || mapNotice) && <span aria-hidden="true" className="size-2 rounded-full bg-destructive" />}
           </summary>
           <div className="absolute right-3 top-14 z-[80] max-h-[17rem] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto overscroll-contain rounded-xl border bg-popover p-3 text-popover-foreground shadow-float sm:max-h-[20rem]">
@@ -111,7 +118,7 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
             {resourceState?.status === 'error' && <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3 text-xs" role="alert"><span>Nearby map data could not load.</span><Button variant="outline" className="h-9 rounded-lg px-3 text-xs" onClick={retryResources}>Retry</Button></div>}
           </div>
         </details>
-        <Button size="icon" variant="outline" className="h-11 w-11" aria-label="Center map on Singapore" onClick={() => { setAddressTarget(null); setCenterRequest((value) => value + 1); }}><LocateFixed className="size-4" /></Button>
+        <Button size="icon" variant="outline" className="h-11 w-11" aria-label="Center map on Singapore" onClick={() => { setAddressTarget(null); setAddressFocused(false); setCenterRequest((value) => value + 1); }}><LocateFixed className="size-4" /></Button>
       </div>
 
       {selectedHome && <div className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[min(24rem,calc(100%-1.5rem))]">

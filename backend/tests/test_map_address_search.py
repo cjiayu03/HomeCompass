@@ -66,3 +66,16 @@ def test_public_search_is_rate_limited(monkeypatch):
     monkeypatch.setattr(main, "search_address_candidates", empty)
     assert request({"query": "Example"}).status_code == 200
     assert request({"query": "Example"}).status_code == 429
+
+
+def test_signed_in_cookie_with_allowed_origin_and_result_cap(monkeypatch):
+    monkeypatch.setenv("ONEMAP_ACCESS_TOKEN", "private-onemap-token")
+    async def suggest(*_args):
+        return [{"address": f"{i} Example Road", "latitude": 1.31, "longitude": 103.85, "provider": "OneMap"} for i in range(12)]
+    monkeypatch.setattr(main, "search_address_candidates", suggest)
+    async def send():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=main.app), base_url="http://test", cookies={"homecompass_session": "existing-session"}) as client:
+            return await client.post("/api/v1/map/address-search", json={"query": "Example"}, headers={"Origin": main._ALLOWED_ORIGINS[0]})
+    response = asyncio.run(send())
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 10

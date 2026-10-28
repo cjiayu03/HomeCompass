@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { LngLatBounds, Map as MapLibreMap, Popup, setWorkerUrl } from 'maplibre-gl';
+import { LngLatBounds, Map as MapLibreMap, Marker, Popup, setWorkerUrl } from 'maplibre-gl';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { money, scoreLabel } from '@/lib/utils';
@@ -77,12 +77,14 @@ function popupContent(title, detail, meta, sourceUrl) {
 
 function reachCollection(anchors){return {type:'FeatureCollection',features:anchors.filter(a=>a.radius>0).map(a=>({type:'Feature',properties:{name:a.label},geometry:{type:'Polygon',coordinates:[Array.from({length:65},(_,i)=>{const angle=i/64*2*Math.PI;return [a.lng+Math.cos(angle)*a.radius/(111320*Math.cos(a.lat*Math.PI/180)),a.lat+Math.sin(angle)*a.radius/110574];})]}}))};}
 
-export default function Map3DView({ homes, resources, visibleResourceTypes, selectedHome, hoveredHome, anchors=[], onUnavailable, onSelect, centerRequest, onViewportChange }) {
+export default function Map3DView({ homes, resources, visibleResourceTypes, selectedHome, hoveredHome, anchors=[], onUnavailable, onSelect, centerRequest, addressTarget, addressRequest, addressFocused, onViewportChange }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const onSelectRef = useRef(onSelect);
   const onViewportChangeRef = useRef(onViewportChange);
   const homesRef = useRef(homes);
+  const addressFocusedRef = useRef(addressFocused);
+  useEffect(() => { addressFocusedRef.current = addressFocused; }, [addressFocused]);
   const [mapReady, setMapReady] = useState(false);
   const [mapIssue, setMapIssue] = useState('');
 
@@ -220,14 +222,14 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
 
       setMapReady(true);
       const locatedHomes = homesRef.current.filter(hasCoordinates);
-      if (locatedHomes.length > 1) {
+      if (!addressFocusedRef.current && locatedHomes.length > 1) {
         const bounds = new LngLatBounds();
         locatedHomes.forEach((home) => bounds.extend([Number(home.lng), Number(home.lat)]));
         const sameBlock = bounds.getEast() - bounds.getWest() < 0.0001
           && bounds.getNorth() - bounds.getSouth() < 0.0001;
         if (sameBlock) map.jumpTo({ center: bounds.getCenter(), zoom: 14 });
         else map.fitBounds(bounds, { padding: 54, maxZoom: 14, duration: 0 });
-      } else if (locatedHomes.length === 1) {
+      } else if (!addressFocusedRef.current && locatedHomes.length === 1) {
         map.jumpTo({ center: [Number(locatedHomes[0].lng), Number(locatedHomes[0].lat)], zoom: 14 });
       }
       reportViewport();
@@ -273,7 +275,7 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!mapReady || !map || !hasCoordinates(hoveredHome)) return;
+    if (!mapReady || !map || !hasCoordinates(hoveredHome) || addressFocused) return;
     let preview;
     const timer = window.setTimeout(() => {
       const location = [Number(hoveredHome.lng), Number(hoveredHome.lat)];
@@ -288,11 +290,22 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
         .addTo(map);
     }, 140);
     return () => { window.clearTimeout(timer); preview?.remove(); };
-  }, [mapReady, hoveredHome?.id, hoveredHome?.lat, hoveredHome?.lng]);
+  }, [mapReady, hoveredHome?.id, hoveredHome?.lat, hoveredHome?.lng, addressFocused]);
 
   useEffect(() => {
     if (centerRequest) mapRef.current?.flyTo({ center: [103.8198, 1.3521], zoom: 11, pitch: 48, bearing: -18, duration: 650 });
   }, [centerRequest]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map || !addressTarget) return undefined;
+    const marker = new Marker({ color: '#256b4b' })
+      .setLngLat([addressTarget.longitude, addressTarget.latitude])
+      .setPopup(new Popup().setText(addressTarget.address))
+      .addTo(map);
+    if (addressFocused) map.flyTo({ center: [addressTarget.longitude, addressTarget.latitude], zoom: Math.max(map.getZoom(), 15), duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650 });
+    return () => marker.remove();
+  }, [mapReady, addressTarget, addressRequest, addressFocused]);
 
   return <div className="relative h-full w-full">
     <div ref={containerRef} className="absolute inset-0 h-full w-full" />

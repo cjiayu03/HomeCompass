@@ -43,3 +43,36 @@ it('offers to show the selected address again or clear it', () => {
   expect(select).toHaveBeenCalledWith(candidate);
   expect(clear).toHaveBeenCalledOnce();
 });
+
+
+it('accepts candidates at the backend coordinate boundaries', async () => {
+  const select = vi.fn();
+  request.mockResolvedValue({ items: [{ ...candidate, latitude: 1.13, longitude: 103.59 }] });
+  render(<MapAddressSearch onSelect={select} onClear={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText('Find an address or postal code'), { target: { value: '123456' } });
+  fireEvent.click(screen.getByLabelText('Search map addresses'));
+  fireEvent.click(await screen.findByRole('button', { name: /1 Example Road/ }));
+  expect(select).toHaveBeenCalledWith(expect.objectContaining({ latitude: 1.13, longitude: 103.59 }));
+});
+
+
+it('distinguishes no results from a provider or rate-limit error', async () => {
+  request.mockResolvedValueOnce({ items: [] }).mockRejectedValueOnce({ status: 429 });
+  render(<MapAddressSearch onSelect={vi.fn()} onClear={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText('Find an address or postal code'), { target: { value: '123456' } });
+  fireEvent.click(screen.getByLabelText('Search map addresses'));
+  expect(await screen.findByText('No addresses found. Try another search.')).toBeInTheDocument();
+  fireEvent.click(screen.getByLabelText('Search map addresses'));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Too many searches. Please try again shortly.');
+});
+
+
+it('allows a retry after the provider is unavailable', async () => {
+  request.mockRejectedValueOnce({ status: 503 }).mockResolvedValueOnce({ items: [candidate] });
+  render(<MapAddressSearch onSelect={vi.fn()} onClear={vi.fn()} />);
+  fireEvent.change(screen.getByLabelText('Find an address or postal code'), { target: { value: '123456' } });
+  fireEvent.click(screen.getByLabelText('Search map addresses'));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Address search is temporarily unavailable. Please try again.');
+  fireEvent.click(screen.getByLabelText('Search map addresses'));
+  expect(await screen.findByRole('button', { name: /1 Example Road/ })).toBeInTheDocument();
+});

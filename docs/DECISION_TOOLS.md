@@ -4,6 +4,8 @@ Run the private local app with `npm run local` after configuring `.env` and inst
 
 ## Explore
 
+- Use the map address search to find a Singapore address or postal code. Select a result to move the 2D or 3D map; the temporary pin is not saved as a personal place. The home search remains separate. Address search requires a configured OneMap connection.
+
 - Open Filters for area, storey range, estimated lease, transaction date and price per square metre. Must-haves are enforced by the database; preferences retain alternatives. Storey requirements use the entire reported storey range. Estimated lease uses the commencement year and an assumed 99-year term, not the original transaction's remaining-lease text.
 - Open Trade-offs & scenarios to preview how budget, space and location priorities reorder the currently loaded records. This is a transparent preference preview, separate from the source-evidence score. It does not rank records that have not been fetched. Apply search to retrieve matching records from the database.
 - Save up to ten named scenarios and reload or delete them here. Loading a scenario fills the controls; apply the search to retrieve its records.
