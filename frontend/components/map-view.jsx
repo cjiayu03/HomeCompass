@@ -3,10 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Circle, CircleMarker, GeoJSON, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import { Badge } from '@/components/ui/badge';
 import { clusterPointFeatures } from '@/lib/geo-cluster';
 import { MapViewportListener } from '@/components/map-viewport-listener';
-import { money, scoreLabel } from '@/lib/utils';
+import { money } from '@/lib/utils';
 
 function makeMarkerIcon(selected, hovered) {
   return L.divIcon({ className: '', html: `<span class="map-marker ${selected ? 'selected' : ''} ${hovered ? 'hovered' : ''}"><span>${selected ? '★' : '•'}</span></span>`, iconSize: selected ? [39, 39] : [34, 34], iconAnchor: selected ? [7, 34] : [6, 30], popupAnchor: [10, -28] });
@@ -14,7 +13,7 @@ function makeMarkerIcon(selected, hovered) {
 
 function FlyToSelected({ home }) {
   const map = useMap();
-  useEffect(() => { if (hasCoordinates(home)) map.flyTo([home.lat, home.lng], Math.max(map.getZoom(), 13), { duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 0.65 }); }, [home?.id, home?.lat, home?.lng, map]);
+  useEffect(() => { map.closePopup(); if (hasCoordinates(home)) map.flyTo([home.lat, home.lng], Math.max(map.getZoom(), 13), { duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 0.65 }); }, [home?.id, home?.lat, home?.lng, map]);
   return null;
 }
 
@@ -159,6 +158,6 @@ export default function MapView({ homes, resources = [], visibleResourceTypes = 
     <TileLayer attribution="&copy; OpenStreetMap contributors" url={tileUrl} />
     <ResizeMap/><MapViewportListener onBoundsChange={onViewportChange} /><FitHomes homes={mappedHomes} /><FlyToSelected home={selectedHome} /><ResetSingapore request={centerRequest} /><ResourceFeatures features={resources} visibleTypes={visibleResourceTypes} /><HoverPreview home={hoveredHome} />
     {anchors.map((anchor,i)=><Circle key={anchor.id} center={[anchor.lat,anchor.lng]} radius={anchor.radius} pathOptions={{color:['#42624f','#627f90','#8a7898'][i%3],fillOpacity:0.08,weight:2,dashArray:'5 5'}}><Popup>{anchor.label}: {anchor.radius.toLocaleString()} m straight-line reach</Popup></Circle>)}
-    {mappedHomes.map((home) => <Marker key={home.id} title={home.address} alt={`Map marker for ${home.address}`} position={[home.lat, home.lng]} icon={icons[home.id]} zIndexOffset={home.id===hoveredHome?.id?1000:0} eventHandlers={{ click: () => onSelect(home) }}><Popup><div className="flex flex-col gap-2"><div><p className="font-semibold">{home.address}</p><p className="text-xs opacity-70">{home.town} · {money(home.price)}</p></div>{home.score !== null && home.score !== undefined && Number.isFinite(Number(home.score)) && <Badge>{home.score}/100 · {scoreLabel(home.score)}</Badge>}<p className="text-xs leading-4 opacity-75">{home.school || 'School distance unavailable'}<br />{home.childcare || 'Childcare distance unavailable'}<br />{home.care || 'Care distance unavailable'}</p></div></Popup></Marker>)}
+    {mappedHomes.map((home) => <Marker key={home.id} title={home.address} alt={`Map marker for ${home.address}`} position={[home.lat, home.lng]} icon={icons[home.id]} zIndexOffset={home.id===hoveredHome?.id?1000:0} eventHandlers={{ click: () => onSelect(home) }} />)}
   </MapContainer>;
 }

@@ -485,7 +485,7 @@ describe('saved-search decision surfaces', () => {
     expect(await screen.findByText('Evidence search saved to your account.')).toBeInTheDocument();
   });
 
-  it('shows source provenance in the Explore record detail dialog', async () => {
+  it('shows source provenance in the Explore record sidebar', async () => {
     const detailHome = {
       ...initialHome,
       source: 'HDB resale transactions',
@@ -507,9 +507,10 @@ describe('saved-search decision surfaces', () => {
     });
 
     await screen.findByRole('button', { name: 'Details' });
+    fireEvent.click(screen.getByText('Evidence & sources'));
     expect(screen.getAllByRole('region', { name: `Evidence context for ${detailHome.address}` })).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-    const dialog = await screen.findByRole('dialog');
+    const dialog = await screen.findByRole('complementary', { name: detailHome.address });
     const evidence = within(dialog).getByRole('region', { name: `Evidence context for ${detailHome.address}` });
     fireEvent.click(within(evidence).getByText('Source and location provenance'));
     expect(within(evidence).getByText('HDB resale transactions')).toBeInTheDocument();

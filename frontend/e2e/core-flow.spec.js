@@ -249,6 +249,7 @@ test('guest researches dated homes, shortlists and compares them, then retries a
   await expect(firstHome).toBeVisible();
 
 
+  await firstHome.getByText('Evidence & sources', { exact: true }).click();
   const firstEvidence = firstHome.getByRole('region', { name: 'Evidence context for 123 Toa Payoh Central' });
   await expect(firstEvidence).toContainText('Historical transaction · not a current listing');
   await firstEvidence.getByText('Source and location provenance').click();

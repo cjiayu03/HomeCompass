@@ -33,10 +33,10 @@ export function readSearchLocation(search, fallback) {
   const bounds = area.length === 4 && area.every(Number.isFinite) && area[0] >= 103.5 && area[2] <= 104.2 && area[1] >= 1.1 && area[3] <= 1.6 && area[0] < area[2] && area[1] < area[3] ? { west: area[0], south: area[1], east: area[2], north: area[3] } : null;
   if (bounds) hasFilters = true;
   const error = briefValidationError(brief);
-  return { brief: error ? neutral : brief, error, bounds, hasFilters, saved: params.get('saved') === '1', view: params.get('view') === 'map' ? 'map' : 'homes', detailId: (params.get('detail') || '').slice(0, 100) };
+  return { brief: error ? neutral : brief, error, bounds, hasFilters, saved: params.get('saved') === '1', view: params.get('view') === 'map' ? 'map' : 'homes', layout: params.get('layout') === 'map' ? 'map' : 'split', detailId: (params.get('detail') || '').slice(0, 100) };
 }
 
-export function searchLocation(brief, { saved = false, view = 'homes', detailId = '', bounds = null } = {}) {
+export function searchLocation(brief, { saved = false, view = 'homes', detailId = '', layout = 'split', bounds = null } = {}) {
   const params = new URLSearchParams({ search: '1' });
   for (const [param, field] of Object.entries(numericFields)) if (brief[field] != null && brief[field] !== '') params.set(param, String(brief[field]));
   for (const town of brief.preferredTowns || []) params.append('town', town);
@@ -47,6 +47,7 @@ export function searchLocation(brief, { saved = false, view = 'homes', detailId 
   if (bounds) params.set('area', [bounds.west, bounds.south, bounds.east, bounds.north].join(','));
   if (saved) params.set('saved', '1');
   if (view === 'map') params.set('view', 'map');
+  if (layout === 'map') params.set('layout', 'map');
   if (detailId) params.set('detail', detailId);
   return `/explore?${params.toString()}`;
 }

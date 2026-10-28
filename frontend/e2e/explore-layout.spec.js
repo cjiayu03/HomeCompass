@@ -53,7 +53,7 @@ for (const viewport of [{ width: 1366, height: 768 }, { width: 1280, height: 650
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await card.getByRole('button', { name: 'Details', exact: true }).click();
-    await expect(page.getByRole('dialog').getByRole('heading', { name: '123 Toa Payoh Central', exact: true })).toBeVisible();
+    await expect(page.locator('.explore-detail').getByRole('heading', { name: '123 Toa Payoh Central', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Search presets', exact: true }).click();
     await expect(page.getByRole('dialog').getByRole('heading', { name: 'Search presets and history' })).toBeVisible();
@@ -95,7 +95,7 @@ test('hover and keyboard focus locate a result without selecting it', async ({ p
   await expect(page.locator('.map-marker.hovered')).toHaveCount(1);
 });
 
-test('popups are opaque and unblurred; Explore uses a solid background', async ({ page }) => {
+test('dialogs stay opaque and the desk background respects reduced motion', async ({ page }) => {
   await page.goto('/explore');
   await expect(page.locator('section[aria-label="Historical transaction results"] article').first()).toBeVisible();
   expect(await page.locator('.workspace-canvas').evaluate(el => getComputedStyle(el, '::before').animationName)).toBe('none');
@@ -114,14 +114,11 @@ test('popups are opaque and unblurred; Explore uses a solid background', async (
     await page.keyboard.press('Escape');
   }
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  expect(await page.locator('.workspace-canvas').evaluate(el => ({
-    background: getComputedStyle(el).backgroundImage,
-    decoration: getComputedStyle(el, '::before').display,
-  }))).toEqual({ background: 'none', decoration: 'none' });
+  expect(await page.locator('.workspace-canvas').evaluate(el => getComputedStyle(el, '::before').animationName)).toBe('workspace-current');
   expect(await page.locator('.workspace-canvas').evaluate(el =>
     [el, ...el.querySelectorAll('*')].filter(node =>
       getComputedStyle(node).backgroundImage.includes('gradient')).length,
-  )).toBe(0);
+  )).toBeGreaterThan(0);
 });
 
 test('map clicks reveal the matching card without adding it to Compare', async ({ page }) => {
@@ -133,8 +130,8 @@ test('map clicks reveal the matching card without adding it to Compare', async (
   const active = page.locator('article[data-map-active="true"]');
   await expect(active).toHaveAttribute('data-home-id', 'layout-home-11');
   await expect(active).toHaveAttribute('aria-current', 'location');
-  await expect(active.getByRole('button', { name: 'Compare', exact: true })).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.getByRole('dialog')).toContainText('134 Toa Payoh Central');
+  await expect(active.getByRole('button', { name: 'Compare', exact: true, includeHidden: true })).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('.explore-detail')).toContainText('134 Toa Payoh Central');
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Show 123 Toa Payoh Central on map', exact: true }).click();
   await expect(page.locator('article[data-map-active="true"]')).toHaveAttribute('data-home-id', 'layout-home-0');
@@ -148,7 +145,7 @@ test('mobile map selection opens the matching home card', async ({ page }) => {
   const marker = page.locator('.leaflet-marker-icon').last();
   await expect(marker).toBeAttached();
   await marker.dispatchEvent('click');
-  await expect(page.getByRole('dialog')).toContainText('134 Toa Payoh Central');
+  await expect(page.locator('.explore-detail')).toContainText('134 Toa Payoh Central');
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'List', exact: true }).click();
   await expect(page.locator('article[data-map-active="true"]')).toHaveAttribute('data-home-id', 'layout-home-11');
@@ -233,7 +230,7 @@ test('storey controls explain partial overlap and reject reversed bounds', async
   expect(payload).toMatchObject({ min_storey: 5, max_storey: 8 });
   const card = page.locator('section[aria-label="Historical transaction results"] article').first();
   await card.getByRole('button', { name: 'Details', exact: true }).click();
-  const detail = page.getByRole('dialog');
+  const detail = page.locator('.explore-detail');
   await detail.getByText('Why this place?', { exact: false }).click();
   await expect(detail.getByText(/reported 04 TO 06 has a possible overlap/)).toBeVisible();
 });
