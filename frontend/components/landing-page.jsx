@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { ArrowDownRight, ArrowRight, Baby, HeartPulse, MapPin, Moon, Sun, UsersRound } from 'lucide-react';
+import { ArrowDownRight, ArrowRight, HeartPulse, MapPin, Moon, Sun, UsersRound } from 'lucide-react';
 import { motion, useReducedMotion } from 'motion/react';
 import { APP_NAME, homes } from '@/lib/data';
 import { useAppTheme } from '@/components/theme-provider';
@@ -69,9 +69,29 @@ export function LandingPage() {
           </BlurFade>
 
           <BlurFade direction="up" delay={0.14} offset={reduceMotion ? 0 : 18} duration={0.65}>
-            <div className="mt-10 grid max-w-lg grid-cols-2 gap-3">
-              <div className="glass-card rounded-2xl p-4 sm:p-5"><p className="font-display text-3xl font-semibold tracking-tight"><NumberTicker value={homes.length} /></p><p className="mt-1 text-xs text-muted-foreground">illustrative preview records</p></div>
-              <div className="glass-card rounded-2xl p-4 sm:p-5"><div className="flex items-center gap-2"><Baby className="size-4 text-primary" /><HeartPulse className="size-4 text-primary" /></div><p className="mt-3 text-sm font-semibold">Whole household in view</p><p className="mt-1 text-xs leading-5 text-muted-foreground">Children, older adults and daily routines.</p></div>
+            <div className="mt-10 grid max-w-lg grid-cols-1 gap-3 sm:grid-cols-[0.82fr_1.18fr]">
+              <div className="glass-card flex flex-col justify-between rounded-2xl p-4 sm:p-5">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Preview set</p>
+                <div className="mt-3 flex items-baseline gap-2">
+                  <NumberTicker value={homes.length} className="font-display text-4xl font-semibold tracking-tight" />
+                  <span className="text-sm font-medium">homes</span>
+                </div>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">Illustrative data · not live listings</p>
+              </div>
+              <div className="glass-card rounded-2xl p-4 sm:p-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">Household priorities</p>
+                    <p className="mt-2 text-sm font-semibold">Whole household in view</p>
+                  </div>
+                  <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary" aria-hidden="true"><UsersRound className="size-4" /></span>
+                </div>
+                <ul className="mt-3 flex flex-wrap gap-x-2.5 gap-y-1 border-t border-border/70 pt-2 text-[10px] font-medium leading-4 text-muted-foreground sm:text-[11px]">
+                  <li className="whitespace-nowrap">Children</li>
+                  <li className="whitespace-nowrap">Older adults</li>
+                  <li className="whitespace-nowrap">Daily routines</li>
+                </ul>
+              </div>
             </div>
           </BlurFade>
         </div>
