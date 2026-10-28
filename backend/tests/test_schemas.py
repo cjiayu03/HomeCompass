@@ -121,6 +121,29 @@ def test_search_distance_rejects_values_outside_schema_boundaries(distance):
         SearchRequest(max_school_distance_m=distance)
 
 
+@pytest.mark.parametrize("field", ["min_storey", "max_storey"])
+@pytest.mark.parametrize("value", [1, 100])
+def test_search_storey_bounds_accept_inclusive_limits(field, value):
+    request = SearchRequest(**{field: value})
+
+    assert getattr(request, field) == value
+
+
+@pytest.mark.parametrize("field", ["min_storey", "max_storey"])
+@pytest.mark.parametrize("value", [-1, 0, 101, 1.5, "not-a-storey"])
+def test_search_storey_bounds_reject_invalid_values(field, value):
+    with pytest.raises(ValidationError):
+        SearchRequest(**{field: value})
+
+
+def test_search_storey_bounds_allow_equal_values_and_reject_reversed_range():
+    request = SearchRequest(min_storey=5, max_storey=5)
+
+    assert (request.min_storey, request.max_storey) == (5, 5)
+    with pytest.raises(ValidationError, match="Minimum storey cannot exceed maximum storey"):
+        SearchRequest(min_storey=6, max_storey=5)
+
+
 def test_search_query_accepts_maximum_length_and_rejects_one_more_character():
     assert len(SearchRequest(query="x" * 160).query) == 160
     with pytest.raises(ValidationError):
