@@ -6,7 +6,7 @@
 - Feature branch: `storey-range-filtering`
 - Starting point: `79c45a2` on `feature/map-controls`
 - Delivery: three sequential commits/pushes on this branch, reviewed and merged together after stage 3.
-- This file is a plan. The branch has been created; the feature has not been implemented by this planning task.
+- Stage 1 defined the contract and stage 2 implemented the backend. Stage 3 remains: frontend alignment and final documentation.
 - No remote push is authorized. The prompts below authorize a local commit for their own stage only; push to GitHub only on a later explicit user instruction.
 
 ## Why these stages
@@ -21,7 +21,7 @@ Stages 2 and 3 temporarily have different server and local behavior. They are re
 
 - `backend/README.md` describes intersecting ranges.
 - `docs/DECISION_TOOLS.md` says the whole reported range is used.
-- `backend/app/main.py`, `_query_homes`, currently compares the reported lower end against the requested minimum and the reported upper end against the requested maximum. This is containment.
+- `backend/app/main.py`, `_query_homes`, now applies inclusive overlap for active storey bounds, with strict source-band validation.
 - `frontend/lib/planning.js`, `applyLocalRequirements`, uses containment too.
 - The same frontend file also parses storeys in `evaluateHome` and `previewRank`. These must be reviewed so the explanation and preference contribution do not contradict the filter.
 - `backend/app/schemas.py`, `SearchRequest`, already validates storey bounds from 1 through 100 and rejects minimum greater than maximum. Reuse that validation.
@@ -35,7 +35,7 @@ Stages 2 and 3 temporarily have different server and local behavior. They are re
 | 2 | Backend SQL parsing and inclusive overlap predicates; backend regression coverage; API documentation | Returned records or meaningful SQL verification demonstrate overlap behavior; no-filter behavior and pagination preserved | `fix(search): apply inclusive storey range overlap in API` |
 | 3 | Frontend parsing and overlap helper; local filtering, evidence explanations and storey preference consistency; UI guidance and final docs | Frontend cases match the contract; partial overlap is explained as possible overlap, never an exact floor; final relevant suites/build pass | `fix(search): align frontend storey filtering and explanations` |
 
-## Target policy to formalize in stage 1
+## Policy established in stage 1
 
 Use inclusive overlap because the source reports a transaction's storey band, not its exact floor. A reported interval `[L, U]` matches a requested interval `[min, max]` when `U >= min` and `L <= max`, omitting the comparison for an unset bound. For example, `04 TO 06` matches a requested range of `05 TO 08` but does not establish that the exact transaction floor was 5 or 6.
 

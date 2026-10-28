@@ -2,7 +2,7 @@
 
 ## Status
 
-**Target for stages 2 and 3; not yet implemented.** This document defines the intended behavior for HomeCompass feature 6. The current backend query and frontend local requirements use containment: the source's lower endpoint must be at least the requested minimum and its upper endpoint must be at most the requested maximum. They can therefore reject a partial overlap. The backend README currently describes overlap, while `docs/DECISION_TOOLS.md` describes the entire reported range; neither should be read as proof that overlap is implemented. Stage 2 will change the backend; stage 3 will align frontend filtering, explanations, preferences, and documentation.
+**Backend implemented in stage 2; frontend alignment remains for stage 3.** Backend search uses the inclusive overlap rule below for POST search and GET homes. Frontend local requirements still use containment and can reject partial overlaps. The frontend explanations and preference scoring have not yet been aligned. `docs/DECISION_TOOLS.md` describes the prior entire-range behavior and will be updated in stage 3. Do not release this incomplete feature until frontend alignment is finished.
 
 ## Meaning of a match
 
@@ -40,7 +40,7 @@ Explanations must distinguish overlap, disjoint and unknown. Show the reported b
 
 ## Acceptance examples
 
-These are target outcomes once stages 2 and 3 are complete. Each row with a hard constraint assumes the listed bounds are enabled and all other requirements pass. `—` means the bound is unset. “Eligible” means not excluded on storey grounds; the actual floor is never established by the band.
+These are backend outcomes now and frontend target outcomes once stage 3 is complete. Each row with a hard constraint assumes the listed bounds are enabled and all other requirements pass. `—` means the bound is unset. “Eligible” means not excluded on storey grounds; the actual floor is never established by the band.
 
 | Case | Reported band | Requested min | Requested max | Expected storey outcome |
 | --- | --- | ---: | ---: | --- |
