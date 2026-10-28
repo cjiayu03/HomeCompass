@@ -401,6 +401,30 @@ def _validated_query_model(model, **values):
         ) from None
 
 
+def _storey_overlap_predicates(request: SearchRequest, values: list[object]) -> list[str]:
+    """Build safe inclusive interval predicates for a validated search request."""
+    if request.min_storey is None and request.max_storey is None:
+        return []
+
+    band = "btrim(h.storey_range, ' ')"
+    # Check every character as well as the anchored pattern: a trailing newline
+    # must not be accepted even if a regex engine treats it as an end anchor.
+    valid_format = (
+        f"({band} ~ '^[0-9]{{1,3}} +TO +[0-9]{{1,3}}$' "
+        f"AND {band} !~ '[^0-9 TO]')"
+    )
+    low = f"(CASE WHEN {valid_format} THEN substring({band} FROM '^[0-9]{{1,3}}')::integer END)"
+    high = f"(CASE WHEN {valid_format} THEN substring({band} FROM '[0-9]{{1,3}}$')::integer END)"
+    predicates = [f"({low} BETWEEN 1 AND {high})"]
+    if request.min_storey is not None:
+        values.append(request.min_storey)
+        predicates.append(f"{high} >= ${len(values)}")
+    if request.max_storey is not None:
+        values.append(request.max_storey)
+        predicates.append(f"{low} <= ${len(values)}")
+    return predicates
+
+
 async def _query_homes(
     request: SearchRequest,
     priority_weights=None,
@@ -435,14 +459,7 @@ async def _query_homes(
     if request.max_floor_area_sqm is not None:
         values.append(Decimal(str(request.max_floor_area_sqm)))
         predicates.append(f"h.floor_area_sqm <= ${len(values)}::numeric")
-    storey_low = "NULLIF(substring(h.storey_range FROM '^[0-9]+'), '')::integer"
-    storey_high = "NULLIF(substring(h.storey_range FROM '[0-9]+$'), '')::integer"
-    if request.min_storey is not None:
-        values.append(request.min_storey)
-        predicates.append(f"{storey_low} >= ${len(values)}")
-    if request.max_storey is not None:
-        values.append(request.max_storey)
-        predicates.append(f"COALESCE({storey_high}, {storey_low}) <= ${len(values)}")
+    predicates.extend(_storey_overlap_predicates(request, values))
     if request.min_remaining_lease_years is not None:
         as_of_year = datetime.now(timezone.utc).year
         values.extend([as_of_year, request.min_remaining_lease_years])
@@ -978,6 +995,8 @@ async def homes(
     budget: int | None = None,
     town: str | None = None,
     bounds: str | None = None,
+    min_storey: int | None = None,
+    max_storey: int | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None, min_length=1, max_length=MAX_CURSOR_LENGTH),
 ) -> dict:
@@ -987,6 +1006,8 @@ async def homes(
         budget=budget,
         town=town,
         bounds=bounds,
+        min_storey=min_storey,
+        max_storey=max_storey,
         limit=limit,
         cursor=cursor,
     )

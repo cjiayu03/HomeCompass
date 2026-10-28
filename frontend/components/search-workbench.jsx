@@ -5,16 +5,17 @@ import { SlidersHorizontal, X, Save, Check, ArrowRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { usePlanning } from '@/components/planning-provider';
-import { advancedFields, buildCriteria, evaluateHome } from '@/lib/planning';
+import { advancedFields, buildCriteria, evaluateHome, storeyRangeValidationError } from '@/lib/planning';
 import { requestJson } from '@/lib/api-client';
 
 export function AdvancedRequirements({brief,setBrief}) {
   const update=(key,value)=>setBrief(current=>({...current,[key]:value}));
   const strict=(key)=>brief.requirements?.[key]!==false;
+  const storeyError=storeyRangeValidationError(brief);
   return <section className="space-y-4 border-t pt-5" aria-label="Property requirements">
     <div><h3 className="font-semibold">The details that matter</h3><p className="mt-1 text-xs leading-5 text-muted-foreground">Must-haves exclude records. Preferences keep alternatives in view and appear in the fit explanation. Missing required evidence does not count as a match.</p></div>
-    <div className="grid gap-3 sm:grid-cols-2">{Object.entries(advancedFields).map(([key,[,label,unit]])=><label key={key} className="space-y-1.5 text-xs font-medium">{label}{unit ? ` (${unit})` : ''}<Input type={key==='observedAfter'?'date':'number'} min={key==='minStorey'||key==='maxStorey'?1:0} max={key==='minStorey'||key==='maxStorey'?100:key==='minLease'?99:undefined} step={key==='observedAfter'?undefined:'1'} value={brief[key]??''} onChange={e=>update(key,e.target.value===''?'':key==='observedAfter'?e.target.value:Number(e.target.value))}/></label>)}</div>
-    <p className="text-[11px] text-muted-foreground">Lease estimates use a 99-year term and commencement year; exact lease dates may differ. Storey filters require the entire reported range to fit.</p>
+    <div className="grid gap-3 sm:grid-cols-2">{Object.entries(advancedFields).map(([key,[,label,unit]])=><label key={key} className="space-y-1.5 text-xs font-medium">{label}{unit ? ` (${unit})` : ''}<Input aria-describedby={key==='minStorey'||key==='maxStorey' ? `storey-filter-help${storeyError ? ' storey-filter-error' : ''}` : undefined} aria-invalid={(key==='minStorey'||key==='maxStorey') && Boolean(storeyError) || undefined} type={key==='observedAfter'?'date':'number'} min={key==='minStorey'||key==='maxStorey'?1:0} max={key==='minStorey'||key==='maxStorey'?100:key==='minLease'?99:undefined} step={key==='observedAfter'?undefined:'1'} value={brief[key]??''} onChange={e=>update(key,e.target.value===''?'':key==='observedAfter'?e.target.value:Number(e.target.value))}/></label>)}</div>
+    <p id="storey-filter-help" className="text-[11px] text-muted-foreground">Storey filters match reported bands that overlap your chosen range. The exact floor is unavailable.</p>{storeyError&&<p id="storey-filter-error" role="alert" className="text-xs text-destructive">{storeyError}</p>}<p className="text-[11px] text-muted-foreground">Lease estimates use a 99-year term and commencement year; exact lease dates may differ.</p>
     <fieldset className="space-y-2"><legend className="mb-2 text-sm font-semibold">Which are must-haves?</legend>{[['budget','Budget'],['towns','Selected towns'],['flatType','Flat type'],['schoolDistance','School distance'],['childcareDistance','Childcare distance'],['careDistance','Care distance'],...Object.entries(advancedFields).map(([key,[,label]])=>[key,label])].map(([key,label])=><label key={key} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs"><span>{label}</span><span className="flex items-center gap-2"><span className="text-muted-foreground">{strict(key)?'Must-have':'Preference'}</span><input type="checkbox" className="accent-primary" checked={strict(key)} onChange={e=>setBrief(current=>({...current,requirements:{...current.requirements,[key]:e.target.checked}}))} aria-label={`${label} is a must-have`}/></span></label>)}</fieldset>
   </section>;
 }

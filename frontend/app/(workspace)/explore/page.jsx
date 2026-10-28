@@ -24,7 +24,7 @@ import { requestJson } from '@/lib/api-client';
 import { homes as fixtureHomes } from '@/lib/data';
 import { ActiveRequirements, AdvancedRequirements, EmptyRecovery, MatchReasons, SearchWorkbench } from '@/components/search-workbench';
 import { LoadingScene } from '@/components/loading-scene';
-import { previewRank } from '@/lib/planning';
+import { previewRank, storeyRangeValidationError } from '@/lib/planning';
 import { NeighbourhoodMark } from '@/components/neighbourhood-mark';
 
 const MarketExplorer = dynamic(() => import('@/components/market-explorer').then(module => module.MarketExplorer), {
@@ -163,7 +163,7 @@ export default function ExplorePage() {
       ? 'Home records are loading.'
       : 'Try a wider search or adjust the filters.';
   const search = (event) => { event?.preventDefault(); applySearch(); };
-  const applyFilters = () => { applySearch(); setFiltersOpen(false); };
+  const applyFilters = () => { if (storeyRangeValidationError(brief)) return; applySearch(); setFiltersOpen(false); };
   useEffect(() => {
     if (fixtureMode) {
       setSearchOptions({

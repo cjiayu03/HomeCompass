@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { defaultBrief, filterHomes, homes as fixtureHomes } from '@/lib/data';
 import { useAuth } from '@/components/auth-provider';
 import { ApiError, requestJson } from '@/lib/api-client';
-import { buildCriteria, applyLocalRequirements, briefFromCriteria } from '@/lib/planning';
+import { buildCriteria, applyLocalRequirements, briefFromCriteria, storeyRangeValidationError } from '@/lib/planning';
 
 const WorkspaceContext = createContext(null);
 const resourceTypes = ['silver_zone', 'dementia_gtp', 'chas_clinic', 'childcare', 'student_care', 'kindergarten', 'school_zone', 'dengue_cluster'];
@@ -1393,8 +1393,10 @@ export function WorkspaceProvider({ children }) {
   }
 
   async function applySearch(nextQuery = query) {
-    if (fixtureMode) return applyLocalSearch(nextQuery);
     const currentBrief = workspaceReady ? brief : defaultBrief;
+    const storeyError = storeyRangeValidationError(currentBrief);
+    if (storeyError) { flash(storeyError, 'warning'); return null; }
+    if (fixtureMode) return applyLocalSearch(nextQuery);
     const placeConstraints = (Array.isArray(currentBrief.placeConstraints) ? currentBrief.placeConstraints : [])
       .filter((constraint) => typeof constraint?.placeId === 'string' && constraint.placeId
         && Number.isInteger(Number(constraint.maxDistanceM))

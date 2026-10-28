@@ -9,6 +9,29 @@ export const advancedFields = {
   observedAfter: ['observed_after', 'Transactions from', ''],
 };
 
+// Source bands are historical evidence and do not establish an exact floor.
+export function parseStoreyRange(value) {
+  if (typeof value !== 'string') return null;
+  const text = value.replace(/^ +| +$/g, '');
+  const match = /^([0-9]{1,3}) +TO +([0-9]{1,3})$/.exec(text);
+  if (!match || match[0].length !== text.length) return null;
+  const lower = Number(match[1]), upper = Number(match[2]);
+  return lower >= 1 && lower <= upper && upper <= 999 ? { lower, upper } : null;
+}
+
+export function storeyOverlap(value, min, max) {
+  const band = parseStoreyRange(value);
+  if (!band) return null;
+  return (min == null || band.upper >= Number(min)) && (max == null || band.lower <= Number(max));
+}
+
+export function storeyRangeValidationError(brief) {
+  const values = [brief.minStorey, brief.maxStorey].map(value => value === '' || value == null ? null : Number(value));
+  if (values.some(value => value != null && (!Number.isInteger(value) || value < 1 || value > 100))) return 'Enter whole storeys from 1 to 100.';
+  if (values[0] != null && values[1] != null && values[0] > values[1]) return 'Minimum storey cannot exceed maximum storey.';
+  return null;
+}
+
 export function buildCriteria(brief) {
   const hard = key => brief.requirements?.[key] !== false;
   const criteria = {};
@@ -65,11 +88,18 @@ export function evaluateHome(home, brief) {
   if(brief.preferredTowns?.length)(brief.preferredTowns.some(t=>t.toLowerCase()===String(home.town).toLowerCase())?matches:compromises).push(`${home.town}: ${brief.preferredTowns.some(t=>t.toLowerCase()===String(home.town).toLowerCase())?'preferred town':'outside preferred towns'}`);
   const normalize=v=>String(v||'').replace(/[-_]/g,' ').toUpperCase();
   if(brief.preferredFlatType)(normalize(home.type)===normalize(brief.preferredFlatType)?matches:compromises).push(`${home.type}: ${normalize(home.type)===normalize(brief.preferredFlatType)?'preferred flat type':'alternative flat type'}`);
-  const floors=String(home.storeyRange||'').match(/\d+/g)?.map(Number);
+  for (const hard of [true, false]) {
+    const min = brief.minStorey !== '' && brief.minStorey != null && (brief.requirements?.minStorey !== false) === hard ? Number(brief.minStorey) : null;
+    const max = brief.maxStorey !== '' && brief.maxStorey != null && (brief.requirements?.maxStorey !== false) === hard ? Number(brief.maxStorey) : null;
+    if (min == null && max == null) continue;
+    const target = min != null && max != null ? `${min}–${max}` : min != null ? `${min} or higher` : `${max} or lower`;
+    const label = `${hard ? 'Must-have' : 'Preference'} storeys ${target}`;
+    const overlap = storeyOverlap(home.storeyRange, min, max);
+    if (overlap == null) missing.push(`${label}: reported storey range unavailable`);
+    else (overlap ? matches : compromises).push(`${label}: reported ${home.storeyRange} ${overlap ? 'has a possible overlap' : 'does not overlap'} (exact floor unavailable)`);
+  }
   for(const [key,label,value,comparison] of [
     ['maxFloorArea','Maximum floor area',home.floorAreaSqm,(v,t)=>v<=t],
-    ['minStorey','Minimum storey',floors?.[0],(v,t)=>v>=t],
-    ['maxStorey','Maximum storey',floors?.at(-1),(v,t)=>v<=t],
     ['maxPricePerSqm','Price per m²',home.pricePerSqm,(v,t)=>v<=t],
     ['observedAfter','Transaction date',home.observedOn,(v,t)=>v>=t],
   ]) {
@@ -93,9 +123,12 @@ export function previewRank(home, brief, weights, areaRange) {
   if(Number(brief.minLease)>0)space.push(home.remainingLeaseYears!=null?clamp(home.remainingLeaseYears/Number(brief.minLease)*100):null);
   const normalize=v=>String(v||'').replace(/[-_]/g,' ').toUpperCase();
   if(brief.preferredFlatType)space.push(normalize(home.type)===normalize(brief.preferredFlatType)?100:0);
-  const floors=String(home.storeyRange||'').match(/\d+/g)?.map(Number);
-  if(Number(brief.minStorey)>0)space.push(floors?clamp(floors[0]/Number(brief.minStorey)*100):null);
-  if(Number(brief.maxStorey)>0)space.push(floors?clamp(Number(brief.maxStorey)/floors.at(-1)*100):null);
+  const minStorey = Number(brief.minStorey) > 0 ? Number(brief.minStorey) : null;
+  const maxStorey = Number(brief.maxStorey) > 0 ? Number(brief.maxStorey) : null;
+  if (minStorey != null || maxStorey != null) {
+    const overlap = storeyOverlap(home.storeyRange, minStorey, maxStorey);
+    space.push(overlap == null ? null : overlap ? 100 : 0);
+  }
   const location=['school','childcare','care'].map(name=>{
     const target=Number(brief[`${name}Distance`]),distance=home.amenityDistancesM?.[name];
     if(target>0&&distance!=null)return clamp(100*(1-distance/(target*2)));
@@ -115,9 +148,8 @@ export function applyLocalRequirements(homes, brief) {
     if (n('maxFloorArea') && !(home.floorAreaSqm != null && home.floorAreaSqm <= n('maxFloorArea'))) return false;
     if (n('minLease') && !(home.remainingLeaseYears >= n('minLease'))) return false;
     if (n('maxPricePerSqm') && !(home.pricePerSqm != null && home.pricePerSqm <= n('maxPricePerSqm'))) return false;
-    const floors=String(home.storeyRange||'').match(/\d+/g)?.map(Number);
-    if(n('minStorey') && !(floors && floors[0]>=n('minStorey'))) return false;
-    if(n('maxStorey') && !(floors && floors.at(-1)<=n('maxStorey'))) return false;
+    const minStorey = n('minStorey') || null, maxStorey = n('maxStorey') || null;
+    if ((minStorey != null || maxStorey != null) && storeyOverlap(home.storeyRange, minStorey, maxStorey) !== true) return false;
     if(brief.requirements?.observedAfter!==false && brief.observedAfter && !(home.observedOn && home.observedOn>=brief.observedAfter)) return false;
     return true;
   });

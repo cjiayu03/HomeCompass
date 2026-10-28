@@ -210,3 +210,27 @@ test('3D marker selection and popup contrast work in both themes', async ({ page
     expect((levels[1] + 0.05) / (levels[0] + 0.05)).toBeGreaterThanOrEqual(4.5);
   }
 });
+
+
+test('storey controls explain partial overlap and reject reversed bounds', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/explore');
+  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog.getByText('Storey filters match reported bands that overlap your chosen range. The exact floor is unavailable.')).toBeVisible();
+  await dialog.getByLabel('Minimum storey', { exact: true }).fill('9');
+  await dialog.getByLabel('Maximum storey', { exact: true }).fill('5');
+  await dialog.getByRole('button', { name: 'Apply filters' }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Minimum storey cannot exceed maximum storey.');
+  await dialog.getByLabel('Minimum storey', { exact: true }).fill('5');
+  await dialog.getByLabel('Maximum storey', { exact: true }).fill('8');
+  const search = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/search');
+  await dialog.getByRole('button', { name: 'Apply filters' }).click();
+  const payload = (await search).postDataJSON();
+  expect(payload).toMatchObject({ min_storey: 5, max_storey: 8 });
+  const card = page.locator('section[aria-label="Candidate places"] article').first();
+  await card.getByRole('button', { name: 'Details', exact: true }).click();
+  const detail = page.getByRole('dialog');
+  await detail.getByText('Why this home?', { exact: false }).click();
+  await expect(detail.getByText(/reported 04 TO 06 has a possible overlap/)).toBeVisible();
+});
