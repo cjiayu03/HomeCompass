@@ -88,7 +88,7 @@ export function LandingPage() {
                 </div>
                 <ul className="mt-3 flex flex-wrap gap-x-2.5 gap-y-1 border-t border-border/70 pt-2 text-[10px] font-medium leading-4 text-muted-foreground sm:text-[11px]">
                   <li className="whitespace-nowrap">Children</li>
-                  <li className="whitespace-nowrap">Older adults</li>
+                  <li className="whitespace-nowrap">People aged 60+</li>
                   <li className="whitespace-nowrap">Daily routines</li>
                 </ul>
               </div>

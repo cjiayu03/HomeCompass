@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { useWorkspace } from '@/components/workspace-provider';
 import { money } from '@/lib/utils';
+import { summarizeHouseholdAges } from '@/lib/household';
 import { requestJson } from '@/lib/api-client';
 
 const steps = [
@@ -21,15 +22,15 @@ const steps = [
 
 const distanceChoices = [500, 1000, 1500, 2000, 3000];
 
-// Active line codes and colours follow LTA's system map; JRL is marked as planned.
+// Line tags use the colours and code-first style from the LTA rail legend.
 const MRT_LINE_INFO = {
-  NSL: { name: 'North-South Line', color: '#d32f2f' },
-  EWL: { name: 'East-West Line', color: '#009b55' },
-  NEL: { name: 'North East Line', color: '#8f1a9b' },
-  CCL: { name: 'Circle Line', color: '#ef8b16' },
-  DTL: { name: 'Downtown Line', color: '#1764b0' },
-  TEL: { name: 'Thomson-East Coast Line', color: '#8b5c3d' },
-  JRL: { name: 'Jurong Region Line (planned)', color: '#667085', planned: true },
+  NSL: { name: 'North-South Line', color: '#e3262e' },
+  EWL: { name: 'East-West Line', color: '#009b52' },
+  NEL: { name: 'North East Line', color: '#9900aa' },
+  CCL: { name: 'Circle Line', color: '#f99d1c' },
+  DTL: { name: 'Downtown Line', color: '#005eb8' },
+  TEL: { name: 'Thomson-East Coast Line', color: '#9b5b1f' },
+  JRL: { name: 'Jurong Region Line', color: '#292522', planned: true },
 };
 
 // Town-level guide only: exact station access varies by estate and block.
@@ -67,15 +68,14 @@ function normalizeTownName(town) {
 
 function TransitBadges({ town }) {
   const lines = TOWN_MRT_LINES[normalizeTownName(town)] || [];
-  return <span className="inline-flex flex-wrap items-center justify-end gap-1">
+  return <span className="inline-flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
     {lines.length ? lines.map((code) => {
       const line = MRT_LINE_INFO[code];
-      return <span key={code} title={`${line.name}${line.planned ? ' — planned, not yet in service' : ''}`} className={`inline-flex items-center gap-1 rounded-md border bg-background px-1.5 py-0.5 text-[9px] font-semibold tracking-tight ${line.planned ? 'border-dashed text-muted-foreground' : 'border-border text-foreground'}`}>
-        <span aria-hidden="true" className="size-1.5 rounded-full" style={{ backgroundColor: line.color }} />
-        {code}{line.planned ? '*' : ''}
-        <span className="sr-only">{line.name}{line.planned ? ', planned and not yet in service' : ''}</span>
+      return <span key={code} title={line.planned ? `${line.name} — under construction` : line.name} className="inline-flex min-w-0 items-center gap-1.5">
+        <span aria-hidden="true" className="inline-flex h-6 min-w-10 shrink-0 items-center justify-center rounded-lg px-2 text-[10px] font-bold tracking-wide text-white" style={{ backgroundColor: line.color }}>{line.planned ? 'U/C' : code}</span>
+        <span className="text-[11px] leading-3 text-foreground/85">{line.name}{line.planned ? ' · under construction' : ''}</span>
       </span>;
-    }) : <span title="Rail services vary across the town" className="text-[10px] text-muted-foreground">MRT varies</span>}
+    }) : <span title="Rail services vary across the town" className="text-[10px] text-muted-foreground">MRT varies by area</span>}
   </span>;
 }
 const priorityNames = [
@@ -92,14 +92,13 @@ const priorityPresets = [
   { name: 'Affordability', weights: { school: 1, childcare: 1, care: 1, affordability: 3 } },
 ];
 
-function CountControl({ label, ageRange, Icon, value, min, max = 10, onChange }) {
+function CountControl({ label, Icon, value, min, max = 10, onChange }) {
   const inputId = `household-${label.toLowerCase().replaceAll(' ', '-')}`;
   return <div className="rounded-2xl border bg-background/70 p-4 transition-colors hover:border-primary/30">
     <div className="flex items-center gap-3">
       <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Icon aria-hidden="true" className="size-5" /></span>
       <div className="min-w-0 flex-1">
         <p id={inputId} className="text-sm font-semibold text-foreground">{label}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{ageRange}</p>
       </div>
     </div>
     <div className="mt-4 flex items-center justify-between gap-3">
@@ -162,7 +161,7 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
       <div className="mb-3 mt-1 flex items-start justify-between gap-3">
         <div className="space-y-1">
           <p className="text-xs text-muted-foreground">Choose up to three. Clear them to keep every town in play.</p>
-          <p className="text-[11px] leading-4 text-muted-foreground">Line codes show rail lines in or near each town; exact access varies by estate. JRL* is planned.</p>
+          <p className="text-[11px] leading-4 text-muted-foreground">Line tags and names show rail lines in or near each town; exact access varies by estate and block. JRL is under construction.</p>
         </div>
         <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold tabular-nums text-primary">{selectedTowns.length}/3</span>
       </div>
@@ -173,8 +172,8 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
             const atLimit = !selected && selectedTowns.length >= 3;
             return <motion.button key={town} type="button" whileTap={reduceMotion ? undefined : { scale: 0.98 }} aria-pressed={selected} disabled={atLimit} onClick={() => toggleTown(town)} className={`flex min-h-12 items-center gap-2.5 rounded-xl border px-3 py-2 text-left text-xs transition-colors ${selected ? 'border-primary/40 bg-primary/10 text-foreground shadow-sm' : 'border-border/70 bg-background/75 text-muted-foreground hover:border-primary/35 hover:text-foreground'} disabled:cursor-not-allowed disabled:opacity-45`}>
               <span className={`grid size-4 shrink-0 place-items-center rounded-full border ${selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input'}`}>{selected && <Check aria-hidden="true" className="size-2.5" />}</span>
-              <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                <span className="truncate font-medium">{town}</span>
+              <span className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <span className="font-medium">{town}</span>
                 <TransitBadges town={town} />
               </span>
             </motion.button>;
@@ -200,11 +199,11 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
 
 function HouseholdStep({ brief, setBrief }) {
   return <div>
-    <p className="mb-4 text-xs leading-5 text-muted-foreground">Use these broad age bands to describe your household. We save the counts, not anyone’s date of birth.</p>
+    <p className="mb-4 text-xs leading-5 text-muted-foreground">These age groups help us consider household needs. A 63-year-old is still an adult; 60+ is just a search age band. We save counts, not birth dates.</p>
     <div className="grid gap-3 sm:grid-cols-3">
-      <CountControl label="Adults" ageRange="18–59 years" Icon={UsersRound} value={brief.adults} min={1} onChange={(value) => setBrief({ ...brief, adults: value })} />
-      <CountControl label="Children" ageRange="0–17 years" Icon={Baby} value={brief.children} min={0} onChange={(value) => setBrief({ ...brief, children: value })} />
-      <CountControl label="Older adults" ageRange="60+ years" Icon={PersonStanding} value={brief.olderAdults} min={0} onChange={(value) => setBrief({ ...brief, olderAdults: value })} />
+      <CountControl label="Adults aged 18–59" Icon={UsersRound} value={brief.adults} min={1} onChange={(value) => setBrief({ ...brief, adults: value })} />
+      <CountControl label="Children aged 0–17" Icon={Baby} value={brief.children} min={0} onChange={(value) => setBrief({ ...brief, children: value })} />
+      <CountControl label="People aged 60+" Icon={PersonStanding} value={brief.olderAdults} min={0} onChange={(value) => setBrief({ ...brief, olderAdults: value })} />
     </div>
   </div>;
 }
@@ -277,7 +276,7 @@ function SearchSummary({ brief, step }) {
     <CardContent className="space-y-4 p-5 pt-4">
       <SearchProgress step={step} />
       <dl className="divide-y divide-border/70 rounded-xl border bg-background/55 px-3">
-        <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Household</dt><dd className="max-w-[72%] text-right text-xs font-medium">{brief.adults} adults (18–59) · {brief.children} children (0–17) · {brief.olderAdults} older adults (60+)</dd></div>
+        <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Household</dt><dd className="max-w-[72%] text-right text-xs font-medium">{summarizeHouseholdAges(brief)}</dd></div>
         <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Budget</dt><dd className="text-right text-xs font-semibold">Up to {money(brief.budget)}</dd></div>
         <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Areas</dt><dd className="flex max-w-[72%] flex-col items-end gap-1.5 text-right text-xs font-medium">{towns.length ? towns.map((town) => <span key={town} className="inline-flex max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-1"><span className="max-w-40 truncate">{town}</span><TransitBadges town={town} /></span>) : 'No preference'}</dd></div>
         <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Flat type</dt><dd className="text-right text-xs font-medium">{brief.preferredFlatType || 'No preference'}</dd></div>
