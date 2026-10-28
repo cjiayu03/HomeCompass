@@ -6,6 +6,7 @@ import { Component, useCallback, useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useWorkspace } from '@/components/workspace-provider';
+import { MapAddressSearch } from '@/components/map-address-search';
 import { distanceM } from '@/lib/planning';
 import { LoadingScene } from '@/components/loading-scene';
 
@@ -36,6 +37,9 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
   const [mapNotice,setMapNotice]=useState('');
   const [centerRequest, setCenterRequest] = useState(0);
   const [mapMode, setMapMode] = useState('2d');
+  const [addressTarget, setAddressTarget] = useState(null);
+  const [addressRequest, setAddressRequest] = useState(0);
+  function selectAddress(candidate) { setAddressTarget(candidate); setAddressRequest(value => value + 1); }
   const fallback=useCallback(message=>{setMapNotice(message);setMapMode('2d');},[]);
   const anchors=useMemo(()=>reach?(brief.placeConstraints||[]).map(c=>{const place=places.find(p=>p.id===c.placeId);return place&&place.latitude!=null&&place.longitude!=null?{id:place.id,label:place.label,lat:Number(place.latitude),lng:Number(place.longitude),radius:Number(c.maxDistanceM)}:null;}).filter(a=>a&&Number.isFinite(a.lat)&&Number.isFinite(a.lng)&&Number.isFinite(a.radius)&&a.radius>=0):[],[reach,brief.placeConstraints,places]);
   const inReach=anchors.length?homes.filter(home=>anchors.every(a=>{const d=distanceM(a,home);return d!=null&&d<=a.radius;})).length:0;
@@ -48,7 +52,8 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
     <section className={cn('relative isolate z-0 h-[clamp(360px,50dvh,440px)] min-h-0 overflow-hidden rounded-xl border bg-secondary shadow-soft lg:h-full', className)} aria-label={mapMode === '3d' ? 'Movable 3D neighborhood map' : 'Movable OpenStreetMap view'}>
       <div className="absolute inset-0 z-0">{mapMode === '3d'
         ? <MapBoundary onUnavailable={fallback}><Map3DView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onUnavailable={fallback} onSelect={onSelect} centerRequest={centerRequest} onViewportChange={refreshViewport} /></MapBoundary>
-        : <MapView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onSelect={onSelect} centerRequest={centerRequest} onViewportChange={refreshViewport} />}</div>
+        : <MapView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onSelect={onSelect} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} onViewportChange={refreshViewport} />}</div>
+      <MapAddressSearch selectedAddress={addressTarget} onSelect={selectAddress} onClear={() => setAddressTarget(null)} />
       <div className="pointer-events-none absolute right-0 top-0 z-10 flex items-start gap-2 p-3">
         <details className="pointer-events-auto">
           <summary aria-label={`Map options${reach ? ', family reach on' : ''}${resourceState?.status === 'error' ? ', nearby data unavailable' : ''}${mapNotice ? ', map warning' : ''}`} className="glass-card flex h-11 cursor-pointer list-none items-center gap-2 rounded-xl px-3 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
@@ -106,7 +111,7 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
             {resourceState?.status === 'error' && <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3 text-xs" role="alert"><span>Nearby map data could not load.</span><Button variant="outline" className="h-9 rounded-lg px-3 text-xs" onClick={retryResources}>Retry</Button></div>}
           </div>
         </details>
-        <Button size="icon" variant="outline" className="h-11 w-11" aria-label="Center map on Singapore" onClick={() => setCenterRequest((value) => value + 1)}><LocateFixed className="size-4" /></Button>
+        <Button size="icon" variant="outline" className="h-11 w-11" aria-label="Center map on Singapore" onClick={() => { setAddressTarget(null); setCenterRequest((value) => value + 1); }}><LocateFixed className="size-4" /></Button>
       </div>
 
       {selectedHome && <div className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[min(24rem,calc(100%-1.5rem))]">
