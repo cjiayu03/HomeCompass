@@ -80,6 +80,7 @@ APP_NAME = os.getenv("APP_NAME", "HomeCompass")
 _DEFAULT_DISTANCE_TARGETS = {"school": 1_500, "childcare": 2_000, "care": 2_000}
 ai_interpret_limiter: RateLimiter | None = None
 auth_rate_limiter: RateLimiter | None = None
+address_search_limiter: RateLimiter | None = None
 SESSION_LIFETIME = timedelta(days=30)
 SESSION_MAX_AGE_SECONDS = int(SESSION_LIFETIME.total_seconds())
 _STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
@@ -142,6 +143,13 @@ def _get_ai_interpret_limiter() -> RateLimiter:
     if ai_interpret_limiter is None:
         ai_interpret_limiter = RateLimiter()
     return ai_interpret_limiter
+
+
+def _get_address_search_limiter() -> RateLimiter:
+    global address_search_limiter
+    if address_search_limiter is None:
+        address_search_limiter = RateLimiter(max_requests=20, window_seconds=60)
+    return address_search_limiter
 
 
 def _get_auth_rate_limiter() -> RateLimiter:
@@ -1553,6 +1561,26 @@ def _candidate_selection_token(candidate: dict, provider_token: str) -> str:
     }
     payload = json.dumps(signed_fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hmac.new(provider_token.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+@app.post("/api/v1/map/address-search")
+async def search_map_address(
+    payload: PlaceSuggestionRequest, request: Request, response: Response,
+) -> dict:
+    # Search is available to visitors; the address remains in the request body.
+    _get_address_search_limiter().check(f"map-address:{rate_limit_key(None, request)}")
+    provider_token = os.getenv("ONEMAP_ACCESS_TOKEN", "").strip()
+    if not is_configured_value(provider_token):
+        raise HTTPException(status_code=503, detail={"code": "ONEMAP_UNCONFIGURED", "message": "Address search is not configured."})
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            candidates = await search_address_candidates(payload.query, provider_token, client)
+    except OneMapProviderError:
+        raise HTTPException(status_code=502, detail={"code": "ONEMAP_UNAVAILABLE", "message": "Address search is temporarily unavailable."}) from None
+    response.headers["Cache-Control"] = "no-store"
+    return {"items": [{"address": candidate["address"], "latitude": candidate["latitude"],
+                       "longitude": candidate["longitude"], "provider": candidate["provider"]}
+                      for candidate in candidates[:10]]}
 
 
 @app.get("/api/v1/places/suggest")
