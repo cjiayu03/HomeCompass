@@ -2,7 +2,7 @@
 
 ## Status
 
-**Stage 3 changes are in place; full verification remains open.** Backend search and frontend local requirements use the inclusive overlap rule below. Frontend explanations and the storey preference contribution use the same rule. The focused frontend checks, browser check, production build and backend regression checks passed, but the full frontend suite has failures also present on the stage 2 baseline, and an isolated PostgreSQL execution check was not available. Resolve or assess these verification limits before marking the feature fully verified.
+**Verification remains open.** Backend search and frontend local requirements use the inclusive overlap rule below. Frontend explanations and the storey preference contribution use the same rule. Focused frontend checks, a browser check with mocked responses, the production build and backend regression checks passed. The full frontend suite has 34 pre-existing failures, and the generated SQL has not yet been verified against an isolated PostgreSQL database.
 
 ## Meaning of a match
 
@@ -17,7 +17,7 @@ Omit the corresponding comparison when a bound is absent. With no active hard st
 
 ## Source parsing shared by backend and frontend
 
-The importer in `backend/app/sources/data_gov_sg.py` strips outer whitespace and saves `storey_range` as text or null; it does **not** validate the range. The checked repository fixtures include `04 TO 06` and `01 TO 03`. The following is the agreed target parser, not a claim that all possible upstream formats have been surveyed:
+The importer in `backend/app/sources/data_gov_sg.py` strips outer whitespace and saves `storey_range` as text or null; it does **not** validate the range. The checked repository fixtures include `04 TO 06` and `01 TO 03`. The parser accepts the following format; not all possible upstream formats have been surveyed:
 
 1. The value must be text. Remove leading and trailing ASCII spaces (`U+0020`) only. Null, empty text and non-text values are unknown.
 2. Match the **entire** remaining string against `[0-9]{1,3} +TO +[0-9]{1,3}`: ASCII digits, uppercase `TO`, and one or more ASCII spaces on each side of `TO`. No signs, decimal points, additional text, tabs, newlines or alternate separators are accepted. One-digit and three-digit endpoints and repeated spaces are supported by this policy even though the checked examples use two digits and single spaces.
@@ -28,7 +28,7 @@ The source endpoint limit above is a parser safety bound; it is separate from th
 
 ## Request validation
 
-The existing `SearchRequest` accepts optional integer `min_storey` and `max_storey`, each from 1 through 100 inclusive. The lower bound must not exceed the upper bound when both are supplied; equal bounds are valid. Missing or null bounds are unset. The current Pydantic schema performs its existing integer coercions; this stage does not redefine those coercions or change the API fields. Inputs rejected by existing validation are rejected before filtering.
+The existing `SearchRequest` accepts optional integer `min_storey` and `max_storey`, each from 1 through 100 inclusive. The lower bound must not exceed the upper bound when both are supplied; equal bounds are valid. Missing or null bounds are unset. The Pydantic schema retains its existing integer coercions and API fields. Inputs rejected by existing validation are rejected before filtering.
 
 ## Must-haves, preferences and explanations
 
