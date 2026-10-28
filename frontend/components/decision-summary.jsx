@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EvidenceContext } from '@/components/evidence-context';
 import { money } from '@/lib/utils';
+import { summarizeHouseholdAges } from '@/lib/household';
 
 const STATUS_LABELS = {
   research: 'Researching',
@@ -33,12 +34,8 @@ function dateLabel(value) {
 
 function preferenceEntries(brief = {}) {
   const entries = [];
-  const household = [
-    ['Adults', brief.adults],
-    ['Children', brief.children],
-    ['Older adults', brief.olderAdults],
-  ].filter(([, value]) => hasValue(value));
-  if (household.length) entries.push(['Household', household.map(([label, value]) => `${value} ${label.toLocaleLowerCase()}`).join(' · ')]);
+  const household = summarizeHouseholdAges(brief);
+  if (household) entries.push(['Household', household]);
   if (hasValue(brief.budget)) entries.push(['Budget', money(Number(brief.budget))]);
   if (Array.isArray(brief.preferredTowns) && brief.preferredTowns.length) entries.push(['Preferred towns', brief.preferredTowns.join(', ')]);
   if (hasValue(brief.preferredFlatType)) entries.push(['Preferred home type', brief.preferredFlatType]);
