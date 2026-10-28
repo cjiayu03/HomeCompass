@@ -74,7 +74,18 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
             {(resourceState?.status === 'error' || mapNotice) && <span aria-hidden="true" className="size-2 rounded-full bg-destructive" />}
           </summary>
           <div className="absolute right-3 top-14 z-[80] max-h-[24rem] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto overscroll-contain rounded-xl border bg-popover p-3 text-popover-foreground shadow-float sm:max-h-[28rem]">
-            <section aria-labelledby="map-layers-heading">
+            <section aria-labelledby="map-view-heading">
+              <h3 id="map-view-heading" className="mb-2 text-sm font-semibold">Map view</h3>
+              <div className="grid grid-cols-2 gap-1 rounded-lg border bg-secondary/50 p-1" role="group" aria-label="Map view mode">
+                <Button variant={mapMode === '2d' ? 'soft' : 'ghost'} className="h-11 w-full rounded-lg px-3 text-sm" aria-pressed={mapMode === '2d'} onClick={() => setMapMode('2d')}>2D</Button>
+                <Button variant={mapMode === '3d' ? 'soft' : 'ghost'} className="h-11 w-full rounded-lg px-3 text-sm" aria-pressed={mapMode === '3d'} onClick={() => setMapMode('3d')}>3D</Button>
+              </div>
+              {mapMode === '3d' && <p className="mt-1 text-xs leading-4 text-muted-foreground">Building shapes and heights are approximate.</p>}
+              {mapNotice && <div className="mt-2 rounded-lg border border-destructive/25 bg-destructive/5 p-2 text-xs leading-4" role="status"><span>{mapNotice}</span><Button variant="link" size="sm" className="ml-2 h-8 px-1 text-xs" onClick={() => setMapNotice('')}>Dismiss</Button></div>}
+              {mappedCount < homes.length && <p className="mt-2 text-xs leading-4 text-muted-foreground" role="status">{mappedCount} of {homes.length} homes have map locations.</p>}
+            </section>
+
+            <section className="mt-3 border-t pt-3" aria-labelledby="map-layers-heading">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h3 id="map-layers-heading" className="text-sm font-semibold">Show nearby</h3>
@@ -125,17 +136,6 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
                   );
                 })}
               </div>
-            </section>
-
-            <section className="mt-3 border-t pt-3" aria-labelledby="map-view-heading">
-              <h3 id="map-view-heading" className="mb-2 text-sm font-semibold">Map view</h3>
-              <div className="grid grid-cols-2 gap-1 rounded-lg border bg-secondary/50 p-1" role="group" aria-label="Map view mode">
-                <Button variant={mapMode === '2d' ? 'soft' : 'ghost'} className="h-11 w-full rounded-lg px-3 text-sm" aria-pressed={mapMode === '2d'} onClick={() => setMapMode('2d')}>2D</Button>
-                <Button variant={mapMode === '3d' ? 'soft' : 'ghost'} className="h-11 w-full rounded-lg px-3 text-sm" aria-pressed={mapMode === '3d'} onClick={() => setMapMode('3d')}>3D</Button>
-              </div>
-              {mapMode === '3d' && <p className="mt-1 text-xs leading-4 text-muted-foreground">Building shapes and heights are approximate.</p>}
-              {mapNotice && <div className="mt-2 rounded-lg border border-destructive/25 bg-destructive/5 p-2 text-xs leading-4" role="status"><span>{mapNotice}</span><Button variant="link" size="sm" className="ml-2 h-8 px-1 text-xs" onClick={() => setMapNotice('')}>Dismiss</Button></div>}
-              {mappedCount < homes.length && <p className="mt-2 text-xs leading-4 text-muted-foreground" role="status">{mappedCount} of {homes.length} homes have map locations.</p>}
             </section>
 
             <section className="mt-3 border-t pt-3" aria-labelledby="family-reach-heading">
