@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { ArrowLeft, ArrowRight, Baby, Check, Compass, MapPin, Minus, PersonStanding, Plus, RotateCw, SlidersHorizontal, UsersRound, Wallet, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Baby, Check, Compass, Minus, PersonStanding, Plus, RotateCw, Search, UsersRound, X } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -14,10 +14,10 @@ import { summarizeHouseholdAges } from '@/lib/household';
 import { requestJson } from '@/lib/api-client';
 
 const steps = [
-  { title: 'Household', heading: 'Who will live here?', description: 'This helps set a sensible starting point for your search.' },
-  { title: 'Budget', heading: 'What price feels workable?', description: 'Set a ceiling for the homes you want to compare.' },
-  { title: 'Areas', heading: 'Which areas should we start with?', description: 'Pick up to three towns and, if you like, a flat type.' },
-  { title: 'Priorities', heading: 'What matters day to day?', description: 'Set the services and trade-offs you want search to consider.' },
+  { title: 'Household', heading: 'Who will live here?', description: 'Tell us who may live in the home.' },
+  { title: 'Budget', heading: 'What price should we stay under?', description: 'Set the maximum recorded price to compare.' },
+  { title: 'Areas', heading: 'Which areas should we start with?', description: 'Choose up to three towns, then select a flat type if you have one in mind.' },
+  { title: 'Priorities', heading: 'What should rank higher?', description: 'Set what matters in the ranking, then add any distance limits.' },
 ];
 
 const distanceChoices = [500, 1000, 1500, 2000, 3000];
@@ -113,41 +113,12 @@ function CountControl({ label, Icon, value, min, max = 10, onChange }) {
   </div>;
 }
 
-const stepIcons = [UsersRound, Wallet, MapPin, SlidersHorizontal];
-
-function SearchProgress({ step }) {
-  const currentStep = steps[step] || steps[0];
-  return <div className="rounded-xl border bg-background/55 p-3">
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">In progress</p>
-        <p className="mt-1 text-sm font-semibold">{currentStep.title}</p>
-      </div>
-      <span className="rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-semibold tabular-nums text-primary">Step {step + 1} of {steps.length}</span>
-    </div>
-    <div role="progressbar" aria-label="Onboarding progress" aria-valuemin={1} aria-valuemax={steps.length} aria-valuenow={step + 1} className="mt-3 grid grid-cols-4 gap-1.5">
-      {steps.map((item, index) => <span key={item.title} aria-hidden="true" className={`h-1.5 rounded-full ${index <= step ? 'bg-primary' : 'bg-secondary'}`} />)}
-    </div>
-    <ol aria-label="Setup steps" className="mt-3 grid grid-cols-4 gap-1">
-      {steps.map((item, index) => {
-        const Icon = stepIcons[index];
-        const complete = index < step;
-        const active = index === step;
-        return <li key={item.title} aria-current={active ? 'step' : undefined} className={`flex min-w-0 flex-col items-center gap-1 text-center ${active ? 'text-primary' : complete ? 'text-foreground' : 'text-muted-foreground/70'}`}>
-          <span className={`grid size-8 place-items-center rounded-full ${active ? 'bg-primary text-primary-foreground' : complete ? 'bg-primary/10 text-primary' : 'bg-secondary text-muted-foreground'}`}>
-            {complete ? <Check aria-hidden="true" className="size-4" /> : <Icon aria-hidden="true" className="size-4" />}
-          </span>
-          <span className="w-full truncate text-[10px] font-medium">{item.title}</span>
-        </li>;
-      })}
-    </ol>
-  </div>;
-}
-
 function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOptions }) {
   const reduceMotion = useReducedMotion();
+  const [townQuery, setTownQuery] = useState('');
   const selectedTowns = Array.isArray(brief.preferredTowns) ? brief.preferredTowns : [];
   const townChoices = [...new Set([...towns, ...selectedTowns])];
+  const matchingTowns = townChoices.filter((town) => town.toLowerCase().includes(townQuery.trim().toLowerCase()));
   const typeChoices = [...new Set([...flatTypes, ...(brief.preferredFlatType ? [brief.preferredFlatType] : [])])];
   const toggleTown = (town) => setBrief({
     ...brief,
@@ -155,23 +126,60 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
       ? selectedTowns.filter((selected) => selected !== town)
       : [...selectedTowns, town],
   });
+  const removeTown = (town) => setBrief({
+    ...brief,
+    preferredTowns: selectedTowns.filter((selected) => selected !== town),
+  });
 
   return <div className="space-y-6">
     <fieldset>
       <legend className="text-sm font-semibold">Towns</legend>
       <div className="mb-3 mt-1 flex items-start justify-between gap-3">
         <div className="space-y-1">
-          <p className="text-xs text-muted-foreground">Choose up to three. Clear them to keep every town in play.</p>
-          <p className="text-[11px] leading-4 text-muted-foreground">Badges show rail lines in or near each town; exact access varies by estate and block. The dark U/C badge marks the Jurong Region Line under construction.</p>
+          <p className="text-xs text-muted-foreground">Choose up to three. Homes can match any town you select.</p>
+          <p className="text-[11px] leading-4 text-muted-foreground">MRT tags are a town-level guide; exact access varies by estate and block. U/C marks the Jurong Region Line under construction.</p>
         </div>
         <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold tabular-nums text-primary">{selectedTowns.length}/3</span>
       </div>
-      {optionsState === 'loading' && townChoices.length === 0 ? <p className="rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">Loading towns from the latest resale data…</p>
-        : townChoices.length ? <div className="grid max-h-64 grid-cols-1 gap-2 overflow-y-auto rounded-xl border bg-muted/20 p-2 sm:grid-cols-2">
-          {townChoices.map((town) => {
+
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          aria-pressed={selectedTowns.length === 0}
+          onClick={() => setBrief({ ...brief, preferredTowns: [] })}
+          className={selectedTowns.length === 0 ? 'min-h-9 rounded-lg border border-primary/45 bg-primary/10 px-3 text-xs font-medium text-foreground' : 'min-h-9 rounded-lg border bg-background/70 px-3 text-xs font-medium text-muted-foreground hover:text-foreground'}
+        >Any town</button>
+      </div>
+
+      {selectedTowns.length > 0 && <div role="group" aria-label="Selected towns" className="mt-3 flex flex-wrap gap-2">
+        {selectedTowns.map((town) => <span key={town} className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 pl-3 pr-1.5 text-xs font-medium text-foreground">
+          <span>{town}</span>
+          <button type="button" aria-label={`Remove ${town}`} onClick={() => removeTown(town)} className="grid size-6 place-items-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+            <X aria-hidden="true" className="size-3.5" />
+          </button>
+        </span>)}
+      </div>}
+
+      <div className="relative mt-3">
+        <label htmlFor="onboarding-town-search" className="sr-only">Search towns</label>
+        <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          id="onboarding-town-search"
+          type="search"
+          value={townQuery}
+          onChange={(event) => setTownQuery(event.target.value)}
+          placeholder="Find a town"
+          className="pl-9"
+        />
+      </div>
+
+      {optionsState === 'loading' && townChoices.length === 0
+        ? <p className="mt-3 rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">Loading towns from the latest resale data…</p>
+        : townChoices.length ? matchingTowns.length ? <div className="mt-3 grid max-h-64 grid-cols-1 gap-2 overflow-y-auto rounded-xl border bg-muted/20 p-2 sm:grid-cols-2">
+          {matchingTowns.map((town) => {
             const selected = selectedTowns.includes(town);
             const atLimit = !selected && selectedTowns.length >= 3;
-            return <motion.button key={town} type="button" whileTap={reduceMotion ? undefined : { scale: 0.98 }} aria-pressed={selected} disabled={atLimit} onClick={() => toggleTown(town)} className={`flex min-h-12 items-center gap-2.5 rounded-xl border px-3 py-2 text-left text-xs transition-colors ${selected ? 'border-primary/40 bg-primary/10 text-foreground shadow-sm' : 'border-border/70 bg-background/75 text-muted-foreground hover:border-primary/35 hover:text-foreground'} disabled:cursor-not-allowed disabled:opacity-45`}>
+            return <motion.button key={town} type="button" whileTap={reduceMotion ? undefined : { scale: 0.98 }} aria-pressed={selected} disabled={atLimit} onClick={() => toggleTown(town)} className={`flex min-h-12 items-center gap-2.5 rounded-xl border px-3 py-2 text-left text-xs transition-colors ${selected ? 'border-primary/40 bg-primary/10 text-foreground shadow-sm' : 'border-border/70 bg-background/75 text-muted-foreground hover:border-primary/35 hover:text-foreground'} ${atLimit ? 'cursor-not-allowed opacity-45' : ''}`}>
               <span className={`grid size-4 shrink-0 place-items-center rounded-full border ${selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input'}`}>{selected && <Check aria-hidden="true" className="size-2.5" />}</span>
               <span className="flex min-w-0 flex-1 items-center gap-2">
                 <span className="truncate font-medium">{town}</span>
@@ -179,7 +187,7 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
               </span>
             </motion.button>;
           })}
-        </div> : <div className="rounded-xl border border-dashed px-4 py-4">
+        </div> : <p className="mt-3 rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">No towns match “{townQuery}”. Try another name.</p> : <div className="mt-3 rounded-xl border border-dashed px-4 py-4">
           <p className="text-sm text-muted-foreground">Town choices could not be loaded. You can finish setup without an area filter.</p>
           <Button type="button" variant="outline" size="sm" className="mt-3" onClick={retryOptions}><RotateCw className="size-3.5" />Retry town list</Button>
         </div>}
@@ -191,8 +199,8 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
       <p className="mb-3 mt-1 text-xs text-muted-foreground">No preference keeps the search broad.</p>
       {optionsState !== 'ready' && typeChoices.length === 0 ? <div className="rounded-lg border border-dashed px-3 py-3"><p className="text-xs text-muted-foreground">{optionsState === 'loading' ? 'Loading flat types…' : 'Flat types are unavailable right now; you can set this in Explore.'}</p>{optionsState === 'error' && <Button type="button" variant="outline" size="sm" className="mt-3" onClick={retryOptions}><RotateCw className="size-3.5" />Retry flat types</Button>}</div>
         : <div className="flex flex-wrap gap-2">
-          <button type="button" aria-pressed={!brief.preferredFlatType} onClick={() => setBrief({ ...brief, preferredFlatType: null })} className={`min-h-10 rounded-lg border px-3 text-xs font-medium transition-colors ${!brief.preferredFlatType ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>No preference</button>
-          {typeChoices.map((flatType) => <button key={flatType} type="button" aria-pressed={brief.preferredFlatType === flatType} onClick={() => setBrief({ ...brief, preferredFlatType: flatType })} className={`min-h-10 rounded-lg border px-3 text-xs font-medium transition-colors ${brief.preferredFlatType === flatType ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>{flatType}</button>)}
+          <button type="button" aria-pressed={!brief.preferredFlatType} onClick={() => setBrief({ ...brief, preferredFlatType: null })} className={!brief.preferredFlatType ? 'min-h-10 rounded-lg border border-primary/45 bg-primary/10 px-3 text-xs font-medium text-foreground' : 'min-h-10 rounded-lg border bg-background/70 px-3 text-xs font-medium text-muted-foreground hover:text-foreground'}>No preference</button>
+          {typeChoices.map((flatType) => <button key={flatType} type="button" aria-pressed={brief.preferredFlatType === flatType} onClick={() => setBrief({ ...brief, preferredFlatType: flatType })} className={brief.preferredFlatType === flatType ? 'min-h-10 rounded-lg border border-primary/45 bg-primary/10 px-3 text-xs font-medium text-foreground' : 'min-h-10 rounded-lg border bg-background/70 px-3 text-xs font-medium text-muted-foreground hover:text-foreground'}>{flatType}</button>)}
         </div>}
     </fieldset>
   </div>;
@@ -200,32 +208,37 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
 
 function HouseholdStep({ brief, setBrief }) {
   return <div>
-    <p className="mb-4 text-xs leading-5 text-muted-foreground">These age groups help us consider household needs. A 63-year-old is still an adult; 60+ is just a search age band. We save counts, not birth dates.</p>
+    <p className="mb-4 text-xs leading-5 text-muted-foreground">Count residents by age range. We save this as household context; it does not filter or rank homes.</p>
     <div className="grid gap-3 sm:grid-cols-3">
-      <CountControl label="Adults aged 18–59" Icon={UsersRound} value={brief.adults} min={1} onChange={(value) => setBrief({ ...brief, adults: value })} />
-      <CountControl label="Children aged 0–17" Icon={Baby} value={brief.children} min={0} onChange={(value) => setBrief({ ...brief, children: value })} />
-      <CountControl label="People aged 60+" Icon={PersonStanding} value={brief.olderAdults} min={0} onChange={(value) => setBrief({ ...brief, olderAdults: value })} />
+      <CountControl label="Adults (18–59)" Icon={UsersRound} value={brief.adults} min={1} onChange={(value) => setBrief({ ...brief, adults: value })} />
+      <CountControl label="Children (0–17)" Icon={Baby} value={brief.children} min={0} onChange={(value) => setBrief({ ...brief, children: value })} />
+      <CountControl label="Older adults (60+)" Icon={PersonStanding} value={brief.olderAdults} min={0} onChange={(value) => setBrief({ ...brief, olderAdults: value })} />
     </div>
   </div>;
 }
 
 function BudgetStep({ brief, setBrief }) {
-  const min = 200000;
-  const max = 2500000;
-  const sliderValue = Math.max(min, Math.min(max, Number(brief.budget) || min));
-  const updateBudget = (value) => setBrief({ ...brief, budget: Math.max(0, Math.round(Number(value) || 0)) });
+  const min = 0;
+  const max = 10_000_000;
+  const budget = Number(brief.budget);
+  const sliderValue = Math.max(min, Math.min(max, Number.isFinite(budget) ? budget : min));
+  const updateBudget = (value) => setBrief({
+    ...brief,
+    budget: Math.max(min, Math.min(max, Math.round(Number(value) || 0))),
+  });
   return <div className="space-y-6">
     <div>
       <div className="mb-3 flex items-baseline justify-between gap-3"><label htmlFor="onboarding-budget" className="text-sm font-semibold">Maximum budget</label><output htmlFor="onboarding-budget" className="font-display text-lg font-semibold tabular-nums">{money(brief.budget)}</output></div>
-      <input id="onboarding-budget-range" aria-label="Maximum budget slider" type="range" min={min} max={max} step="10000" value={sliderValue} onChange={(event) => updateBudget(event.target.value)} className="h-2 w-full cursor-pointer accent-[hsl(var(--primary))]" />
-      <p id="budget-help" className="mt-2 text-xs leading-5 text-muted-foreground">A price ceiling, not a loan or affordability calculation.</p>
+      <input id="onboarding-budget-range" aria-label="Maximum budget slider" aria-describedby="budget-help" type="range" min={min} max={max} step="10000" value={sliderValue} onChange={(event) => updateBudget(event.target.value)} className="h-2 w-full cursor-pointer accent-[hsl(var(--primary))]" />
+      <div aria-hidden="true" className="mt-1 flex justify-between text-[10px] text-muted-foreground"><span>S$0</span><span>S$10 million</span></div>
+      <p id="budget-help" className="mt-2 text-xs leading-5 text-muted-foreground">Use the slider for a broad estimate or enter an exact amount. This is a price ceiling, not a loan or affordability calculation.</p>
     </div>
     <div className="max-w-xs">
-      <label htmlFor="onboarding-budget" className="mb-2 block text-xs font-semibold">Or enter an exact amount</label>
-      <div className="relative"><span className="pointer-events-none absolute left-3.5 top-3 text-sm text-muted-foreground">S$</span><Input id="onboarding-budget" name="budget" type="number" min="0" max="10000000" step="10000" value={brief.budget} aria-describedby="budget-help" onChange={(event) => updateBudget(event.target.value)} className="pl-12" /></div>
+      <label htmlFor="onboarding-budget" className="mb-2 block text-xs font-semibold">Enter an exact amount</label>
+      <div className="relative"><span className="pointer-events-none absolute left-3.5 top-3 text-sm text-muted-foreground">S$</span><Input id="onboarding-budget" name="budget" type="number" min={min} max={max} step="10000" value={brief.budget} aria-describedby="budget-help" onChange={(event) => updateBudget(event.target.value)} className="pl-12" /></div>
     </div>
-    <div className="flex flex-wrap gap-2" aria-label="Suggested budget amounts">
-      {[450000, 600000, 800000, 1000000].map((amount) => <button key={amount} type="button" aria-pressed={brief.budget === amount} onClick={() => updateBudget(amount)} className={`min-h-9 rounded-lg border px-3 text-xs transition-colors ${brief.budget === amount ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>{money(amount)}</button>)}
+    <div className="flex flex-wrap gap-2" role="group" aria-label="Budget quick picks">
+      {[450000, 600000, 800000, 1000000].map((amount) => <button key={amount} type="button" aria-pressed={brief.budget === amount} onClick={() => updateBudget(amount)} className={brief.budget === amount ? 'min-h-9 rounded-lg border border-primary/45 bg-primary/10 px-3 text-xs text-foreground' : 'min-h-9 rounded-lg border bg-background/70 px-3 text-xs text-muted-foreground hover:text-foreground'}>{money(amount)}</button>)}
     </div>
   </div>;
 }
@@ -238,54 +251,58 @@ function PriorityStep({ brief, setBrief }) {
 
   return <div className="space-y-5">
     <fieldset>
-      <legend className="text-sm font-semibold">Start with a preset</legend>
+      <legend className="text-sm font-semibold">Start from a preset <span className="font-normal text-muted-foreground">(optional)</span></legend>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {priorityPresets.map((preset) => <motion.button key={preset.name} type="button" whileTap={reduceMotion ? undefined : { scale: 0.97 }} aria-pressed={activePreset === preset.name} onClick={() => setBrief({ ...brief, priorityWeights: preset.weights })} className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${activePreset === preset.name ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>{preset.name}</motion.button>)}
+        {priorityPresets.map((preset) => <motion.button key={preset.name} type="button" whileTap={reduceMotion ? undefined : { scale: 0.97 }} aria-pressed={activePreset === preset.name} onClick={() => setBrief({ ...brief, priorityWeights: preset.weights })} className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-medium ${activePreset === preset.name ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>{preset.name}</motion.button>)}
       </div>
     </fieldset>
-    <div className="grid gap-2 sm:grid-cols-2">
-      {priorityNames.map(([key, label]) => <fieldset key={key} className="rounded-xl border bg-background/65 p-3">
-        <legend className="px-1 text-xs font-semibold">{label}</legend>
-        <div role="group" aria-label={`${label} priority`} className="mt-1 grid grid-cols-3 gap-1 rounded-lg bg-muted/60 p-1">
-          {[[1, 'Normal'], [2, 'Important'], [3, 'Essential']].map(([value, title]) => <button key={value} type="button" aria-pressed={weights[key] === value} onClick={() => updateWeight(key, value)} className={`min-h-9 rounded-md px-1 text-[11px] transition-colors ${weights[key] === value ? 'bg-card font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{title}</button>)}
-        </div>
-      </fieldset>)}
-    </div>
     <fieldset>
-      <legend className="text-sm font-semibold">Optional distance limits</legend>
-      <p className="mb-3 mt-1 text-xs text-muted-foreground">Homes without distance data may not match a limit.</p>
+      <legend className="text-sm font-semibold">Ranking preferences</legend>
+      <p className="mb-3 mt-1 text-xs leading-5 text-muted-foreground">These weights change the order of homes; on their own, they do not remove homes from results.</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {priorityNames.map(([key, label]) => <fieldset key={key} className="rounded-xl border bg-background/65 p-3">
+          <legend className="px-1 text-xs font-semibold">{label}</legend>
+          <div role="group" aria-label={`${label} ranking weight`} className="mt-1 grid grid-cols-2 gap-1 rounded-lg bg-muted/60 p-1">
+            {[[0, 'Not ranked'], [1, 'Standard'], [2, 'Important'], [3, 'Top priority']].map(([value, title]) => <button key={value} type="button" aria-pressed={weights[key] === value} onClick={() => updateWeight(key, value)} className={`min-h-9 rounded-md px-1 text-[11px] ${weights[key] === value ? 'bg-card font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{title}</button>)}
+          </div>
+        </fieldset>)}
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend className="text-sm font-semibold">Optional distance filters</legend>
+      <p className="mb-3 mt-1 text-xs leading-5 text-muted-foreground">A distance limit can remove homes from results. Homes without loaded distance data may also be excluded.</p>
       <div className="grid gap-3 sm:grid-cols-3">
         {[
           ['schoolDistance', 'Schools'],
           ['childcareDistance', 'Childcare'],
           ['careDistance', 'Care services'],
-        ].map(([key, label]) => <label key={key} className="flex flex-col gap-2"><span className="text-xs font-medium">{label}</span><select name={key} className="h-11 w-full rounded-lg border bg-background px-3 text-sm" value={brief[key] ?? ''} onChange={(event) => setBrief({ ...brief, [key]: event.target.value === '' ? null : Number(event.target.value) })}><option value="">No limit</option>{distanceChoices.map((distance) => <option key={distance} value={distance}>Within {distance >= 1000 ? `${distance / 1000} km` : `${distance} m`}</option>)}</select></label>)}
+        ].map(([key, label]) => <label key={key} className="flex flex-col gap-2"><span className="text-xs font-medium">{label}</span><select name={key} className="h-11 w-full rounded-lg border bg-background px-3 text-sm" value={brief[key] ?? ''} onChange={(event) => setBrief({ ...brief, [key]: event.target.value === '' ? null : Number(event.target.value) })}><option value="">No limit</option>{distanceChoices.map((distance) => <option key={distance} value={distance}>Within {distance >= 1000 ? distance / 1000 + ' km' : distance + ' m'}</option>)}</select></label>)}
       </div>
     </fieldset>
   </div>;
 }
 
-function SearchSummary({ brief, step }) {
+function SearchSummary({ brief }) {
   const towns = Array.isArray(brief.preferredTowns) ? brief.preferredTowns : [];
   const priorities = brief.priorityWeights || {};
   const distanceLabel = (distance) => distance == null ? 'No limit' : `Within ${distance >= 1000 ? `${distance / 1000} km` : `${distance} m`}`;
+  const weightLabel = (weight) => weight <= 0 ? 'Not ranked' : weight >= 3 ? 'Top priority' : weight >= 2 ? 'Important' : 'Standard';
   return <Card className="overflow-hidden rounded-2xl">
     <div className="flex items-center justify-between gap-3 px-5 pt-5">
       <div><p className="text-sm font-semibold">Your search so far</p><p className="mt-1 text-xs text-muted-foreground">Your choices, at a glance</p></div>
       <span className="grid size-9 place-items-center rounded-xl bg-primary/10 text-primary"><Compass className="size-4" /></span>
     </div>
     <CardContent className="space-y-4 p-5 pt-4">
-      <SearchProgress step={step} />
       <dl className="divide-y divide-border/70 rounded-xl border bg-background/55 px-3">
         <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Household</dt><dd className="max-w-[72%] text-right text-xs font-medium">{summarizeHouseholdAges(brief)}</dd></div>
         <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Budget</dt><dd className="text-right text-xs font-semibold">Up to {money(brief.budget)}</dd></div>
-        <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Areas</dt><dd className="flex max-w-[72%] flex-col items-end gap-1.5 text-right text-xs font-medium">{towns.length ? towns.map((town) => <span key={town} className="inline-flex max-w-full items-center justify-end gap-1.5"><span className="max-w-40 truncate">{town}</span><TransitBadges town={town} /></span>) : 'No preference'}</dd></div>
+        <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Areas</dt><dd className="flex max-w-[72%] flex-col items-end gap-1.5 text-right text-xs font-medium">{towns.length ? towns.map((town) => <span key={town} className="inline-flex max-w-full items-center justify-end gap-1.5"><span className="max-w-40 truncate">{town}</span><TransitBadges town={town} /></span>) : 'Any town'}</dd></div>
         <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Flat type</dt><dd className="text-right text-xs font-medium">{brief.preferredFlatType || 'No preference'}</dd></div>
-        <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Nearby</dt><dd className="max-w-[68%] text-right text-xs font-medium">Schools {distanceLabel(brief.schoolDistance)}<br />Childcare {distanceLabel(brief.childcareDistance)}<br />Care {distanceLabel(brief.careDistance)}</dd></div>
+        <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Distance filters</dt><dd className="max-w-[68%] text-right text-xs font-medium">Schools {distanceLabel(brief.schoolDistance)}<br />Childcare {distanceLabel(brief.childcareDistance)}<br />Care {distanceLabel(brief.careDistance)}</dd></div>
       </dl>
       <div>
-        <p className="mb-2 text-[11px] font-semibold text-muted-foreground">Priority weights</p>
-        <div className="flex flex-wrap gap-1.5">{priorityNames.map(([key, label]) => <span key={key} className="rounded-full border bg-background/65 px-2.5 py-1 text-[10px] text-muted-foreground">{label} {priorities[key] || 1}/3</span>)}</div>
+        <p className="mb-2 text-[11px] font-semibold text-muted-foreground">Ranking preferences</p>
+        <div className="flex flex-wrap gap-1.5">{priorityNames.map(([key, label]) => <span key={key} className="rounded-full border bg-background/65 px-2.5 py-1 text-[10px] text-muted-foreground">{label} {weightLabel(priorities[key] ?? 1)}</span>)}</div>
       </div>
       <p className="text-[11px] leading-4 text-muted-foreground">You can change any of these in Explore. Town line tags are a guide; the nearest station depends on the block.</p>
     </CardContent>
@@ -394,7 +411,7 @@ export function OnboardingFlow() {
       </Card>
 
       <div className="lg:sticky lg:top-8">
-        <SearchSummary brief={brief} step={activeStep} />
+        <SearchSummary brief={brief} />
         <p className="mt-3 px-1 text-xs leading-5 text-muted-foreground">Your household and preferences stay in your HomeCompass account. Search results depend on available source data.</p>
       </div>
     </div>
