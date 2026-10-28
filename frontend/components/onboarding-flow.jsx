@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
-import { ArrowLeft, ArrowRight, Check, Compass, Minus, Plus, RotateCw, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Baby, Check, Compass, MapPin, Minus, PersonStanding, Plus, RotateCw, SlidersHorizontal, UsersRound, Wallet, X } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -20,6 +20,64 @@ const steps = [
 ];
 
 const distanceChoices = [500, 1000, 1500, 2000, 3000];
+
+// Active line codes and colours follow LTA's system map; JRL is marked as planned.
+const MRT_LINE_INFO = {
+  NSL: { name: 'North-South Line', color: '#d32f2f' },
+  EWL: { name: 'East-West Line', color: '#009b55' },
+  NEL: { name: 'North East Line', color: '#8f1a9b' },
+  CCL: { name: 'Circle Line', color: '#ef8b16' },
+  DTL: { name: 'Downtown Line', color: '#1764b0' },
+  TEL: { name: 'Thomson-East Coast Line', color: '#8b5c3d' },
+  JRL: { name: 'Jurong Region Line (planned)', color: '#667085', planned: true },
+};
+
+// Town-level guide only: exact station access varies by estate and block.
+const TOWN_MRT_LINES = {
+  'ANG MO KIO': ['NSL'],
+  BEDOK: ['EWL', 'DTL', 'TEL'],
+  BISHAN: ['NSL', 'CCL'],
+  'BUKIT BATOK': ['NSL'],
+  'BUKIT MERAH': ['EWL', 'CCL'],
+  'BUKIT PANJANG': ['DTL'],
+  'CHOA CHU KANG': ['NSL', 'JRL'],
+  CLEMENTI: ['EWL'],
+  GEYLANG: ['EWL', 'CCL', 'DTL'],
+  HOUGANG: ['NEL'],
+  'JURONG EAST': ['NSL', 'EWL', 'JRL'],
+  'JURONG WEST': ['EWL', 'JRL'],
+  'KALLANG/WHAMPOA': ['EWL', 'NEL', 'DTL'],
+  'MARINE PARADE': ['TEL'],
+  'PASIR RIS': ['EWL'],
+  PUNGGOL: ['NEL'],
+  QUEENSTOWN: ['EWL'],
+  SEMBAWANG: ['NSL'],
+  SENGKANG: ['NEL'],
+  SERANGOON: ['NEL', 'CCL'],
+  TAMPINES: ['EWL', 'DTL'],
+  TENGAH: ['JRL'],
+  'TOA PAYOH': ['NSL'],
+  WOODLANDS: ['NSL', 'TEL'],
+  YISHUN: ['NSL'],
+};
+
+function normalizeTownName(town) {
+  return String(town ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').replace(/\s*\/\s*/g, '/').toUpperCase();
+}
+
+function TransitBadges({ town }) {
+  const lines = TOWN_MRT_LINES[normalizeTownName(town)] || [];
+  return <span className="inline-flex flex-wrap items-center justify-end gap-1">
+    {lines.length ? lines.map((code) => {
+      const line = MRT_LINE_INFO[code];
+      return <span key={code} title={`${line.name}${line.planned ? ' — planned, not yet in service' : ''}`} className={`inline-flex items-center gap-1 rounded-md border bg-background px-1.5 py-0.5 text-[9px] font-semibold tracking-tight ${line.planned ? 'border-dashed text-muted-foreground' : 'border-border text-foreground'}`}>
+        <span aria-hidden="true" className="size-1.5 rounded-full" style={{ backgroundColor: line.color }} />
+        {code}{line.planned ? '*' : ''}
+        <span className="sr-only">{line.name}{line.planned ? ', planned and not yet in service' : ''}</span>
+      </span>;
+    }) : <span title="Rail services vary across the town" className="text-[10px] text-muted-foreground">MRT varies</span>}
+  </span>;
+}
 const priorityNames = [
   ['school', 'Schools'],
   ['childcare', 'Childcare'],
@@ -34,66 +92,55 @@ const priorityPresets = [
   { name: 'Affordability', weights: { school: 1, childcare: 1, care: 1, affordability: 3 } },
 ];
 
-function CountControl({ label, value, min, max = 10, onChange }) {
-  const reduceMotion = useReducedMotion();
+function CountControl({ label, ageRange, Icon, value, min, max = 10, onChange }) {
   const inputId = `household-${label.toLowerCase().replaceAll(' ', '-')}`;
-  return <div className="rounded-xl border bg-background/70 px-3 py-3 sm:px-4">
-    <div className="mb-2 flex items-center justify-between gap-3">
-      <span id={inputId} className="text-sm font-medium text-foreground">{label}</span>
-      <output aria-label={`${label} count`} className="min-w-8 text-right text-sm font-semibold tabular-nums">{value}</output>
+  return <div className="rounded-2xl border bg-background/70 p-4 transition-colors hover:border-primary/30">
+    <div className="flex items-center gap-3">
+      <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Icon aria-hidden="true" className="size-5" /></span>
+      <div className="min-w-0 flex-1">
+        <p id={inputId} className="text-sm font-semibold text-foreground">{label}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{ageRange}</p>
+      </div>
     </div>
-    <div role="group" aria-labelledby={inputId} className="flex items-center gap-2">
-      <Button type="button" variant="outline" size="icon" className="size-9 shrink-0" aria-label={`Decrease ${label}`} disabled={value <= min} onClick={() => onChange(Math.max(min, value - 1))}><Minus className="size-4" /></Button>
-      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary"><motion.div className="h-full w-full origin-left rounded-full bg-primary" initial={false} animate={{ scaleX: Math.max(0.08, value / max) }} transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 240, damping: 28 }} /></div>
-      <Button type="button" variant="outline" size="icon" className="size-9 shrink-0" aria-label={`Increase ${label}`} disabled={value >= max} onClick={() => onChange(Math.min(max, value + 1))}><Plus className="size-4" /></Button>
+    <div className="mt-4 flex items-center justify-between gap-3">
+      <span className="text-[11px] text-muted-foreground">People</span>
+      <div role="group" aria-labelledby={inputId} className="flex items-center gap-2">
+        <Button type="button" variant="outline" size="icon" className="size-9 rounded-full" aria-label={`Decrease ${label}`} disabled={value <= min} onClick={() => onChange(Math.max(min, value - 1))}><Minus className="size-4" /></Button>
+        <output aria-label={`${label} count`} className="min-w-6 text-center text-lg font-semibold tabular-nums">{value}</output>
+        <Button type="button" variant="outline" size="icon" className="size-9 rounded-full" aria-label={`Increase ${label}`} disabled={value >= max} onClick={() => onChange(Math.min(max, value + 1))}><Plus className="size-4" /></Button>
+      </div>
     </div>
   </div>;
 }
 
-function RouteSketch({ step, towns }) {
-  const reduceMotion = useReducedMotion();
-  const routeLength = (step + 1) / steps.length;
-  const route = 'M 28 176 C 72 177 79 130 118 132 S 162 169 200 137 S 249 91 281 108 S 327 122 365 63';
-  const pins = [
-    { x: 118, y: 132 },
-    { x: 200, y: 137 },
-    { x: 281, y: 108 },
-  ];
+const stepIcons = [UsersRound, Wallet, MapPin, SlidersHorizontal];
 
-  return <div className="relative overflow-hidden rounded-2xl border border-primary/15 bg-primary/[0.035] p-3">
-    <svg viewBox="0 0 400 220" role="img" aria-label={`Illustrative route diagram, not a geographic map${towns.length ? `, with ${towns.join(', ')} selected` : ''}`} className="h-auto w-full">
-      <g fill="none" stroke="hsl(var(--primary))" strokeWidth="1" opacity="0.11" aria-hidden="true">
-        <path d="M-20 45C32 5 88 8 117 41s82 38 120 4 88-43 153-9" />
-        <path d="M-21 56C37 16 85 22 112 51s82 43 129 9 90-43 147-14" />
-        <path d="M-20 71C28 37 82 35 106 64s76 48 131 20 94-39 157-15" />
-        <path d="M-11 194C31 156 63 157 91 183s81 31 118 6 69-50 108-30 56 35 98 4" />
-        <path d="M-16 207C30 174 63 173 87 195s82 34 127 11 72-46 107-27 52 34 95 8" />
-      </g>
-      <path d="M17 28 90 96 62 143 117 205M154 11 133 80 181 107 152 202M260 20 237 76 279 105 250 205M380 17 327 77 361 125 319 208" fill="none" stroke="hsl(var(--border))" strokeWidth="1.5" strokeDasharray="3 7" opacity="0.78" aria-hidden="true" />
-      <path d={route} fill="none" stroke="hsl(var(--primary) / 0.18)" strokeWidth="4" strokeLinecap="round" aria-hidden="true" />
-      <motion.path
-        d={route}
-        fill="none"
-        stroke="hsl(var(--primary))"
-        strokeWidth="2.5"
-        strokeLinecap="round"
-        strokeDasharray="0.02 0.015"
-        initial={false}
-        animate={{ pathLength: routeLength, strokeDashoffset: reduceMotion ? 0 : -0.18 }}
-        transition={{
-          pathLength: { duration: reduceMotion ? 0 : 0.7, ease: 'easeInOut' },
-          strokeDashoffset: reduceMotion ? { duration: 0 } : { duration: 4.5, repeat: Infinity, ease: 'linear' },
-        }}
-        aria-hidden="true"
-      />
-      <circle cx="28" cy="176" r="5" fill="hsl(var(--card))" stroke="hsl(var(--primary))" strokeWidth="2" aria-hidden="true" />
-      {pins.map((pin, index) => <motion.g key={index} initial={false} animate={{ scale: towns[index] ? 1 : 0.78, opacity: towns[index] ? 1 : 0.38 }} transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 260, damping: 22 }} style={{ transformOrigin: `${pin.x}px ${pin.y}px` }} aria-hidden="true">
-        <circle cx={pin.x} cy={pin.y} r="9" fill="hsl(var(--card))" stroke="hsl(var(--primary))" strokeWidth="1.5" />
-        <circle cx={pin.x} cy={pin.y} r="3.5" fill="hsl(var(--primary))" />
-      </motion.g>)}
-      <path d="M365 54v18m-9-9h18" stroke="hsl(var(--primary))" strokeWidth="2" strokeLinecap="round" aria-hidden="true" />
-    </svg>
-    <p className="px-1 pb-1 text-[11px] leading-4 text-muted-foreground">Illustrative route only — not a street or travel-time map.</p>
+function SearchProgress({ step }) {
+  const currentStep = steps[step] || steps[0];
+  return <div className="rounded-xl border bg-background/55 p-3">
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">In progress</p>
+        <p className="mt-1 text-sm font-semibold">{currentStep.title}</p>
+      </div>
+      <span className="rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-semibold tabular-nums text-primary">Step {step + 1} of {steps.length}</span>
+    </div>
+    <div role="progressbar" aria-label="Onboarding progress" aria-valuemin={1} aria-valuemax={steps.length} aria-valuenow={step + 1} className="mt-3 grid grid-cols-4 gap-1.5">
+      {steps.map((item, index) => <span key={item.title} aria-hidden="true" className={`h-1.5 rounded-full ${index <= step ? 'bg-primary' : 'bg-secondary'}`} />)}
+    </div>
+    <ol aria-label="Setup steps" className="mt-3 grid grid-cols-4 gap-1">
+      {steps.map((item, index) => {
+        const Icon = stepIcons[index];
+        const complete = index < step;
+        const active = index === step;
+        return <li key={item.title} aria-current={active ? 'step' : undefined} className={`flex min-w-0 flex-col items-center gap-1 text-center ${active ? 'text-primary' : complete ? 'text-foreground' : 'text-muted-foreground/70'}`}>
+          <span className={`grid size-8 place-items-center rounded-full ${active ? 'bg-primary text-primary-foreground' : complete ? 'bg-primary/10 text-primary' : 'bg-secondary text-muted-foreground'}`}>
+            {complete ? <Check aria-hidden="true" className="size-4" /> : <Icon aria-hidden="true" className="size-4" />}
+          </span>
+          <span className="w-full truncate text-[10px] font-medium">{item.title}</span>
+        </li>;
+      })}
+    </ol>
   </div>;
 }
 
@@ -112,18 +159,24 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
   return <div className="space-y-6">
     <fieldset>
       <legend className="text-sm font-semibold">Towns</legend>
-      <div className="mb-3 mt-1 flex items-end justify-between gap-3">
-        <p className="text-xs text-muted-foreground">Choose up to three. Clear them to keep every town in play.</p>
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{selectedTowns.length} of 3</span>
+      <div className="mb-3 mt-1 flex items-start justify-between gap-3">
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground">Choose up to three. Clear them to keep every town in play.</p>
+          <p className="text-[11px] leading-4 text-muted-foreground">Line codes show rail lines in or near each town; exact access varies by estate. JRL* is planned.</p>
+        </div>
+        <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold tabular-nums text-primary">{selectedTowns.length}/3</span>
       </div>
       {optionsState === 'loading' && townChoices.length === 0 ? <p className="rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">Loading towns from the latest resale data…</p>
-        : townChoices.length ? <div className="grid max-h-56 grid-cols-2 gap-2 overflow-y-auto rounded-xl border bg-muted/20 p-2 sm:grid-cols-3">
+        : townChoices.length ? <div className="grid max-h-64 grid-cols-1 gap-2 overflow-y-auto rounded-xl border bg-muted/20 p-2 sm:grid-cols-2">
           {townChoices.map((town) => {
             const selected = selectedTowns.includes(town);
             const atLimit = !selected && selectedTowns.length >= 3;
-            return <motion.button key={town} type="button" whileTap={reduceMotion ? undefined : { scale: 0.97 }} aria-pressed={selected} disabled={atLimit} onClick={() => toggleTown(town)} className={`flex min-h-10 items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-xs transition-colors ${selected ? 'border-primary/40 bg-primary/10 text-foreground' : 'border-transparent bg-background/75 text-muted-foreground hover:border-border hover:text-foreground'} disabled:cursor-not-allowed disabled:opacity-45`}>
-              <span className={`grid size-4 shrink-0 place-items-center rounded-full border ${selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input'}`}>{selected && <Check className="size-2.5" />}</span>
-              <span className="truncate">{town}</span>
+            return <motion.button key={town} type="button" whileTap={reduceMotion ? undefined : { scale: 0.98 }} aria-pressed={selected} disabled={atLimit} onClick={() => toggleTown(town)} className={`flex min-h-12 items-center gap-2.5 rounded-xl border px-3 py-2 text-left text-xs transition-colors ${selected ? 'border-primary/40 bg-primary/10 text-foreground shadow-sm' : 'border-border/70 bg-background/75 text-muted-foreground hover:border-primary/35 hover:text-foreground'} disabled:cursor-not-allowed disabled:opacity-45`}>
+              <span className={`grid size-4 shrink-0 place-items-center rounded-full border ${selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input'}`}>{selected && <Check aria-hidden="true" className="size-2.5" />}</span>
+              <span className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                <span className="truncate font-medium">{town}</span>
+                <TransitBadges town={town} />
+              </span>
             </motion.button>;
           })}
         </div> : <div className="rounded-xl border border-dashed px-4 py-4">
@@ -146,10 +199,13 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
 }
 
 function HouseholdStep({ brief, setBrief }) {
-  return <div className="space-y-3">
-    <CountControl label="Adults" value={brief.adults} min={1} onChange={(value) => setBrief({ ...brief, adults: value })} />
-    <CountControl label="Children" value={brief.children} min={0} onChange={(value) => setBrief({ ...brief, children: value })} />
-    <CountControl label="Older adults" value={brief.olderAdults} min={0} onChange={(value) => setBrief({ ...brief, olderAdults: value })} />
+  return <div>
+    <p className="mb-4 text-xs leading-5 text-muted-foreground">Use these broad age bands to describe your household. We save the counts, not anyone’s date of birth.</p>
+    <div className="grid gap-3 sm:grid-cols-3">
+      <CountControl label="Adults" ageRange="18–59 years" Icon={UsersRound} value={brief.adults} min={1} onChange={(value) => setBrief({ ...brief, adults: value })} />
+      <CountControl label="Children" ageRange="0–17 years" Icon={Baby} value={brief.children} min={0} onChange={(value) => setBrief({ ...brief, children: value })} />
+      <CountControl label="Older adults" ageRange="60+ years" Icon={PersonStanding} value={brief.olderAdults} min={0} onChange={(value) => setBrief({ ...brief, olderAdults: value })} />
+    </div>
   </div>;
 }
 
@@ -215,15 +271,15 @@ function SearchSummary({ brief, step }) {
   const distanceLabel = (distance) => distance == null ? 'No limit' : `Within ${distance >= 1000 ? `${distance / 1000} km` : `${distance} m`}`;
   return <Card className="overflow-hidden rounded-2xl">
     <div className="flex items-center justify-between gap-3 px-5 pt-5">
-      <div><p className="text-sm font-semibold">Your search so far</p><p className="mt-1 text-xs text-muted-foreground">Changes as you go</p></div>
+      <div><p className="text-sm font-semibold">Your search so far</p><p className="mt-1 text-xs text-muted-foreground">Your choices, at a glance</p></div>
       <span className="grid size-9 place-items-center rounded-xl bg-primary/10 text-primary"><Compass className="size-4" /></span>
     </div>
     <CardContent className="space-y-4 p-5 pt-4">
-      <RouteSketch step={step} towns={towns} />
+      <SearchProgress step={step} />
       <dl className="divide-y divide-border/70 rounded-xl border bg-background/55 px-3">
-        <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Household</dt><dd className="text-right text-xs font-medium">{brief.adults} adults · {brief.children} children · {brief.olderAdults} older adults</dd></div>
+        <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Household</dt><dd className="max-w-[72%] text-right text-xs font-medium">{brief.adults} adults (18–59) · {brief.children} children (0–17) · {brief.olderAdults} older adults (60+)</dd></div>
         <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Budget</dt><dd className="text-right text-xs font-semibold">Up to {money(brief.budget)}</dd></div>
-        <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Towns</dt><dd className="max-w-[65%] text-right text-xs font-medium">{towns.length ? towns.join(', ') : 'No preference'}</dd></div>
+        <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Areas</dt><dd className="flex max-w-[72%] flex-col items-end gap-1.5 text-right text-xs font-medium">{towns.length ? towns.map((town) => <span key={town} className="inline-flex max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-1"><span className="max-w-40 truncate">{town}</span><TransitBadges town={town} /></span>) : 'No preference'}</dd></div>
         <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Flat type</dt><dd className="text-right text-xs font-medium">{brief.preferredFlatType || 'No preference'}</dd></div>
         <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Nearby</dt><dd className="max-w-[68%] text-right text-xs font-medium">Schools {distanceLabel(brief.schoolDistance)}<br />Childcare {distanceLabel(brief.childcareDistance)}<br />Care {distanceLabel(brief.careDistance)}</dd></div>
       </dl>
@@ -231,7 +287,7 @@ function SearchSummary({ brief, step }) {
         <p className="mb-2 text-[11px] font-semibold text-muted-foreground">Priority weights</p>
         <div className="flex flex-wrap gap-1.5">{priorityNames.map(([key, label]) => <span key={key} className="rounded-full border bg-background/65 px-2.5 py-1 text-[10px] text-muted-foreground">{label} {priorities[key] || 1}/3</span>)}</div>
       </div>
-      <p className="text-[11px] leading-4 text-muted-foreground">You can change any of these in Explore. The line above is decorative and does not show travel routes.</p>
+      <p className="text-[11px] leading-4 text-muted-foreground">You can change any of these in Explore. Town line tags are a guide; the nearest station depends on the block.</p>
     </CardContent>
   </Card>;
 }
