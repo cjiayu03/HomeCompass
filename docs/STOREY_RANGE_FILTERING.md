@@ -2,7 +2,7 @@
 
 ## Status
 
-**Backend implemented in stage 2; frontend alignment remains for stage 3.** Backend search uses the inclusive overlap rule below for POST search and GET homes. Frontend local requirements still use containment and can reject partial overlaps. The frontend explanations and preference scoring have not yet been aligned. `docs/DECISION_TOOLS.md` describes the prior entire-range behavior and will be updated in stage 3. Do not release this incomplete feature until frontend alignment is finished.
+**Stage 3 changes are in place; full verification remains open.** Backend search and frontend local requirements use the inclusive overlap rule below. Frontend explanations and the storey preference contribution use the same rule. The focused frontend checks, browser check, production build and backend regression checks passed, but the full frontend suite has failures also present on the stage 2 baseline, and an isolated PostgreSQL execution check was not available. Resolve or assess these verification limits before marking the feature fully verified.
 
 ## Meaning of a match
 
@@ -40,7 +40,7 @@ Explanations must distinguish overlap, disjoint and unknown. Show the reported b
 
 ## Acceptance examples
 
-These are backend outcomes now and frontend target outcomes once stage 3 is complete. Each row with a hard constraint assumes the listed bounds are enabled and all other requirements pass. `—` means the bound is unset. “Eligible” means not excluded on storey grounds; the actual floor is never established by the band.
+These are the intended backend and frontend outcomes; see the verification status above. Each row with a hard constraint assumes the listed bounds are enabled and all other requirements pass. `—` means the bound is unset. “Eligible” means not excluded on storey grounds; the actual floor is never established by the band.
 
 | Case | Reported band | Requested min | Requested max | Expected storey outcome |
 | --- | --- | ---: | ---: | --- |

@@ -6,7 +6,7 @@
 - Feature branch: `storey-range-filtering`
 - Starting point: `79c45a2` on `feature/map-controls`
 - Delivery: three sequential commits/pushes on this branch, reviewed and merged together after stage 3.
-- Stage 1 defined the contract and stage 2 implemented the backend. Stage 3 remains: frontend alignment and final documentation.
+- Stages 1–3 have code and documentation changes in place. Full verification remains open: the frontend suite has failures also present on the stage 2 baseline, and isolated PostgreSQL execution was unavailable.
 - No remote push is authorized. The prompts below authorize a local commit for their own stage only; push to GitHub only on a later explicit user instruction.
 
 ## Why these stages
@@ -15,15 +15,15 @@
 2. Implement the API rule and prove it independently.
 3. Align local filtering, explanations, storey preferences, and final documentation.
 
-Stages 2 and 3 temporarily have different server and local behavior. They are review checkpoints on an unfinished feature branch, not separate releases. Merge/deploy once all three stages are complete.
+The stages are review checkpoints on one feature branch. Review the final changes and outstanding verification limits before merging or deploying.
 
 ## Evidence from the current code
 
 - `backend/README.md` describes intersecting ranges.
-- `docs/DECISION_TOOLS.md` says the whole reported range is used.
+- `docs/DECISION_TOOLS.md` describes inclusive overlap and unknown evidence.
 - `backend/app/main.py`, `_query_homes`, now applies inclusive overlap for active storey bounds, with strict source-band validation.
-- `frontend/lib/planning.js`, `applyLocalRequirements`, uses containment too.
-- The same frontend file also parses storeys in `evaluateHome` and `previewRank`. These must be reviewed so the explanation and preference contribution do not contradict the filter.
+- `frontend/lib/planning.js`, `applyLocalRequirements`, uses inclusive overlap for active storey bounds.
+- The same frontend file uses the shared storey parser for `evaluateHome` and `previewRank`.
 - `backend/app/schemas.py`, `SearchRequest`, already validates storey bounds from 1 through 100 and rejects minimum greater than maximum. Reuse that validation.
 - Backend tests such as `test_search_scoring.py` use fake database connections returning predefined rows. Such a stub alone cannot prove PostgreSQL actually filters intervals correctly.
 
