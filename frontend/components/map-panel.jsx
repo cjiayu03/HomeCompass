@@ -1,7 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
-import { LocateFixed, Layers3, UsersRound } from 'lucide-react';
+import { ChevronDown, LocateFixed, Layers3, UsersRound } from 'lucide-react';
 import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,13 @@ class MapBoundary extends Component {
 
 const MapView = dynamic(() => import('@/components/map-view'), { ssr: false, loading: () => <div className="grid h-full min-h-0 place-items-center bg-background"><LoadingScene label="Unfolding the map…" /></div> });
 const Map3DView = dynamic(() => import('@/components/map-3d-view'), { ssr: false, loading: () => <div className="grid h-full min-h-0 place-items-center bg-background"><LoadingScene label="Building your 3D neighbourhood…" /></div> });
+
+const DEFAULT_VISIBLE_RESOURCE_TYPES = ['silver_zone', 'dengue_cluster'];
+const RESOURCE_GROUPS = [
+  { label: 'Care & support', types: ['chas_clinic', 'dementia_gtp'] },
+  { label: 'Children & learning', types: ['childcare', 'student_care', 'kindergarten', 'school_zone'] },
+  { label: 'Neighbourhood safety', types: ['silver_zone', 'dengue_cluster'] },
+];
 
 function viewportLabel(bounds) {
   if (!bounds) return 'initial bounded sample; pan or zoom to load this viewport';
@@ -46,9 +53,13 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
   const anchors=useMemo(()=>reach?(brief.placeConstraints||[]).map(c=>{const place=places.find(p=>p.id===c.placeId);return place&&place.latitude!=null&&place.longitude!=null?{id:place.id,label:place.label,lat:Number(place.latitude),lng:Number(place.longitude),radius:Number(c.maxDistanceM)}:null;}).filter(a=>a&&Number.isFinite(a.lat)&&Number.isFinite(a.lng)&&Number.isFinite(a.radius)&&a.radius>=0):[],[reach,brief.placeConstraints,places]);
   const inReach=anchors.length?homes.filter(home=>anchors.every(a=>{const d=distanceM(a,home);return d!=null&&d<=a.radius;})).length:0;
   const nearest=useMemo(()=>!selectedHome?[]:resources.filter(f=>f.geometry?.type==='Point').map(f=>({name:getResourceDisplayName(f.properties),distance:distanceM(selectedHome,{lng:f.geometry.coordinates[0],lat:f.geometry.coordinates[1]})})).filter(f=>f.distance!=null).sort((a,b)=>a.distance-b.distance).slice(0,3),[selectedHome,resources]);
-  const [visibleResourceTypes, setVisibleResourceTypes] = useState(['silver_zone', 'dengue_cluster']);
+  const [visibleResourceTypes, setVisibleResourceTypes] = useState(DEFAULT_VISIBLE_RESOURCE_TYPES);
   const mappedCount = homes.filter((home) => home.lat !== null && home.lat !== undefined && home.lng !== null && home.lng !== undefined && Number.isFinite(Number(home.lat)) && Number.isFinite(Number(home.lng))).length;
   const counts = resources.reduce((result, feature) => { const type = feature.properties?.resourceType; result[type] = (result[type] || 0) + 1; return result; }, {});
+  const activeResourceLayers = MAP_RESOURCE_LAYERS.filter(({ type }) => visibleResourceTypes.includes(type));
+  const activeLayerSummary = activeResourceLayers.length === 0
+    ? 'No nearby categories shown'
+    : `${activeResourceLayers.slice(0, 2).map(({ pluralLabel }) => pluralLabel).join(' · ')}${activeResourceLayers.length > 2 ? ` +${activeResourceLayers.length - 2} more` : ''}`;
   function toggleLayer(type, checked) { setVisibleResourceTypes((current) => checked ? [...new Set([...current, type])] : current.filter((item) => item !== type)); }
   return (
     <section className={cn('relative isolate z-0 h-[clamp(360px,50dvh,440px)] min-h-0 overflow-hidden rounded-xl border bg-secondary shadow-soft lg:h-full', className)} aria-label={mapMode === '3d' ? 'Movable 3D neighborhood map' : 'Movable OpenStreetMap view'}>
@@ -58,13 +69,14 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
       <MapAddressSearch selectedAddress={addressTarget} onSelect={selectAddress} onClear={() => { setAddressTarget(null); setAddressFocused(false); }} optionsOpen={mapOptionsOpen} onSearchStart={() => setMapOptionsOpen(false)} />
       <div className="pointer-events-none absolute right-0 top-0 z-10 flex items-start gap-2 p-3">
         <details className="pointer-events-auto" open={mapOptionsOpen} onToggle={event => setMapOptionsOpen(event.currentTarget.open)}>
-          <summary aria-label={`Map options${reach ? ', family reach on' : ''}${resourceState?.status === 'error' ? ', nearby data unavailable' : ''}${mapNotice ? ', map warning' : ''}`} className="glass-card flex h-11 cursor-pointer list-none items-center gap-2 rounded-xl px-3 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+          <summary aria-label={`Map options, ${visibleResourceTypes.length} nearby categories shown${reach ? ', family reach on' : ''}${resourceState?.status === 'error' ? ', nearby data unavailable' : ''}${mapNotice ? ', map warning' : ''}`} className="glass-card flex h-11 cursor-pointer list-none items-center gap-2 rounded-xl px-3 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
             <Layers3 aria-hidden="true" className="size-4 text-primary" />
             <span className="hidden sm:inline">Map options</span>
+            <span aria-hidden="true" className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-primary">{visibleResourceTypes.length}</span>
             {reach && <span aria-hidden="true" className="size-2 rounded-full bg-primary" />}
             {(resourceState?.status === 'error' || mapNotice) && <span aria-hidden="true" className="size-2 rounded-full bg-destructive" />}
           </summary>
-          <div className="absolute right-3 top-14 z-[80] max-h-[17rem] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto overscroll-contain rounded-xl border bg-popover p-3 text-popover-foreground shadow-float sm:max-h-[20rem]">
+          <div className="absolute right-3 top-14 z-[80] max-h-[24rem] w-[min(20rem,calc(100vw-1.5rem))] overflow-y-auto overscroll-contain rounded-xl border bg-popover p-3 text-popover-foreground shadow-float sm:max-h-[28rem]">
             <section aria-labelledby="map-view-heading">
               <h3 id="map-view-heading" className="mb-2 text-sm font-semibold">Map view</h3>
               <div className="grid grid-cols-2 gap-1 rounded-lg border bg-secondary/50 p-1" role="group" aria-label="Map view mode">
@@ -90,22 +102,41 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
             </section>
 
             <section className="mt-3 border-t pt-3" aria-labelledby="map-layers-heading">
-              <div className="mb-1 flex items-center justify-between gap-3">
-                <h3 id="map-layers-heading" className="text-sm font-semibold">Nearby layers</h3>
-                <div className="flex items-center gap-1">
-                  <Button variant="ghost" className="h-11 rounded-md px-2 text-xs" onClick={() => setVisibleResourceTypes(MAP_RESOURCE_LAYERS.filter(({ type }) => counts[type]).map(({ type }) => type))}>All</Button>
-                  <Button variant="ghost" className="h-11 rounded-md px-2 text-xs" onClick={() => setVisibleResourceTypes([])}>Clear</Button>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 id="map-layers-heading" className="text-sm font-semibold">Show nearby</h3>
+                  <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{activeLayerSummary}</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button variant="ghost" className="h-9 rounded-md px-2 text-xs" onClick={() => setVisibleResourceTypes(DEFAULT_VISIBLE_RESOURCE_TYPES)}>Reset</Button>
+                  <Button variant="ghost" className="h-9 rounded-md px-2 text-xs" onClick={() => setVisibleResourceTypes([])}>Clear</Button>
                 </div>
               </div>
-              <div className="space-y-0.5">
-                {MAP_RESOURCE_LAYERS.map(({ type, pluralLabel, color, Icon }) => (
-                  <label key={type} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg px-2 hover:bg-secondary/70">
-                    <input type="checkbox" className="size-4 accent-primary" checked={visibleResourceTypes.includes(type)} disabled={!counts[type]} onChange={(event) => toggleLayer(type, event.target.checked)} />
-                    <Icon aria-hidden="true" className="size-4 shrink-0" style={{ color }} />
-                    <span className="min-w-0 flex-1 text-xs">{pluralLabel}</span>
-                    <span className="text-xs text-muted-foreground">{(counts[type] || 0).toLocaleString()}</span>
-                  </label>
-                ))}
+              <p className="mt-1 text-xs leading-4 text-muted-foreground">Counts are for the loaded map area. Choose a few types; nearby points combine into count markers.</p>
+              <div className="mt-2 space-y-1.5">
+                {RESOURCE_GROUPS.map((group) => {
+                  const groupLayers = group.types.map((type) => MAP_RESOURCE_LAYERS.find((layer) => layer.type === type)).filter(Boolean);
+                  const selectedCount = groupLayers.filter(({ type }) => visibleResourceTypes.includes(type)).length;
+                  return (
+                    <details key={group.label} className="group rounded-lg border bg-background/70">
+                      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-2.5 text-sm hover:bg-secondary/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+                        <span className="min-w-0 flex-1 font-medium">{group.label}</span>
+                        {selectedCount > 0 && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">{selectedCount} selected</span>}
+                        <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+                      </summary>
+                      <div className="space-y-0.5 border-t px-2 py-1">
+                        {groupLayers.map(({ type, pluralLabel, color, Icon }) => (
+                          <label key={type} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-1.5 hover:bg-secondary/70">
+                            <input type="checkbox" className="size-4 accent-primary" checked={visibleResourceTypes.includes(type)} onChange={(event) => toggleLayer(type, event.target.checked)} />
+                            <Icon aria-hidden="true" className="size-4 shrink-0" style={{ color }} />
+                            <span className="min-w-0 flex-1 text-xs">{pluralLabel}</span>
+                            <span className="text-xs tabular-nums text-muted-foreground">{(counts[type] || 0).toLocaleString()}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </details>
+                  );
+                })}
               </div>
             </section>
 

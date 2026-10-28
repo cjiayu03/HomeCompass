@@ -79,8 +79,9 @@ function resourceMarkerIcon(type) {
   const icon = L.divIcon({
     className: '',
     html: `<span class="map-resource-icon" role="img" aria-label="${presentation.label}">${createResourceMarkerSvg(type)}</span>`,
-    iconSize: [40, 40],
-    iconAnchor: [20, 20],
+    iconSize: [32, 44],
+    iconAnchor: [16, 43],
+    popupAnchor: [0, -39],
   });
   resourceMarkerIcons.set(type, icon);
   return icon;
@@ -153,11 +154,13 @@ function ResourceFeatures({ features, visibleTypes }) {
     }
     if (!properties.cluster && displayName !== typeLabel) {
       const type = document.createElement('p');
-      type.textContent = typeLabel;
+      type.textContent = displayName === 'Clinic name unavailable'
+        ? `${typeLabel} · name missing from saved data`
+        : typeLabel;
       popup.appendChild(type);
     }
     const date = document.createElement('small');
-    date.textContent = `Source snapshot: ${properties.retrievedAt ? new Date(properties.retrievedAt).toLocaleDateString() : 'date unavailable'}`;
+    date.textContent = `Data checked: ${properties.retrievedAt ? new Date(properties.retrievedAt).toLocaleDateString() : 'date unavailable'}`;
     popup.appendChild(date);
     try {
       const source = new URL(properties.sourceUrl);
@@ -170,6 +173,18 @@ function ResourceFeatures({ features, visibleTypes }) {
         popup.appendChild(link);
       }
     } catch { /* A source link is optional; never put upstream strings into HTML. */ }
+    if (properties.cluster) {
+      layer.on('click', () => {
+        if (map.getZoom() < 17) {
+          map.flyTo(layer.getLatLng(), Math.min(map.getZoom() + 2, 17), {
+            duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 0.45,
+          });
+        } else {
+          layer.bindPopup(popup).openPopup();
+        }
+      });
+      return;
+    }
     layer.bindPopup(popup);
   };
   const pointToLayer = (feature, latlng) => {
@@ -178,9 +193,9 @@ function ResourceFeatures({ features, visibleTypes }) {
       const color = getResourcePresentation(feature.properties.resourceType).color;
       const icon = L.divIcon({
         className: '',
-        html: `<span style="display:grid;place-items:center;width:36px;height:36px;border:2px solid #fff;border-radius:999px;background:${color};color:#fff;font-size:12px;font-weight:800;box-shadow:0 4px 12px rgba(15,23,42,.32)" role="img" aria-label="${count} ${getResourceTypePluralLabel(feature.properties.resourceType)}">${count}</span>`,
-        iconSize: [36, 36],
-        iconAnchor: [18, 18],
+        html: `<span style="display:grid;place-items:center;width:40px;height:40px;border:3px solid #fff;border-radius:999px;background:${color};color:#fff;font-size:13px;font-weight:800;box-shadow:0 4px 12px rgba(15,23,42,.38)" role="img" aria-label="${count} ${getResourceTypePluralLabel(feature.properties.resourceType)}">${count}</span>`,
+        iconSize: [40, 40],
+        iconAnchor: [20, 20],
       });
       return L.marker(latlng, { icon });
     }

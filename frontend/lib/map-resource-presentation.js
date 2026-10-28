@@ -23,7 +23,7 @@ const RESOURCE_PRESENTATIONS = {
     nameFields: ['NAME', 'FACILITY_NAME', 'LOCATION', 'DESCRIPTION'],
   },
   chas_clinic: {
-    label: 'CHAS clinic', pluralLabel: 'CHAS clinics', color: '#7887a2', Icon: Stethoscope,
+    label: 'CHAS clinic', pluralLabel: 'CHAS clinics', unavailableNameLabel: 'Clinic name unavailable', color: '#667a99', Icon: Stethoscope,
     nameFields: ['HCI_NAME', 'NAME', 'CLINIC_NAME'],
   },
   childcare: {
@@ -107,15 +107,15 @@ export function getResourceDisplayName(properties = {}) {
     if (attributeName) return attributeName;
   }
 
-  return usableName(properties.name) || presentation.label;
+  return usableName(properties.name) || presentation.unavailableNameLabel || presentation.label;
 }
 
 export function createResourceMarkerSvg(type) {
   const { color, Icon } = getResourcePresentation(type);
-  const iconMarkup = renderToStaticMarkup(createElement(Icon, { width: 16, height: 16, color }));
+  const iconMarkup = renderToStaticMarkup(createElement(Icon, { width: 20, height: 20, color: '#fff', strokeWidth: 2.5 }));
   const iconContents = iconMarkup.slice(iconMarkup.indexOf('>') + 1, iconMarkup.lastIndexOf('</svg>'));
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="#fff" stroke="${color}" stroke-width="2.5"/><svg x="12" y="12" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${iconContents}</svg></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="88" viewBox="0 0 32 44"><path d="M16 2C8.25 2 2 8.25 2 16c0 9.8 12.2 23.7 14 25.25C17.8 39.7 30 25.8 30 16 30 8.25 23.75 2 16 2Z" fill="${color}" stroke="#fff" stroke-width="3" stroke-linejoin="round"/><svg x="6" y="6" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${iconContents}</svg></svg>`;
 }
 
 export function resourceMarkerDataUrl(type) {

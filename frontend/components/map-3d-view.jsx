@@ -223,7 +223,13 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
         },
       });
 
-      map.addSource('hc-resources', { type: 'geojson', data: resourceData });
+      map.addSource('hc-resources', {
+        type: 'geojson',
+        data: resourceData,
+        cluster: true,
+        clusterRadius: 56,
+        clusterMaxZoom: 16,
+      });
       const isVisible = resourceVisibilityFilter(visibleResourceTypesRef.current);
       map.addLayer({
         id: 'hc-resource-polygons', type: 'fill', source: 'hc-resources',
@@ -237,20 +243,47 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
       });
       map.addLayer({
         id: 'hc-resource-points', type: 'circle', source: 'hc-resources',
-        filter: ['all', ['==', ['geometry-type'], 'Point'], isVisible],
+        filter: ['all', ['==', ['geometry-type'], 'Point'], ['!', ['has', 'point_count']], isVisible],
         paint: { 'circle-radius': 5, 'circle-color': RESOURCE_COLOR_MATCH, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 },
+      });
+      map.addLayer({
+        id: 'hc-resource-clusters', type: 'circle', source: 'hc-resources',
+        filter: ['has', 'point_count'],
+        paint: {
+          'circle-color': '#315d42',
+          'circle-radius': ['step', ['get', 'point_count'], 18, 10, 22, 50, 26],
+          'circle-stroke-color': '#fff',
+          'circle-stroke-width': 3,
+        },
+      });
+      map.addLayer({
+        id: 'hc-resource-cluster-count', type: 'symbol', source: 'hc-resources',
+        filter: ['has', 'point_count'],
+        layout: {
+          'text-field': ['get', 'point_count_abbreviated'],
+          'text-font': ['Noto Sans Regular'],
+          'text-size': 13,
+          'text-allow-overlap': true,
+          'text-ignore-placement': true,
+        },
+        paint: { 'text-color': '#fff' },
       });
 
       const openResourcePopup = (event) => {
         const properties = event.features?.[0]?.properties || {};
         const sourceDate = properties.retrievedAt
-          ? `Source snapshot: ${new Date(properties.retrievedAt).toLocaleDateString()}`
-          : 'Source date unavailable';
+          ? `Data checked: ${new Date(properties.retrievedAt).toLocaleDateString()}`
+          : 'Data date unavailable';
         const displayName = getResourceDisplayName(properties);
         const typeLabel = getResourceTypeLabel(properties.resourceType);
+        const detail = displayName === typeLabel
+          ? ''
+          : displayName === 'Clinic name unavailable'
+            ? `${typeLabel} · name missing from saved data`
+            : typeLabel;
         new Popup({ closeButton: true, maxWidth: '260px' })
           .setLngLat(event.lngLat)
-          .setDOMContent(popupContent(displayName, displayName === typeLabel ? '' : typeLabel, sourceDate, properties.sourceUrl))
+          .setDOMContent(popupContent(displayName, detail, sourceDate, properties.sourceUrl))
           .addTo(map);
       };
 
@@ -271,7 +304,18 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
       for (const layerId of ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points']) {
         map.on('click', layerId, openResourcePopup);
       }
-      for (const layerId of ['hc-home-points', 'hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points']) {
+      map.on('click', 'hc-resource-clusters', async (event) => {
+        const feature = event.features?.[0];
+        const source = map.getSource('hc-resources');
+        if (!feature || !source?.getClusterExpansionZoom) return;
+        try {
+          const zoom = await source.getClusterExpansionZoom(Number(feature.properties?.cluster_id));
+          if (mapRef.current === map) map.easeTo({ center: feature.geometry.coordinates, zoom });
+        } catch {
+          if (mapRef.current === map) map.easeTo({ center: feature.geometry.coordinates, zoom: Math.min(map.getZoom() + 2, 17) });
+        }
+      });
+      for (const layerId of ['hc-home-points', 'hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points', 'hc-resource-clusters']) {
         map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
         map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
       }
@@ -297,10 +341,11 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
           id: 'hc-resource-icons',
           type: 'symbol',
           source: 'hc-resources',
-          filter: ['all', ['==', ['geometry-type'], 'Point'], resourceVisibilityFilter(visibleResourceTypesRef.current)],
+          filter: ['all', ['==', ['geometry-type'], 'Point'], ['!', ['has', 'point_count']], resourceVisibilityFilter(visibleResourceTypesRef.current)],
           layout: {
             'icon-image': resourceIconMatchExpression(),
-            'icon-size': 1.2,
+            'icon-size': 1,
+            'icon-anchor': 'bottom',
             'icon-allow-overlap': false,
             'icon-ignore-placement': false,
           },
@@ -339,7 +384,7 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
         ? ['==', ['geometry-type'], 'Polygon']
         : layerId === 'hc-resource-lines'
           ? ['in', ['geometry-type'], ['literal', ['LineString', 'MultiLineString', 'Polygon', 'MultiPolygon']]]
-        : ['==', ['geometry-type'], 'Point'];
+        : ['all', ['==', ['geometry-type'], 'Point'], ['!', ['has', 'point_count']]];
       map.setFilter(layerId, ['all', geometryFilter, isVisible]);
     }
   }, [mapReady, resourceData, visibleResourceTypes]);
