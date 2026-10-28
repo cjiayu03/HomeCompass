@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { ShareDecision } from '@/components/plan-snapshot';
 import { EvidenceContext } from '@/components/evidence-context';
 import { usePlanning } from '@/components/planning-provider';
 import { money } from '@/lib/utils';
@@ -42,6 +43,9 @@ function DecisionCard({ home, decision, photos, updateDecision, addPhoto, remove
   const [customEntry, setCustomEntry] = useState('');
   const [photoPending, setPhotoPending] = useState(false);
   const [photoError, setPhotoError] = useState('');
+  const [checklistMessage, setChecklistMessage] = useState('');
+  const labels = decision?.checklistLabels || {};
+  const labelFor = key => labels[key] || checklistLabel(key);
   const savedChecklist = decision?.checklist && typeof decision.checklist === 'object' && !Array.isArray(decision.checklist)
     ? decision.checklist
     : {};
@@ -64,17 +68,22 @@ function DecisionCard({ home, decision, photos, updateDecision, addPhoto, remove
   function addChecklistEntry(event) {
     event.preventDefault();
     const text = customEntry.trim();
-    if (!text || Object.keys(checklist).length >= 50) return;
-    const key = `custom-${text.toLocaleLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}`;
-    if (key === 'custom-' || Object.hasOwn(checklist, key)) return;
-    updateDecision(home.id, { checklist: { ...checklist, [key]: false } });
+    setChecklistMessage('');
+    if (!text) return;
+    if (Object.keys(checklist).length >= 50) { setChecklistMessage('This checklist has 50 entries. Remove an entry before adding another.'); return; }
+    if ([...DEFAULT_CHECKLIST.map(item=>item.label), ...customKeys.map(labelFor)].some(label=>label.normalize('NFKC').toLocaleLowerCase()===text.normalize('NFKC').toLocaleLowerCase())) { setChecklistMessage('This check is already on your checklist.'); return; }
+    const key = `custom-${crypto.randomUUID()}`;
+    updateDecision(home.id, { checklist: { ...checklist, [key]: false }, checklistLabels: { ...labels, [key]: text } });
     setCustomEntry('');
   }
 
   function removeChecklistEntry(key) {
+    if (!window.confirm(`Remove “${labelFor(key)}” from this checklist?`)) return;
     const nextChecklist = { ...checklist };
+    const nextLabels = { ...labels };
+    delete nextLabels[key];
     delete nextChecklist[key];
-    updateDecision(home.id, { checklist: nextChecklist });
+    updateDecision(home.id, { checklist: nextChecklist, checklistLabels: nextLabels });
   }
 
   async function handlePhotoChange(event) {
@@ -93,6 +102,7 @@ function DecisionCard({ home, decision, photos, updateDecision, addPhoto, remove
   }
 
   async function handlePhotoRemove(photoId) {
+    if (!window.confirm('Remove this browser-only photo? Download it first if you want a copy.')) return;
     setPhotoPending(true);
     setPhotoError('');
     try {
@@ -129,6 +139,7 @@ function DecisionCard({ home, decision, photos, updateDecision, addPhoto, remove
           </label>
         </div>
         <EvidenceContext home={home} />
+        <ShareDecision home={home} decision={decision || {}} />
       </CardHeader>
 
       <CardContent className="space-y-5">
@@ -167,7 +178,7 @@ function DecisionCard({ home, decision, photos, updateDecision, addPhoto, remove
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h4 id={`ratings-title-${home.id}`} className="flex items-center gap-2 text-sm font-semibold"><Star className="size-4 text-primary" />Household ratings</h4>
-              <p className="mt-1 text-xs text-muted-foreground">Give each person a name and a score from 1 to 5.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Ratings are recorded by this plan’s owner, on behalf of the named person. They are not independently verified votes. Give each person a name and a score from 1 to 5.</p>
             </div>
             <Button type="button" size="sm" variant="outline" disabled={ratings.length>=20} onClick={() => updateDecision(home.id, { ratings: [...ratings, { name: '', score: 3 }] })}>
               <Plus className="size-3.5" />Add rating
@@ -199,7 +210,7 @@ function DecisionCard({ home, decision, photos, updateDecision, addPhoto, remove
                 variant="ghost"
                 className="size-9"
                 aria-label={`Remove rating ${index + 1} at ${home.address}`}
-                onClick={() => updateDecision(home.id, { ratings: ratings.filter((_, ratingIndex) => ratingIndex !== index) })}
+                onClick={() => { if(window.confirm('Remove this household rating?')) updateDecision(home.id, { ratings: ratings.filter((_, ratingIndex) => ratingIndex !== index) }); }}
               ><Trash2 className="size-4" /></Button>
             </div>)}
           </div> : <p className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">Add a rating when someone has a view to share.</p>}
@@ -208,12 +219,12 @@ function DecisionCard({ home, decision, photos, updateDecision, addPhoto, remove
         <section aria-labelledby={`visit-title-${home.id}`} className="space-y-3 border-t border-border/70 pt-4">
           <div className="flex items-center gap-2"><ClipboardCheck className="size-4 text-primary" /><h4 id={`visit-title-${home.id}`} className="text-sm font-semibold">Viewing plan</h4></div>
           <label className="grid max-w-sm gap-1.5 text-xs font-semibold text-muted-foreground">
-            Visit date and time
+            Visit date and time · Singapore (SGT, UTC+08:00)
             <Input
               type="datetime-local"
               aria-label={`Visit date and time for ${home.address}`}
-              value={decision?.visitDate || ''}
-              onChange={(event) => updateDecision(home.id, { visitDate: event.currentTarget.value })}
+              value={(decision?.visitDate || '').replace(/\+08:00$/, '')}
+              onChange={(event) => updateDecision(home.id, { visitDate: event.currentTarget.value ? `${event.currentTarget.value}+08:00` : '' })}
             />
           </label>
           <div className="grid gap-2 sm:grid-cols-2">
@@ -234,28 +245,30 @@ function DecisionCard({ home, decision, photos, updateDecision, addPhoto, remove
                   checked={Boolean(checklist[key])}
                   onChange={(event) => updateChecklist(key, event.currentTarget.checked)}
                 />
-                <span>{checklistLabel(key)}</span>
+                <span>{labelFor(key)}</span>
               </label>
-              <Button type="button" size="icon" variant="ghost" className="-mr-2 -mt-2 size-8 shrink-0" aria-label={`Remove ${checklistLabel(key)} from viewing checklist`} onClick={() => removeChecklistEntry(key)}>
+              <Button type="button" size="icon" variant="ghost" className="-mr-2 -mt-2 size-8 shrink-0" aria-label={`Remove ${labelFor(key)} from viewing checklist`} onClick={() => removeChecklistEntry(key)}>
                 <Trash2 className="size-3.5" />
               </Button>
             </div>)}
           </div>
           <form className="flex flex-col gap-2 sm:flex-row" onSubmit={addChecklistEntry}>
             <Input aria-label={`New checklist item for ${home.address}`} placeholder="Add a custom viewing check" maxLength={100} value={customEntry} onChange={(event) => setCustomEntry(event.currentTarget.value)} />
-            <Button type="submit" variant="outline" disabled={!customEntry.trim()||Object.keys(checklist).length>=50}><Plus className="size-4" />Add check</Button>
+            <Button type="submit" variant="outline" disabled={!customEntry.trim()}><Plus className="size-4" />Add check</Button>
           </form>
+          {checklistMessage && <p role="alert" className="text-xs text-destructive">{checklistMessage}</p>}
+          <p className="text-xs text-muted-foreground">{Object.keys(checklist).length} / 50 checks</p>
         </section>
 
         <section aria-labelledby={`photos-title-${home.id}`} className="space-y-3 border-t border-border/70 pt-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h4 id={`photos-title-${home.id}`} className="flex items-center gap-2 text-sm font-semibold"><Camera className="size-4 text-primary" />Your viewing photos</h4>
-              <p className="mt-1 text-xs text-muted-foreground">Photos stay in this browser and are attached to this home.</p>
+              <h4 id={`photos-title-${home.id}`} className="flex items-center gap-2 text-sm font-semibold"><Camera className="size-4 text-primary" />Your viewing photos <span className="text-xs font-normal text-muted-foreground">{photos.length}/6</span></h4>
+              <p className="mt-1 text-xs text-muted-foreground">JPG, PNG or WebP, up to 5 MB each. Six per home, forty per browser account. Images are resized for storage. Photos stay in this browser only; download a copy before clearing browser data.</p>
             </div>
             <label htmlFor={photoInputId} className={`inline-flex h-9 cursor-pointer items-center gap-2 rounded-lg border px-3 text-xs font-semibold text-foreground transition-colors hover:bg-muted focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background ${photoPending ? 'pointer-events-none opacity-50' : ''}`}>
               {photoPending ? 'Saving…' : 'Add photo'}
-              <input id={photoInputId} type="file" accept="image/*" className="sr-only" disabled={photoPending} onChange={handlePhotoChange} />
+              <input id={photoInputId} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" disabled={photoPending} onChange={handlePhotoChange} />
             </label>
           </div>
           {photoError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{photoError}</p>}
@@ -263,7 +276,7 @@ function DecisionCard({ home, decision, photos, updateDecision, addPhoto, remove
             {photos.map((photo) => <figure key={photo.id} className="overflow-hidden rounded-lg border bg-background">
               <img src={photo.dataUrl} alt={photo.name || `Viewing photo for ${home.address}`} className="aspect-[4/3] w-full object-cover" />
               <figcaption className="flex items-center justify-between gap-2 p-2 text-xs">
-                <span className="min-w-0 truncate text-muted-foreground" title={photo.name}>{photo.name || 'Viewing photo'}</span>
+                <span className="min-w-0 truncate text-muted-foreground" title={photo.name}>{photo.name || 'Viewing photo'}</span><a href={photo.dataUrl} download={`${(photo.name || 'viewing-photo').replace(/\.[^.]+$/, '')}.jpg`} className="underline" aria-label={`Download photo ${photo.name || ''}`}>Download</a>
                 <Button type="button" size="icon" variant="ghost" className="size-8 shrink-0" disabled={photoPending} aria-label={`Remove photo ${photo.name || ''} from ${home.address}`} onClick={() => handlePhotoRemove(photo.id)}><Trash2 className="size-3.5" /></Button>
               </figcaption>
             </figure>)}
@@ -279,6 +292,7 @@ export function DecisionBoard({ homes = [] }) {
   const message = typeof error === 'string' ? error : error?.message;
   const statusLabels = {
     loading: 'Loading plan',
+    cleared: 'Browser plan cleared',
     local: 'Saved in this browser',
     pending: 'Waiting to sync',
     saving: 'Syncing changes',
@@ -286,7 +300,9 @@ export function DecisionBoard({ homes = [] }) {
     offline: 'Account sync unavailable',
     conflict: 'Account version changed',
   };
-  const statusHint = status === 'conflict'
+  const statusHint = status === 'cleared'
+    ? 'Your account plan is preserved. Load it when you want to continue planning on this browser.'
+    : status === 'conflict'
     ? 'Your browser edits are still saved here. Loading the account version replaces those unsynced edits.'
     : status === 'offline'
       ? 'Your edits remain in this browser. Retry when the account service is available.'
@@ -314,6 +330,7 @@ export function DecisionBoard({ homes = [] }) {
       </div>
       <div className="flex flex-wrap gap-2">
         {(status === 'offline' || status === 'conflict') && <Button type="button" size="sm" variant="outline" onClick={() => retry()}><RefreshCw className="size-3.5" />Retry sync</Button>}
+        {status === 'cleared' && <Button type="button" size="sm" variant="outline" onClick={() => reloadRemote()}>Load account plan</Button>}
         {status === 'conflict' && <Button type="button" size="sm" variant="warning" onClick={() => {if(window.confirm('Replace unsynced browser edits with the account version?'))reloadRemote();}}>Load account version</Button>}
       </div>
     </div>

@@ -41,6 +41,20 @@ class AuthCredentials(BaseModel):
         return normalized
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return AuthCredentials.normalize_auth_email(value)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=40, max_length=256, pattern=r"^[A-Za-z0-9_-]+$")
+    password: str = Field(min_length=8, max_length=128)
+
+
 class PasswordChangeRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=8, max_length=128)
@@ -248,7 +262,7 @@ class SearchRequest(BaseModel):
     query: str = Field(default="", max_length=160)
     budget: int | None = Field(default=None, ge=0, le=10_000_000)
     town: str | None = Field(default=None, max_length=80)
-    towns: list[str] = Field(default_factory=list, max_length=3)
+    towns: list[str] = Field(default_factory=list, max_length=30)
     flat_type: str | None = Field(default=None, max_length=40)
     bounds: BoundsRequest | None = None
     limit: int = Field(default=50, ge=1, le=200)
@@ -437,24 +451,30 @@ class PlanningDecision(BaseModel):
     cons: str = Field(default="", max_length=2_000)
     ratings: list[PlanningRating] = Field(default_factory=list, max_length=20)
     checklist: dict[str, StrictBool] = Field(default_factory=dict, max_length=50)
-    visitDate: str | None = Field(default=None, max_length=19)
+    checklistLabels: dict[str, str] = Field(default_factory=dict, max_length=50)
+    visitDate: str | None = Field(default=None, max_length=25)
+
+    @field_validator("checklistLabels")
+    @classmethod
+    def validate_checklist_labels(cls, value):
+        if any(len(key) > 120 or not label.strip() or len(label) > 100 for key, label in value.items()):
+            raise ValueError("Checklist labels must contain between 1 and 100 characters.")
+        return value
 
     @field_validator("visitDate")
     @classmethod
     def validate_visit_date(cls, value: str | None) -> str | None:
         if value in (None, ""):
             return value
-        if not _DATETIME_LOCAL_PATTERN.fullmatch(value):
-            raise ValueError(
-                "visitDate must use the local datetime format YYYY-MM-DDTHH:MM."
-            )
+        local_value = value.removesuffix("+08:00")
+        if not _DATETIME_LOCAL_PATTERN.fullmatch(local_value):
+            raise ValueError("visitDate must be YYYY-MM-DDTHH:MM with Singapore +08:00 offset.")
         try:
-            parsed = datetime.fromisoformat(value)
+            datetime.fromisoformat(local_value)
         except ValueError:
-            raise ValueError("visitDate must use the local datetime format YYYY-MM-DDTHH:MM.") from None
-        if parsed.tzinfo is not None:
-            raise ValueError("visitDate must be a local datetime without a timezone.")
-        return value
+            raise ValueError("visitDate must be a valid Singapore date and time.") from None
+        # Older plans used timezone-free local dates; they were Singapore visits.
+        return local_value + "+08:00"
 
 
 class PlanningWorkspaceRequest(BaseModel):
@@ -529,7 +549,7 @@ class FamilyProfileUpdate(BaseModel):
     budget_cents: int | None = Field(default=None, ge=0, le=10_000_000_00)
     locale: Literal["en-SG", "zh-SG", "ms-SG", "ta-SG"] = "en-SG"
     priority_weights: dict[str, float] = Field(default_factory=lambda: dict(DEFAULT_WEIGHTS))
-    preferred_towns: list[str] = Field(default_factory=list, max_length=3)
+    preferred_towns: list[str] = Field(default_factory=list, max_length=30)
     preferred_flat_type: str | None = Field(default=None, max_length=40)
     max_school_distance_m: int | None = Field(default=None, ge=0, le=100_000)
     max_childcare_distance_m: int | None = Field(default=None, ge=0, le=100_000)

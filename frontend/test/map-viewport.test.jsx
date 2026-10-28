@@ -48,6 +48,7 @@ function WorkspaceProbe() {
       resourceState: workspace.resourceState,
       homeState: workspace.homeState,
       brief: workspace.brief,
+      profileLoadState: workspace.profileLoadState,
     })}</output>
     <button onClick={() => workspace.refreshViewport({ west: 103.7, south: 1.2, east: 103.9, north: 1.4 })}>Refresh first viewport</button>
     <button onClick={() => workspace.refreshViewport({ west: 103.8, south: 1.25, east: 104, north: 1.45 })}>Refresh second viewport</button>
@@ -222,18 +223,19 @@ describe('workspace viewport and pagination requests', () => {
       brief: { ...defaultBrief, priorityWeights, placeConstraints },
     }));
     useAuthMock.mockReturnValue({
-      client: { auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: 'test-token' } } }) } },
-      user: { id: 'user-1' },
+      user: { id: 'user-1' }, loading: false,
     });
     const searchBodies = [];
     const fetchMock = vi.fn((path, options = {}) => {
+      if (path === '/api/v1/sync/guest') return Promise.resolve(json({ accepted: {}, skipped: {}, conflicts: [] }));
+      if (path === '/api/v1/history' || path === '/api/v1/saved-searches') return Promise.resolve(json({ items: [] }));
       if (path === '/api/v1/shortlists') return Promise.resolve(json({ items: [] }));
       if (path === '/api/v1/profile' && options.method === 'PUT') return Promise.resolve(json({}));
       if (path === '/api/v1/profile') return Promise.resolve(json({
         adults: defaultBrief.adults,
         children: defaultBrief.children,
         olderAdults: defaultBrief.olderAdults,
-        budgetCents: defaultBrief.budget * 100,
+        budgetCents: defaultBrief.budget == null ? null : defaultBrief.budget * 100,
         priorityWeights,
       }));
       if (path === '/api/v1/places') return Promise.resolve(json({ items: [] }));
@@ -248,19 +250,28 @@ describe('workspace viewport and pagination requests', () => {
     });
     const { state } = renderWorkspace(fetchMock);
 
-    await waitFor(() => expect(state().brief.placeConstraints).toEqual(placeConstraints));
+    await waitFor(() => expect(state().profileLoadState).toBe('ready'));
+    await waitFor(() => expect(state().homeState.status).toBe('success'));
+    expect(state().brief.placeConstraints).toEqual(placeConstraints);
+    const initialSearchCount = searchBodies.length;
     fireEvent.click(screen.getByRole('button', { name: 'Search homes' }));
-    await waitFor(() => expect(state().pagination?.hasMore).toBe(true));
+    await waitFor(() => expect(searchBodies).toHaveLength(initialSearchCount + 1));
+    await waitFor(() => expect(state().homeState.status).toBe('success'));
+    expect(state().pagination?.hasMore).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Load more homes' }));
     await waitFor(() => expect(state().homes.map((item) => item.id)).toEqual(['home-1', 'home-2']));
 
-    expect(searchBodies).toHaveLength(2);
-    expect(searchBodies[1]).toMatchObject({
+    expect(searchBodies).toHaveLength(initialSearchCount + 2);
+    const [firstPage, nextPage] = searchBodies.slice(-2);
+    expect(nextPage).toMatchObject({
       cursor: 'search-page-2',
       limit: 50,
       priority_weights: priorityWeights,
       place_constraints: [{ place_id: 'saved-place-1', max_distance_m: 850 }],
     });
-    expect(searchBodies[1].query).toBe(searchBodies[0].query);
+    expect(nextPage.query).toBe(firstPage.query);
+    const pageRequest = fetchMock.mock.calls.filter(([path]) => path === '/api/v1/search').at(-1)[1];
+    expect(pageRequest.credentials).toBe('include');
+    expect(pageRequest.headers.Authorization).toBeUndefined();
   });
 });

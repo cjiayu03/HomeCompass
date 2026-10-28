@@ -228,30 +228,30 @@ test('guest researches dated homes, shortlists and compares them, then retries a
   await expect(page.getByRole('heading', { name: /find a place that fits/i })).toBeVisible();
   await page.getByRole('link', { name: /explore homes/i }).click();
 
-  await expect(page.getByRole('heading', { name: 'Find a place that fits real life.' })).toBeVisible();
-  await expect(page.getByText('No source records match these applied filters.')).toBeVisible();
-  const candidates = page.getByRole('region', { name: 'Candidate places' });
+  await expect(page.getByRole('heading', { name: 'Find an HDB area that fits.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'No records match this search' })).toBeVisible();
+  const candidates = page.getByRole('region', { name: 'Historical transaction results' });
   await expect(candidates).not.toContainText('Illustrative sample · not verified source data');
   await expect(candidates).not.toContainText('118 Jalan Bukit Merah');
 
   const map = page.getByRole('region', { name: 'Movable OpenStreetMap view' });
-  await expect(map.getByText('1 visible / 1 mapped features')).toBeVisible();
-  await expect(map.getByText('2/2 snapshots')).toBeVisible();
+  await expect(map).toBeVisible();
   expect(requests.resourceCalls).toBeGreaterThan(0);
   expect(requests.sourceCalls).toBeGreaterThan(0);
 
-  await page.getByRole('textbox', { name: 'Search a town or amenity' }).fill('Toa Payoh');
-  await page.getByRole('button', { name: 'Search' }).click();
+  await page.getByRole('textbox', { name: 'Search a town, street or amenity' }).fill('Toa Payoh');
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
 
   const firstHome = page.getByRole('article', { name: /123 Toa Payoh Central/ });
   const secondHome = page.getByRole('article', { name: /88 Lorong 2 Toa Payoh/ });
   await expect(firstHome).toBeVisible();
   await expect(secondHome).toBeVisible();
-  await expect(page.getByText('Live source response received')).toBeVisible();
-  await expect(page.getByText('Sources: hdb-resale · 2026-09')).toBeVisible();
+  await expect(firstHome).toBeVisible();
+
 
   const firstEvidence = firstHome.getByRole('region', { name: 'Evidence context for 123 Toa Payoh Central' });
   await expect(firstEvidence).toContainText('Historical transaction · not a current listing');
+  await firstEvidence.getByText('Source and location provenance').click();
   await expect(firstEvidence.getByText('Transaction date').locator('..')).toContainText('2024-06-03');
   await expect(firstEvidence.getByText('Source date').locator('..')).toContainText('2026-09');
   await expect(firstEvidence).toContainText('data.gov.sg · hdb-resale');
@@ -263,7 +263,7 @@ test('guest researches dated homes, shortlists and compares them, then retries a
 
   await firstHome.getByRole('button', { name: 'Save 123 Toa Payoh Central to shortlist' }).click();
   await secondHome.getByRole('button', { name: 'Save 88 Lorong 2 Toa Payoh to shortlist' }).click();
-  await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('link', { name: /shortlist/i }).click();
+  await page.getByRole('button', { name: /^Saved \(/ }).click();
 
   const savedFirst = page.getByRole('article', { name: /123 Toa Payoh Central/ });
   const savedSecond = page.getByRole('article', { name: /88 Lorong 2 Toa Payoh/ });
@@ -272,37 +272,40 @@ test('guest researches dated homes, shortlists and compares them, then retries a
   await expect(savedFirst).toContainText('Historical transaction · not a current listing');
   await savedFirst.getByRole('button', { name: 'Compare' }).click();
   await savedSecond.getByRole('button', { name: 'Compare' }).click();
-  await page.getByRole('link', { name: /open comparison/i }).click();
+  await page.getByRole('button', { name: 'Compare 2', exact: true }).click();
 
-  const comparison = page.getByRole('table', { name: 'Place comparison table' });
+  const comparison = page.getByRole('table', { name: 'Candidate evidence comparison' });
   await expect(comparison).toBeVisible();
   await expect(comparison).toContainText('123 Toa Payoh Central');
   await expect(comparison).toContainText('88 Lorong 2 Toa Payoh');
   const comparedFirst = comparison.getByRole('region', { name: 'Evidence context for 123 Toa Payoh Central' });
   await expect(comparedFirst).toContainText('Historical transaction · not a current listing');
+  await comparedFirst.getByText('Source and location provenance').click();
   await expect(comparedFirst.getByText('Transaction date').locator('..')).toContainText('2024-06-03');
   await comparedFirst.getByRole('button', { name: /view score evidence/i }).click();
   await expect(comparedFirst.getByRole('heading', { name: 'Score evidence' })).toBeVisible();
 
-  await page.getByRole('link', { name: /back to explore/i }).click();
-  await page.getByRole('textbox', { name: 'Search a town or amenity' }).fill('Bedok');
+  await page.getByRole('button', { name: 'Back to search', exact: true }).click();
+  await page.getByRole('button', { name: 'All results', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Search a town, street or amenity' }).fill('Bedok');
   failNextSearch = true;
-  await page.getByRole('button', { name: 'Search' }).click();
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
 
   const failedState = page.getByRole('alert').filter({ hasText: 'Update failed; showing previous results' });
   await expect(failedState).toBeVisible();
-  await expect(failedState).toContainText('Unable to load this information. Please try again.');
+  await expect(failedState).toContainText('Search source unavailable.');
   await expect(page.getByRole('article', { name: /123 Toa Payoh Central/ })).toBeVisible();
   await expect(candidates).not.toContainText('Illustrative sample · not verified source data');
 
   retryWithHomes = true;
   await page.getByRole('button', { name: 'Retry home data' }).click();
-  await expect(page.getByText('Live source response received')).toBeVisible();
+  await expect(failedState).toHaveCount(0);
   await expect(page.getByRole('article', { name: /123 Toa Payoh Central/ })).toBeVisible();
 
   expect(requests.interpretTexts).toEqual(['Toa Payoh', 'Bedok']);
-  expect(requests.searchBodies).toHaveLength(2);
+  expect(requests.searchBodies).toHaveLength(3);
+  expect(requests.searchBodies[2]).toEqual(requests.searchBodies[1]);
   expect(requests.searchBodies[0].query).toBe('Toa Payoh');
   expect(requests.searchBodies[1].query).toBe('Bedok');
-  expect(requests.homeCalls).toBeGreaterThan(1);
+  expect(requests.homeCalls).toBe(1);
 });

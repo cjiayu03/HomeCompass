@@ -9,12 +9,12 @@ MIGRATIONS_DIRECTORY = Path(__file__).resolve().parents[2] / "database" / "migra
 
 # The backend image does not copy database/migrations. Keep its schema probe
 # version explicit and checked against the discovered files in the source tree.
-SCHEMA_VERIFIED_MIGRATION_VERSION = 10
-LATEST_MIGRATION_VERSION = 10
+SCHEMA_VERIFIED_MIGRATION_VERSION = 12
+LATEST_MIGRATION_VERSION = 12
 
 # The backend image does not contain database/migrations and the migrations do
 # not maintain a version table. These signatures inspect the effects of the
-# checked-in migrations 001 through 010 without depending on deployment paths.
+# checked-in migrations 001 through 012 without depending on deployment paths.
 _MIGRATION_INSPECTION_QUERY = """
 WITH required_tables(table_name) AS (
     VALUES
@@ -35,7 +35,8 @@ WITH required_tables(table_name) AS (
         ('saved_search'),
         ('local_auth_identity'),
         ('local_auth_session'),
-        ('planning_workspace')
+        ('planning_workspace'),
+        ('password_recovery')
 ), required_columns(table_name, column_name) AS (
     VALUES
         ('candidate_home', 'geometry'),
@@ -91,7 +92,11 @@ WITH required_tables(table_name) AS (
         ('planning_workspace', 'scenarios'),
         ('planning_workspace', 'decisions'),
         ('planning_workspace', 'revision'),
-        ('planning_workspace', 'updated_at')
+        ('planning_workspace', 'updated_at'),
+        ('password_recovery', 'created_at'),
+        ('password_recovery', 'user_id'),
+        ('password_recovery', 'token_hash'),
+        ('password_recovery', 'expires_at')
 ), required_family_profile_columns(
     column_name, data_type, is_nullable
 ) AS (
@@ -139,7 +144,7 @@ WITH required_tables(table_name) AS (
             'family_profile_preferred_towns_count_check',
             'family_profile',
             'preferred_towns',
-            'CHECK ((cardinality(preferred_towns) <= 3))'
+            'CHECK ((cardinality(preferred_towns) <= 30))'
         ),
         (
             'family_profile_preferred_flat_type_check',
@@ -172,6 +177,10 @@ WITH required_tables(table_name) AS (
         ('geocoded_at', 'timestamp with time zone', 'YES', NULL)
 ), required_auth_constraints(constraint_name, table_name, constraint_type, column_name) AS (
     VALUES
+        ('password_recovery_user_id_fkey', 'password_recovery', 'f', 'user_id'),
+        ('password_recovery_pkey', 'password_recovery', 'p', 'user_id'),
+        ('password_recovery_token_hash_key', 'password_recovery', 'u', 'token_hash'),
+        ('password_recovery_token_hash_check', 'password_recovery', 'c', 'token_hash'),
         ('local_auth_identity_user_id_fkey', 'local_auth_identity', 'f', 'user_id'),
         ('local_auth_identity_email_unique', 'local_auth_identity', 'u', 'email'),
         ('local_auth_identity_email_normalized_check', 'local_auth_identity', 'c', 'email'),

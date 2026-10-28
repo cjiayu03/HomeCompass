@@ -120,9 +120,9 @@ describe('WorkspaceProvider data state', () => {
     vi.stubEnv('NEXT_PUBLIC_HOME_DATA_MODE', 'live');
     let retryReturnsNewHome = false;
     vi.stubGlobal('fetch', vi.fn((path) => path === '/api/v1/search'
-      ? Promise.resolve(json({ detail: { code: 'SEARCH_DOWN' } }, 503))
-      : path === '/api/v1/homes' && retryReturnsNewHome
+      ? retryReturnsNewHome
         ? Promise.resolve(json({ items: [newerHome], ...liveMetadata }))
+        : Promise.resolve(json({ detail: { code: 'SEARCH_DOWN' } }, 503))
       : defaultFetch(path)));
     const state = renderProvider();
     await waitFor(() => expect(state().homeState.status).toBe('success'));

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import AccountPage from '../app/(workspace)/account/page.jsx';
+import { PlanningProvider } from '../components/planning-provider.jsx';
 import ComparePage from '../app/(workspace)/compare/page.jsx';
 import { HomeCard } from '../components/home-card.jsx';
 import { PlaceDistanceList, PlacePicker } from '../components/place-picker.jsx';
@@ -9,7 +10,7 @@ import { WorkspaceProvider, useWorkspace } from '../components/workspace-provide
 import { defaultBrief, homes as fixtureHomes } from '../lib/data.js';
 
 const { useAuthMock, routerReplaceMock } = vi.hoisted(() => ({
-  useAuthMock: vi.fn(() => ({ client: null, user: null })),
+  useAuthMock: vi.fn(() => ({ user: null })),
   routerReplaceMock: vi.fn(),
 }));
 
@@ -70,6 +71,7 @@ function json(payload, status = 200) {
 }
 
 function defaultFetch(path, options = {}) {
+  if (path === '/api/v1/auth/session') return Promise.resolve(json({ user: useAuthMock().user ?? null }));
   if (path === '/api/v1/homes') return Promise.resolve(json({ items: [] }));
   if (path.startsWith('/api/v1/resources')) return Promise.resolve(json({ features: [] }));
   if (path === '/api/v1/sources') return Promise.resolve(json({ items: [] }));
@@ -83,20 +85,14 @@ function defaultFetch(path, options = {}) {
 
 function authenticatedUser() {
   useAuthMock.mockReturnValue({
-    client: { auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: 'test-session-token' } } }) } },
     user: { id: 'user-1', email: 'person@example.com' },
   });
 }
 
 function authenticatedAccount() {
-  const client = {
-    auth: {
-      getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: 'test-session-token' } } }),
-      signOut: vi.fn().mockResolvedValue({ error: null }),
-    },
-  };
-  useAuthMock.mockReturnValue({ client, user: { id: 'user-1', email: 'person@example.com' }, configured: true });
-  return client;
+  const refreshSession = vi.fn().mockResolvedValue(null);
+  useAuthMock.mockReturnValue({ refreshSession, user: { id: 'user-1', email: 'person@example.com' } });
+  return { refreshSession };
 }
 
 function renderWorkspace(children) {
@@ -127,19 +123,18 @@ afterEach(() => {
   window.localStorage.clear();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   useAuthMock.mockReset();
-  useAuthMock.mockReturnValue({ client: null, user: null });
+  useAuthMock.mockReturnValue({ user: null });
 });
 
 describe('family place management and filtering', () => {
   it('clears typed address and candidate selection when the Account page owner changes', async () => {
-    const clientFor = (token) => ({
-      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } } }) },
-    });
-    useAuthMock.mockReturnValue({ client: clientFor('token-a'), user: { id: 'user-a', email: 'a@example.com' } });
+    useAuthMock.mockReturnValue({ user: { id: 'user-a', email: 'a@example.com' } });
     vi.stubEnv('NEXT_PUBLIC_HOME_DATA_MODE', 'live');
     const fetchMock = vi.fn((path, options = {}) => {
-      if (path === '/api/v1/sync/guest') return Promise.resolve(json({ accepted: {}, skipped: {}, conflicts: [] }));
+      if (path === '/api/v1/auth/session') return Promise.resolve(json({ user: useAuthMock().user ?? null }));
+  if (path === '/api/v1/sync/guest') return Promise.resolve(json({ accepted: {}, skipped: {}, conflicts: [] }));
       if (path.startsWith('/api/v1/places/suggest?')) return Promise.resolve(json({ items: [firstCandidate] }));
       return defaultFetch(path, options);
     });
@@ -154,7 +149,7 @@ describe('family place management and filtering', () => {
     expect(candidate).toBeChecked();
     expect(screen.getByRole('button', { name: 'Save selected place' })).toBeEnabled();
 
-    useAuthMock.mockReturnValue({ client: clientFor('token-b'), user: { id: 'user-b', email: 'b@example.com' } });
+    useAuthMock.mockReturnValue({ user: { id: 'user-b', email: 'b@example.com' } });
     view.rerender(<WorkspaceProvider><AccountPage /></WorkspaceProvider>);
 
     expect(screen.getByRole('textbox', { name: 'Place label' })).toHaveValue('');
@@ -181,10 +176,12 @@ describe('family place management and filtering', () => {
     expect(screen.getByLabelText(`Select ${secondCandidate.address}`)).toBeInTheDocument();
     expect(screen.getAllByText('OneMap address candidate')).toHaveLength(2);
     const [, placesRequest] = fetchMock.mock.calls.find(([path]) => path === '/api/v1/places');
-    expect(placesRequest.headers.Authorization).toBe('Bearer test-session-token');
+    expect(placesRequest.credentials).toBe('include');
+    expect(placesRequest.headers?.Authorization).toBeUndefined();
     const [suggestionPath, suggestionRequest] = fetchMock.mock.calls.find(([path]) => path.startsWith('/api/v1/places/suggest?'));
     expect(suggestionPath).toBe('/api/v1/places/suggest?q=Harbour+Road');
-    expect(suggestionRequest.headers.Authorization).toBe('Bearer test-session-token');
+    expect(suggestionRequest.credentials).toBe('include');
+    expect(suggestionRequest.headers?.Authorization).toBeUndefined();
     expect(screen.getByRole('button', { name: 'Save selected place' })).toBeDisabled();
   });
 
@@ -213,7 +210,8 @@ describe('family place management and filtering', () => {
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([path, options]) => path === '/api/v1/places' && options.method === 'POST')).toBe(true));
     const [, createRequest] = fetchMock.mock.calls.find(([path, options]) => path === '/api/v1/places' && options.method === 'POST');
-    expect(createRequest.headers.Authorization).toBe('Bearer test-session-token');
+    expect(createRequest.credentials).toBe('include');
+    expect(createRequest.headers?.Authorization).toBeUndefined();
     expect(JSON.parse(createRequest.body)).toEqual({
       label: 'School pickup',
       kind: 'school',
@@ -239,20 +237,18 @@ describe('family place management and filtering', () => {
     vi.stubGlobal('fetch', fetchMock);
     renderWorkspace(<PlaceManager />);
 
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(await screen.findByRole('button', { name: 'Remove Office' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(`/api/v1/places/${placeId}`, expect.objectContaining({
       method: 'DELETE',
-      headers: { Authorization: 'Bearer test-session-token' },
+      credentials: 'include',
     })));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove Office' })).not.toBeInTheDocument());
   });
 
   it('does not add an A place when its create response arrives after switching to B', async () => {
     vi.stubEnv('NEXT_PUBLIC_HOME_DATA_MODE', 'live');
-    const clientFor = (token) => ({
-      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } } }) },
-    });
     setAccountWorkspace('user-1', {
       brief: { ...defaultBrief, adults: 5, placeConstraints: [{ placeId, maxDistanceM: 2500 }] },
       shortlistIds: [], compareIds: [],
@@ -263,26 +259,26 @@ describe('family place management and filtering', () => {
     });
     let finishCreate;
     const fetchMock = vi.fn(async (path, options = {}) => {
-      const token = options.headers?.Authorization;
+      const owner = useAuthMock().user?.id;
       if (path === '/api/v1/sync/guest') return json({ accepted: {}, skipped: {}, conflicts: [] });
       if (path === '/api/v1/shortlists') return json({ items: [] });
       if (path === '/api/v1/profile' && options.method === 'PUT') return json({});
-      if (path === '/api/v1/profile') return json({ adults: token === 'Bearer token-a' ? 5 : 7, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights });
+      if (path === '/api/v1/profile') return json({ adults: owner === 'user-1' ? 5 : 7, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights });
       if (path === '/api/v1/places' && options.method === 'POST') return new Promise((resolve) => { finishCreate = resolve; });
-      if (path === '/api/v1/places') return json({ items: token === 'Bearer token-a' ? [savedPlace] : [secondSavedPlace] });
+      if (path === '/api/v1/places') return json({ items: owner === 'user-1' ? [savedPlace] : [secondSavedPlace] });
       if (path === '/api/v1/homes') return json({ items: [] });
       if (path.startsWith('/api/v1/resources')) return json({ features: [] });
       if (path === '/api/v1/sources') return json({ items: [] });
       throw new Error(`Unexpected request: ${options.method || 'GET'} ${path}`);
     });
     vi.stubGlobal('fetch', fetchMock);
-    useAuthMock.mockReturnValue({ client: clientFor('token-a'), user: { id: 'user-1', email: 'a@example.com' } });
+    useAuthMock.mockReturnValue({ user: { id: 'user-1', email: 'a@example.com' } });
     const view = renderWorkspace(<PlaceLifecycleProbe />);
     await waitFor(() => expect(JSON.parse(screen.getByTestId('place-lifecycle-state').textContent).places.map((place) => place.id)).toEqual([placeId]));
     fireEvent.click(screen.getByRole('button', { name: 'Create A place' }));
     await waitFor(() => expect(finishCreate).toBeTypeOf('function'));
 
-    useAuthMock.mockReturnValue({ client: clientFor('token-b'), user: { id: 'user-2', email: 'b@example.com' } });
+    useAuthMock.mockReturnValue({ user: { id: 'user-2', email: 'b@example.com' } });
     view.rerender(<WorkspaceProvider><PlaceLifecycleProbe /></WorkspaceProvider>);
     await waitFor(() => expect(JSON.parse(screen.getByTestId('place-lifecycle-state').textContent).places.map((place) => place.id)).toEqual([otherPlaceId]));
     await act(async () => finishCreate(json({ ...savedPlace, id: 'created-for-a', label: 'A new place' })));
@@ -295,9 +291,6 @@ describe('family place management and filtering', () => {
 
   it('does not apply an A place deletion response to B places or constraints', async () => {
     vi.stubEnv('NEXT_PUBLIC_HOME_DATA_MODE', 'live');
-    const clientFor = (token) => ({
-      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } } }) },
-    });
     setAccountWorkspace('user-1', {
       brief: { ...defaultBrief, adults: 5, placeConstraints: [{ placeId, maxDistanceM: 2500 }] },
       shortlistIds: [], compareIds: [],
@@ -308,26 +301,26 @@ describe('family place management and filtering', () => {
     });
     let finishDelete;
     const fetchMock = vi.fn(async (path, options = {}) => {
-      const token = options.headers?.Authorization;
+      const owner = useAuthMock().user?.id;
       if (path === '/api/v1/sync/guest') return json({ accepted: {}, skipped: {}, conflicts: [] });
       if (path === '/api/v1/shortlists') return json({ items: [] });
       if (path === '/api/v1/profile' && options.method === 'PUT') return json({});
-      if (path === '/api/v1/profile') return json({ adults: token === 'Bearer token-a' ? 5 : 7, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights });
+      if (path === '/api/v1/profile') return json({ adults: owner === 'user-1' ? 5 : 7, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights });
       if (path === `/api/v1/places/${placeId}` && options.method === 'DELETE') return new Promise((resolve) => { finishDelete = resolve; });
-      if (path === '/api/v1/places') return json({ items: token === 'Bearer token-a' ? [savedPlace] : [secondSavedPlace] });
+      if (path === '/api/v1/places') return json({ items: owner === 'user-1' ? [savedPlace] : [secondSavedPlace] });
       if (path === '/api/v1/homes') return json({ items: [] });
       if (path.startsWith('/api/v1/resources')) return json({ features: [] });
       if (path === '/api/v1/sources') return json({ items: [] });
       throw new Error(`Unexpected request: ${options.method || 'GET'} ${path}`);
     });
     vi.stubGlobal('fetch', fetchMock);
-    useAuthMock.mockReturnValue({ client: clientFor('token-a'), user: { id: 'user-1', email: 'a@example.com' } });
+    useAuthMock.mockReturnValue({ user: { id: 'user-1', email: 'a@example.com' } });
     const view = renderWorkspace(<PlaceLifecycleProbe />);
     await waitFor(() => expect(JSON.parse(screen.getByTestId('place-lifecycle-state').textContent).places.map((place) => place.id)).toEqual([placeId]));
     fireEvent.click(screen.getByRole('button', { name: 'Delete A place' }));
     await waitFor(() => expect(finishDelete).toBeTypeOf('function'));
 
-    useAuthMock.mockReturnValue({ client: clientFor('token-b'), user: { id: 'user-2', email: 'b@example.com' } });
+    useAuthMock.mockReturnValue({ user: { id: 'user-2', email: 'b@example.com' } });
     view.rerender(<WorkspaceProvider><PlaceLifecycleProbe /></WorkspaceProvider>);
     await waitFor(() => expect(JSON.parse(screen.getByTestId('place-lifecycle-state').textContent).places.map((place) => place.id)).toEqual([otherPlaceId]));
     await act(async () => finishDelete(json({ status: 'deleted' })));
@@ -339,47 +332,25 @@ describe('family place management and filtering', () => {
     });
   });
 
-  it('does not start an A place refresh after its session response arrives under account B', async () => {
+  it('ignores an account A places response that arrives after switching to B', async () => {
     vi.stubEnv('NEXT_PUBLIC_HOME_DATA_MODE', 'live');
-    let finishAPlaceSession;
-    const clientA = {
-      auth: {
-        getSession: vi.fn()
-          .mockResolvedValueOnce({ data: { session: { access_token: 'token-a' } } })
-          .mockImplementationOnce(() => new Promise((resolve) => { finishAPlaceSession = resolve; })),
-      },
-    };
-    const clientB = {
-      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: 'token-b' } } }) },
-    };
-    const placeReads = [];
-    const fetchMock = vi.fn(async (path, options = {}) => {
-      const token = options.headers?.Authorization;
-      if (path === '/api/v1/sync/guest') return json({ accepted: {}, skipped: {}, conflicts: [] });
-      if (path === '/api/v1/shortlists') return json({ items: [] });
-      if (path === '/api/v1/profile' && options.method === 'PUT') return json({});
-      if (path === '/api/v1/profile') return json({ adults: 2, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights });
+    let finishA;
+    vi.stubGlobal('fetch', vi.fn((path, options = {}) => {
       if (path === '/api/v1/places') {
-        placeReads.push(token);
-        return json({ items: token === 'Bearer token-b' ? [secondSavedPlace] : [] });
+        const ownerId = useAuthMock().user?.id;
+        if (ownerId === 'user-1') return new Promise((resolve) => { finishA = resolve; });
+        return Promise.resolve(json({ items: [secondSavedPlace] }));
       }
-      if (path === '/api/v1/homes') return json({ items: [] });
-      if (path.startsWith('/api/v1/resources')) return json({ features: [] });
-      if (path === '/api/v1/sources') return json({ items: [] });
-      throw new Error(`Unexpected request: ${options.method || 'GET'} ${path}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-    useAuthMock.mockReturnValue({ client: clientA, user: { id: 'user-1', email: 'a@example.com' } });
+      return defaultFetch(path, options);
+    }));
+    useAuthMock.mockReturnValue({ user: { id: 'user-1', email: 'a@example.com' } });
     const view = renderWorkspace(<PlacesStateProbe />);
-    await waitFor(() => expect(finishAPlaceSession).toBeTypeOf('function'));
-    expect(placeReads).toEqual([]);
-
-    useAuthMock.mockReturnValue({ client: clientB, user: { id: 'user-2', email: 'b@example.com' } });
+    await waitFor(() => expect(finishA).toBeTypeOf('function'));
+    useAuthMock.mockReturnValue({ user: { id: 'user-2', email: 'b@example.com' } });
     view.rerender(<WorkspaceProvider><PlacesStateProbe /></WorkspaceProvider>);
-    await waitFor(() => expect(JSON.parse(screen.getByTestId('places-state').textContent).places.map((place) => place.id)).toEqual([otherPlaceId]));
-    await act(async () => finishAPlaceSession({ data: { session: { access_token: 'token-a' } } }));
-
-    expect(placeReads).toEqual(['Bearer token-b']);
+    await waitFor(() => expect(JSON.parse(screen.getByTestId('places-state').textContent).places.map(place => place.id)).toEqual([otherPlaceId]));
+    await act(async () => finishA(json({ items: [savedPlace] })));
+    expect(JSON.parse(screen.getByTestId('places-state').textContent).places.map(place => place.id)).toEqual([otherPlaceId]);
   });
 
   it('shows provider errors without exposing a candidate or submitting coordinates', async () => {
@@ -402,15 +373,16 @@ describe('family place management and filtering', () => {
   });
 
   it('keeps place management safe while signed out', async () => {
-    useAuthMock.mockReturnValue({ client: null, user: null });
+    useAuthMock.mockReturnValue({ user: null });
     vi.stubEnv('NEXT_PUBLIC_HOME_DATA_MODE', 'live');
     const fetchMock = vi.fn(defaultFetch);
     vi.stubGlobal('fetch', fetchMock);
     renderWorkspace(<PlaceManager />);
 
-    expect(await screen.findByText('Sign in to manage account places.')).toBeInTheDocument();
+    expect(await screen.findByText('Add a browser place')).toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([path]) => path === '/api/v1/places' || path.startsWith('/api/v1/places/suggest?'))).toBe(false);
-    expect(screen.getByRole('button', { name: 'Find address candidates' })).toBeDisabled();
+    fireEvent.change(screen.getByRole('textbox',{name:'Search an address'}),{target:{value:'Harbour Road'}});
+    expect(screen.getByRole('button', { name: 'Find address candidates' })).toBeEnabled();
   });
 
   it('does not turn saved brief IDs into local places when the server list fails', async () => {
@@ -454,9 +426,11 @@ describe('family place management and filtering', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Search with saved places' }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([path, options]) => path === '/api/v1/search' && options.method === 'POST')).toBe(true));
-    const [, searchRequest] = fetchMock.mock.calls.find(([path, options]) => path === '/api/v1/search' && options.method === 'POST');
+    await waitFor(()=>expect(fetchMock.mock.calls.some(([path,options={}])=>path==='/api/v1/search' && options.method==='POST' && JSON.parse(options.body).place_constraints.some(c=>c.place_id===placeId&&c.max_distance_m===1800))).toBe(true));
+    const [, searchRequest] = fetchMock.mock.calls.find(([path, options]) => path === '/api/v1/search' && options.method === 'POST' && JSON.parse(options.body).place_constraints.some(c=>c.place_id===placeId&&c.max_distance_m===1800));
     expect(JSON.parse(searchRequest.body).place_constraints).toEqual([{ place_id: placeId, max_distance_m: 1800 }]);
-    expect(searchRequest.headers.Authorization).toBe('Bearer test-session-token');
+    expect(searchRequest.credentials).toBe('include');
+    expect(searchRequest.headers?.Authorization).toBeUndefined();
     await waitFor(() => expect(readAccountBrief().placeConstraints).toEqual([
       { placeId, maxDistanceM: 1800 },
     ]));
@@ -478,7 +452,8 @@ describe('family place management and filtering', () => {
   });
 
   it('shows straight-line place distances in reusable HomeCard without turning missing values into zero', () => {
-    render(<HomeCard
+    vi.stubEnv('NEXT_PUBLIC_HOME_DATA_MODE','fixture');
+    renderWorkspace(<HomeCard
       home={{
         ...fixtureHomes[0],
         placeDistances: [
@@ -519,16 +494,17 @@ describe('family place management and filtering', () => {
     vi.stubGlobal('fetch', vi.fn((path, options = {}) => path === '/api/v1/search' && options.method === 'POST'
       ? Promise.resolve(json({ items: compareHomes }))
       : defaultFetch(path, options)));
-    renderWorkspace(<><SearchButton /><ComparePage /></>);
+    renderWorkspace(<PlanningProvider><SearchButton /><ComparePage /></PlanningProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Search with saved places' }));
 
-    await waitFor(() => expect(screen.getAllByText(/Straight-line distance estimate/)).toHaveLength(2));
-    expect(screen.getByText('Office')).toBeInTheDocument();
-    expect(screen.getByText('425 m')).toBeInTheDocument();
-    expect(screen.getByText('School')).toBeInTheDocument();
-    expect(screen.getByText('Unavailable', { exact: true })).toBeInTheDocument();
-    expect(screen.queryByText('0 m', { exact: true })).not.toBeInTheDocument();
-    expect(screen.queryByText(/commute|transit/i)).not.toBeInTheDocument();
+    const table=await screen.findByRole('table',{name:'Candidate evidence comparison'});
+    await waitFor(() => expect(within(table).getAllByText(/Straight-line distance estimate/)).toHaveLength(2));
+    expect(within(table).getByText('Office')).toBeInTheDocument();
+    expect(within(table).getByText('425 m')).toBeInTheDocument();
+    expect(within(table).getByText('School')).toBeInTheDocument();
+    expect(within(table).getAllByText('Unavailable', { exact: true }).length).toBeGreaterThan(0);
+    expect(within(table).queryByText('0 m', { exact: true })).not.toBeInTheDocument();
+    expect(within(table).queryByText(/commute|transit/i)).not.toBeInTheDocument();
   });
 
   it('clears deleted place constraints from persisted brief state before later searches', async () => {
@@ -551,12 +527,13 @@ describe('family place management and filtering', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete account', exact: true }));
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete account' }));
 
-    await waitFor(() => expect(client.auth.signOut).toHaveBeenCalledWith({ scope: 'local' }));
-    await waitFor(() => expect(readAccountBrief().placeConstraints).toEqual([]));
+    await waitFor(() => expect(client.refreshSession).toHaveBeenCalled());
+    expect(window.localStorage.getItem(accountWorkspaceKey)).toBeNull();
+    expect((JSON.parse(screen.getByTestId('brief').textContent).placeConstraints || [])).toEqual([]);
     fireEvent.click(screen.getByRole('button', { name: 'Search with saved places' }));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([path, options]) => path === '/api/v1/search' && options.method === 'POST')).toBe(true));
-    const [, searchRequest] = fetchMock.mock.calls.find(([path, options]) => path === '/api/v1/search' && options.method === 'POST');
+    const [, searchRequest] = fetchMock.mock.calls.filter(([path, options]) => path === '/api/v1/search' && options.method === 'POST').at(-1);
     expect(JSON.parse(searchRequest.body).place_constraints).toEqual([]);
   });
 
@@ -576,7 +553,7 @@ describe('family place management and filtering', () => {
     fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete account' }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/account', expect.objectContaining({ method: 'DELETE' })));
-    expect(client.auth.signOut).not.toHaveBeenCalled();
+    expect(client.refreshSession).not.toHaveBeenCalled();
     expect(readAccountBrief().placeConstraints).toEqual(savedConstraints);
   });
 });

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { ArrowLeft, ArrowRight, Check, Compass, Minus, Plus, RotateCw, X } from 'lucide-react';
@@ -8,6 +8,7 @@ import { Alert } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { BudgetInput } from '@/components/budget-input';
 import { useWorkspace } from '@/components/workspace-provider';
 import { money } from '@/lib/utils';
 import { requestJson } from '@/lib/api-client';
@@ -15,7 +16,7 @@ import { requestJson } from '@/lib/api-client';
 const steps = [
   { title: 'Household', heading: 'Who will live here?', description: 'This helps set a sensible starting point for your search.' },
   { title: 'Budget', heading: 'What price feels workable?', description: 'Set a ceiling for the homes you want to compare.' },
-  { title: 'Areas', heading: 'Which areas should we start with?', description: 'Pick up to three towns and, if you like, a flat type.' },
+  { title: 'Areas', heading: 'Which areas should we start with?', description: 'Choose any towns and, if you like, a flat type.' },
   { title: 'Priorities', heading: 'What matters day to day?', description: 'Set the services and trade-offs you want search to consider.' },
 ];
 
@@ -43,9 +44,9 @@ function CountControl({ label, value, min, max = 10, onChange }) {
       <output aria-label={`${label} count`} className="min-w-8 text-right text-sm font-semibold tabular-nums">{value}</output>
     </div>
     <div role="group" aria-labelledby={inputId} className="flex items-center gap-2">
-      <Button type="button" variant="outline" size="icon" className="size-9 shrink-0" aria-label={`Decrease ${label}`} disabled={value <= min} onClick={() => onChange(Math.max(min, value - 1))}><Minus className="size-4" /></Button>
+      <Button type="button" variant="outline" size="icon" className="size-11 shrink-0" aria-label={`Decrease ${label}`} disabled={value <= min} onClick={() => onChange(Math.max(min, value - 1))}><Minus className="size-4" /></Button>
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-secondary"><motion.div className="h-full w-full origin-left rounded-full bg-primary" initial={false} animate={{ scaleX: Math.max(0.08, value / max) }} transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 240, damping: 28 }} /></div>
-      <Button type="button" variant="outline" size="icon" className="size-9 shrink-0" aria-label={`Increase ${label}`} disabled={value >= max} onClick={() => onChange(Math.min(max, value + 1))}><Plus className="size-4" /></Button>
+      <Button type="button" variant="outline" size="icon" className="size-11 shrink-0" aria-label={`Increase ${label}`} disabled={value >= max} onClick={() => onChange(Math.min(max, value + 1))}><Plus className="size-4" /></Button>
     </div>
   </div>;
 }
@@ -93,7 +94,7 @@ function RouteSketch({ step, towns }) {
       </motion.g>)}
       <path d="M365 54v18m-9-9h18" stroke="hsl(var(--primary))" strokeWidth="2" strokeLinecap="round" aria-hidden="true" />
     </svg>
-    <p className="px-1 pb-1 text-[11px] leading-4 text-muted-foreground">Illustrative route only — not a street or travel-time map.</p>
+    <p className="px-1 pb-1 text-xs leading-4 text-muted-foreground">Illustrative route only — not a street or travel-time map.</p>
   </div>;
 }
 
@@ -113,15 +114,15 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
     <fieldset>
       <legend className="text-sm font-semibold">Towns</legend>
       <div className="mb-3 mt-1 flex items-end justify-between gap-3">
-        <p className="text-xs text-muted-foreground">Choose up to three. Clear them to keep every town in play.</p>
-        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{selectedTowns.length} of 3</span>
+        <p className="text-xs text-muted-foreground">Choose any towns. Clear them to keep every town in play.</p>
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{selectedTowns.length} selected</span>
       </div>
       {optionsState === 'loading' && townChoices.length === 0 ? <p className="rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">Loading towns from the latest resale data…</p>
         : townChoices.length ? <div className="grid max-h-56 grid-cols-2 gap-2 overflow-y-auto rounded-xl border bg-muted/20 p-2 sm:grid-cols-3">
           {townChoices.map((town) => {
             const selected = selectedTowns.includes(town);
-            const atLimit = !selected && selectedTowns.length >= 3;
-            return <motion.button key={town} type="button" whileTap={reduceMotion ? undefined : { scale: 0.97 }} aria-pressed={selected} disabled={atLimit} onClick={() => toggleTown(town)} className={`flex min-h-10 items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-xs transition-colors ${selected ? 'border-primary/40 bg-primary/10 text-foreground' : 'border-transparent bg-background/75 text-muted-foreground hover:border-border hover:text-foreground'} disabled:cursor-not-allowed disabled:opacity-45`}>
+            const atLimit = !selected && selectedTowns.length >= 30;
+            return <motion.button key={town} type="button" whileTap={reduceMotion ? undefined : { scale: 0.97 }} aria-pressed={selected} disabled={atLimit} onClick={() => toggleTown(town)} className={`flex min-h-11 items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-xs transition-colors ${selected ? 'border-primary/40 bg-primary/10 text-foreground' : 'border-transparent bg-background/75 text-muted-foreground hover:border-border hover:text-foreground'} disabled:cursor-not-allowed disabled:opacity-45`}>
               <span className={`grid size-4 shrink-0 place-items-center rounded-full border ${selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input'}`}>{selected && <Check className="size-2.5" />}</span>
               <span className="truncate">{town}</span>
             </motion.button>;
@@ -138,8 +139,8 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
       <p className="mb-3 mt-1 text-xs text-muted-foreground">No preference keeps the search broad.</p>
       {optionsState !== 'ready' && typeChoices.length === 0 ? <div className="rounded-lg border border-dashed px-3 py-3"><p className="text-xs text-muted-foreground">{optionsState === 'loading' ? 'Loading flat types…' : 'Flat types are unavailable right now; you can set this in Explore.'}</p>{optionsState === 'error' && <Button type="button" variant="outline" size="sm" className="mt-3" onClick={retryOptions}><RotateCw className="size-3.5" />Retry flat types</Button>}</div>
         : <div className="flex flex-wrap gap-2">
-          <button type="button" aria-pressed={!brief.preferredFlatType} onClick={() => setBrief({ ...brief, preferredFlatType: null })} className={`min-h-10 rounded-lg border px-3 text-xs font-medium transition-colors ${!brief.preferredFlatType ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>No preference</button>
-          {typeChoices.map((flatType) => <button key={flatType} type="button" aria-pressed={brief.preferredFlatType === flatType} onClick={() => setBrief({ ...brief, preferredFlatType: flatType })} className={`min-h-10 rounded-lg border px-3 text-xs font-medium transition-colors ${brief.preferredFlatType === flatType ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>{flatType}</button>)}
+          <button type="button" aria-pressed={!brief.preferredFlatType} onClick={() => setBrief({ ...brief, preferredFlatType: null })} className={`min-h-11 rounded-lg border px-3 text-xs font-medium transition-colors ${!brief.preferredFlatType ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>No preference</button>
+          {typeChoices.map((flatType) => <button key={flatType} type="button" aria-pressed={brief.preferredFlatType === flatType} onClick={() => setBrief({ ...brief, preferredFlatType: flatType })} className={`min-h-11 rounded-lg border px-3 text-xs font-medium transition-colors ${brief.preferredFlatType === flatType ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>{flatType}</button>)}
         </div>}
     </fieldset>
   </div>;
@@ -154,24 +155,7 @@ function HouseholdStep({ brief, setBrief }) {
 }
 
 function BudgetStep({ brief, setBrief }) {
-  const min = 200000;
-  const max = 2500000;
-  const sliderValue = Math.max(min, Math.min(max, Number(brief.budget) || min));
-  const updateBudget = (value) => setBrief({ ...brief, budget: Math.max(0, Math.round(Number(value) || 0)) });
-  return <div className="space-y-6">
-    <div>
-      <div className="mb-3 flex items-baseline justify-between gap-3"><label htmlFor="onboarding-budget" className="text-sm font-semibold">Maximum budget</label><output htmlFor="onboarding-budget" className="font-display text-lg font-semibold tabular-nums">{money(brief.budget)}</output></div>
-      <input id="onboarding-budget-range" aria-label="Maximum budget slider" type="range" min={min} max={max} step="10000" value={sliderValue} onChange={(event) => updateBudget(event.target.value)} className="h-2 w-full cursor-pointer accent-[hsl(var(--primary))]" />
-      <p id="budget-help" className="mt-2 text-xs leading-5 text-muted-foreground">A price ceiling, not a loan or affordability calculation.</p>
-    </div>
-    <div className="max-w-xs">
-      <label htmlFor="onboarding-budget" className="mb-2 block text-xs font-semibold">Or enter an exact amount</label>
-      <div className="relative"><span className="pointer-events-none absolute left-3.5 top-3 text-sm text-muted-foreground">S$</span><Input id="onboarding-budget" name="budget" type="number" min="0" max="10000000" step="10000" value={brief.budget} aria-describedby="budget-help" onChange={(event) => updateBudget(event.target.value)} className="pl-12" /></div>
-    </div>
-    <div className="flex flex-wrap gap-2" aria-label="Suggested budget amounts">
-      {[450000, 600000, 800000, 1000000].map((amount) => <button key={amount} type="button" aria-pressed={brief.budget === amount} onClick={() => updateBudget(amount)} className={`min-h-9 rounded-lg border px-3 text-xs transition-colors ${brief.budget === amount ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>{money(amount)}</button>)}
-    </div>
-  </div>;
+  return <BudgetInput value={brief.budget} onChange={value => setBrief(current => ({ ...current, budget: value, requirements: { ...current.requirements, budget: value != null } }))} />;
 }
 
 function PriorityStep({ brief, setBrief }) {
@@ -184,14 +168,14 @@ function PriorityStep({ brief, setBrief }) {
     <fieldset>
       <legend className="text-sm font-semibold">Start with a preset</legend>
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-        {priorityPresets.map((preset) => <motion.button key={preset.name} type="button" whileTap={reduceMotion ? undefined : { scale: 0.97 }} aria-pressed={activePreset === preset.name} onClick={() => setBrief({ ...brief, priorityWeights: preset.weights })} className={`min-h-10 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${activePreset === preset.name ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>{preset.name}</motion.button>)}
+        {priorityPresets.map((preset) => <motion.button key={preset.name} type="button" whileTap={reduceMotion ? undefined : { scale: 0.97 }} aria-pressed={activePreset === preset.name} onClick={() => setBrief({ ...brief, priorityWeights: preset.weights })} className={`min-h-11 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${activePreset === preset.name ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>{preset.name}</motion.button>)}
       </div>
     </fieldset>
     <div className="grid gap-2 sm:grid-cols-2">
       {priorityNames.map(([key, label]) => <fieldset key={key} className="rounded-xl border bg-background/65 p-3">
         <legend className="px-1 text-xs font-semibold">{label}</legend>
         <div role="group" aria-label={`${label} priority`} className="mt-1 grid grid-cols-3 gap-1 rounded-lg bg-muted/60 p-1">
-          {[[1, 'Normal'], [2, 'Important'], [3, 'Essential']].map(([value, title]) => <button key={value} type="button" aria-pressed={weights[key] === value} onClick={() => updateWeight(key, value)} className={`min-h-9 rounded-md px-1 text-[11px] transition-colors ${weights[key] === value ? 'bg-card font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{title}</button>)}
+          {[[1, 'Normal'], [2, 'Important'], [3, 'Essential']].map(([value, title]) => <button key={value} type="button" aria-pressed={weights[key] === value} onClick={() => updateWeight(key, value)} className={`min-h-11 rounded-md px-1 text-xs transition-colors ${weights[key] === value ? 'bg-card font-semibold text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{title}</button>)}
         </div>
       </fieldset>)}
     </div>
@@ -222,16 +206,16 @@ function SearchSummary({ brief, step }) {
       <RouteSketch step={step} towns={towns} />
       <dl className="divide-y divide-border/70 rounded-xl border bg-background/55 px-3">
         <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Household</dt><dd className="text-right text-xs font-medium">{brief.adults} adults · {brief.children} children · {brief.olderAdults} older adults</dd></div>
-        <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Budget</dt><dd className="text-right text-xs font-semibold">Up to {money(brief.budget)}</dd></div>
+        <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Budget</dt><dd className="text-right text-xs font-semibold">{brief.budget == null ? 'No price ceiling' : `Up to ${money(brief.budget)}`}</dd></div>
         <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Towns</dt><dd className="max-w-[65%] text-right text-xs font-medium">{towns.length ? towns.join(', ') : 'No preference'}</dd></div>
         <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Flat type</dt><dd className="text-right text-xs font-medium">{brief.preferredFlatType || 'No preference'}</dd></div>
         <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Nearby</dt><dd className="max-w-[68%] text-right text-xs font-medium">Schools {distanceLabel(brief.schoolDistance)}<br />Childcare {distanceLabel(brief.childcareDistance)}<br />Care {distanceLabel(brief.careDistance)}</dd></div>
       </dl>
       <div>
-        <p className="mb-2 text-[11px] font-semibold text-muted-foreground">Priority weights</p>
-        <div className="flex flex-wrap gap-1.5">{priorityNames.map(([key, label]) => <span key={key} className="rounded-full border bg-background/65 px-2.5 py-1 text-[10px] text-muted-foreground">{label} {priorities[key] || 1}/3</span>)}</div>
+        <p className="mb-2 text-xs font-semibold text-muted-foreground">Priority weights</p>
+        <div className="flex flex-wrap gap-1.5">{priorityNames.map(([key, label]) => <span key={key} className="rounded-full border bg-background/65 px-2.5 py-1 text-xs text-muted-foreground">{label} {priorities[key] || 1}/3</span>)}</div>
       </div>
-      <p className="text-[11px] leading-4 text-muted-foreground">You can change any of these in Explore. The line above is decorative and does not show travel routes.</p>
+      <p className="text-xs leading-4 text-muted-foreground">You can change any of these in Explore. The line above is decorative and does not show travel routes.</p>
     </CardContent>
   </Card>;
 }
@@ -239,7 +223,11 @@ function SearchSummary({ brief, step }) {
 export function OnboardingFlow() {
   const router = useRouter();
   const reduceMotion = useReducedMotion();
-  const { brief, setBrief, saveProfile } = useWorkspace();
+  const { brief: accountBrief, setBrief: commitBrief, saveProfile } = useWorkspace();
+  const [brief, setDraftBrief] = useState(accountBrief);
+  const edited = useRef(false);
+  const setBrief = useCallback(next => { edited.current = true; setDraftBrief(next); }, []);
+  useEffect(() => { if (!edited.current) setDraftBrief(accountBrief); }, [accountBrief]);
   const [activeStep, setActiveStep] = useState(0);
   const [towns, setTowns] = useState([]);
   const [flatTypes, setFlatTypes] = useState([]);
@@ -277,6 +265,7 @@ export function OnboardingFlow() {
     setSaveError('');
     try {
       await saveProfile({ profile: brief, onboardingCompleted: true });
+      commitBrief(brief);
       router.replace('/explore');
     } catch (error) {
       if (error?.name !== 'AbortError') setSaveError(error.message || 'Your preferences could not be saved. Please retry.');
@@ -296,7 +285,7 @@ export function OnboardingFlow() {
         <h1 className="mt-2 font-display text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">What should a home work around?</h1>
         <p className="mt-3 max-w-xl text-sm leading-6 text-muted-foreground">A few preferences help shape your first search. You can skip this and change everything later.</p>
       </div>
-      <Button type="button" variant="ghost" className="self-start sm:self-auto" disabled={saving} onClick={finishOnboarding}>Skip for now</Button>
+      <Button type="button" variant="ghost" className="self-start sm:self-auto" disabled={saving} onClick={continueWithoutSaving}>Skip for now</Button>
     </div>
 
     <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.55fr)_minmax(310px,0.82fr)] lg:gap-5">
@@ -305,7 +294,7 @@ export function OnboardingFlow() {
           <div className="mb-4 flex items-center justify-between gap-4">
             <nav aria-label="Setup progress" className="flex items-center gap-1.5">
               {steps.map((item, index) => <button key={item.title} type="button" disabled={index > activeStep || saving} onClick={() => setActiveStep(index)} aria-label={`Step ${index + 1}: ${item.title}`} aria-current={index === activeStep ? 'step' : undefined} className={`group flex items-center gap-1.5 rounded-md p-1 text-xs focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default ${index <= activeStep ? 'text-foreground' : 'text-muted-foreground/55'}`}>
-                <span className={`grid size-6 place-items-center rounded-full border text-[10px] font-semibold ${index < activeStep ? 'border-primary bg-primary text-primary-foreground' : index === activeStep ? 'border-primary text-primary' : 'border-border'}`}>{index < activeStep ? <Check className="size-3" /> : index + 1}</span>
+                <span className={`grid size-6 place-items-center rounded-full border text-xs font-semibold ${index < activeStep ? 'border-primary bg-primary text-primary-foreground' : index === activeStep ? 'border-primary text-primary' : 'border-border'}`}>{index < activeStep ? <Check className="size-3" /> : index + 1}</span>
                 <span className="hidden sm:inline">{item.title}</span>
               </button>)}
             </nav>

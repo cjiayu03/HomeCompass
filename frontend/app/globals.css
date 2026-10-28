@@ -339,3 +339,15 @@
     --ring: 151 38% 76%;
   }
 }
+
+/* Research workspace controls retain usable targets and room for system text sizing. */
+.search-command-bar input, .search-command-bar select { min-width: 0; }
+.comparison-tray { padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
+@media (max-width: 639px) {
+  .comparison-tray { bottom: 0; left: 0; right: 0; border-radius: 1rem 1rem 0 0; }
+  .search-command-bar { border-radius: 1rem; }
+}
+@media (forced-colors: active) {
+  .clear-button, .browse-home-card { border: 1px solid ButtonText; }
+  button[aria-pressed="true"], a[aria-current="page"] { outline: 2px solid Highlight; }
+}

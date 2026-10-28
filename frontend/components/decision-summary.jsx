@@ -1,258 +1,123 @@
 'use client';
 
+import { useState } from 'react';
 import { Download, Printer } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { EvidenceContext } from '@/components/evidence-context';
 import { money } from '@/lib/utils';
 
-const STATUS_LABELS = {
-  research: 'Researching',
-  visit: 'Plan a visit',
-  considering: 'Considering',
-  'ruled-out': 'Ruled out',
-};
+const statuses = { research: 'Researching', visit: 'Plan a visit', considering: 'Considering', 'ruled-out': 'Ruled out' };
+const defaultChecks = { daylight: false, noise: false, ventilation: false, condition: false, accessibility: false };
+const hasValue = value => value != null && String(value).trim() !== '';
+const titleCase = value => String(value).replace(/^custom[-_:]?/i, '').replace(/[-_]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 
-function hasValue(value) {
-  return value !== null && value !== undefined && String(value).trim() !== '';
-}
-
-function titleCase(value) {
-  return String(value).replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
-
-function checklistLabel(key) {
-  return titleCase(key.replace(/^custom[-_:]?/i, ''));
-}
-
-function dateLabel(value) {
+export function visitDateLabel(value) {
   if (!hasValue(value)) return 'Not scheduled';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+  // datetime-local represents the Singapore viewing wall clock, regardless of browser timezone.
+  const timestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?$/.test(value) ? `${value}+08:00` : value;
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? `${value} (time zone unverified)` : `${date.toLocaleString('en-SG', { timeZone: 'Asia/Singapore', dateStyle: 'medium', timeStyle: 'short' })} SGT (Asia/Singapore)`;
 }
 
-function preferenceEntries(brief = {}) {
+export function preferenceEntries(brief = {}) {
   const entries = [];
-  const household = [
-    ['Adults', brief.adults],
-    ['Children', brief.children],
-    ['Older adults', brief.olderAdults],
-  ].filter(([, value]) => hasValue(value));
-  if (household.length) entries.push(['Household', household.map(([label, value]) => `${value} ${label.toLocaleLowerCase()}`).join(' · ')]);
-  if (hasValue(brief.budget)) entries.push(['Budget', money(Number(brief.budget))]);
-  if (Array.isArray(brief.preferredTowns) && brief.preferredTowns.length) entries.push(['Preferred towns', brief.preferredTowns.join(', ')]);
-  if (hasValue(brief.preferredFlatType)) entries.push(['Preferred home type', brief.preferredFlatType]);
-  for(const [key,label,unit] of [['minFloorArea','Minimum area','m²'],['maxFloorArea','Maximum area','m²'],['minStorey','Minimum storey',''],['maxStorey','Maximum storey',''],['minLease','Minimum estimated lease','years'],['maxPricePerSqm','Maximum price per m²','SGD'],['observedAfter','Transactions from','']]) {
-    if(hasValue(brief[key]))entries.push([label,`${brief[key]} ${unit}${brief.requirements?.[key]===false?' (preference)':' (must-have)'}`]);
-  }
+  const rule = key => brief.requirements?.[key] === false ? 'preference' : 'must-have';
+  const add = (key, label, value) => { if (hasValue(value)) entries.push([`${label} (${rule(key)})`, value]); };
+  const household = [['Adults', brief.adults], ['Children', brief.children], ['Older adults', brief.olderAdults]].filter(([, value]) => hasValue(value));
+  if (household.length) entries.push(['Household', household.map(([label, value]) => `${value} ${label.toLowerCase()}`).join(' · ')]);
+  if (hasValue(brief.budget)) add('budget', 'Budget', money(Number(brief.budget)));
+  if (brief.preferredTowns?.length) add('towns', 'Towns', brief.preferredTowns.join(', '));
+  add('flatType', 'Flat type', brief.preferredFlatType);
+  for (const [key, label, unit] of [
+    ['minFloorArea', 'Minimum area', 'm²'], ['maxFloorArea', 'Maximum area', 'm²'],
+    ['minStorey', 'Minimum storey', ''], ['maxStorey', 'Maximum storey', ''],
+    ['minLease', 'Minimum estimated lease', 'years'], ['maxPricePerSqm', 'Maximum price per m²', 'SGD'],
+    ['observedAfter', 'Transactions from', ''], ['schoolDistance', 'School straight-line target', 'm'],
+    ['childcareDistance', 'Childcare straight-line target', 'm'], ['careDistance', 'Care straight-line target', 'm'],
+  ]) if (hasValue(brief[key])) add(key, label, `${brief[key]} ${unit}`.trim());
   if (hasValue(brief.pinLocation)) entries.push([brief.pinLabel || 'Reference location', brief.pinLocation]);
-
-  const accessTargets = [
-    ['School', brief.schoolDistance],
-    ['Childcare', brief.childcareDistance],
-    ['Care', brief.careDistance],
-  ].filter(([, distance]) => hasValue(distance));
-  if (accessTargets.length) entries.push(['Access targets', accessTargets.map(([name, distance]) => `${name}: ${Number(distance).toLocaleString()} m`).join(' · ')]);
-
-  const priorities = brief.priorityWeights && typeof brief.priorityWeights === 'object'
-    ? Object.entries(brief.priorityWeights).filter(([, value]) => hasValue(value))
-    : [];
-  if (priorities.length) entries.push(['Access priorities', priorities.map(([name, value]) => `${titleCase(name)} ${value}/3`).join(' · ')]);
+  for (const constraint of brief.placeConstraints || []) add('placeConstraints', `Saved place ${constraint.label || constraint.placeId}`, `${constraint.maxDistanceM} m maximum straight-line distance`);
+  if (brief.priorityWeights && Object.keys(brief.priorityWeights).length) entries.push(['Source score priority weights', Object.entries(brief.priorityWeights).map(([key, value]) => `${titleCase(key)} ${value}/3`).join(' · ')]);
   return entries;
 }
 
-function decisionFor(decisions, homeId) {
-  return decisions?.[homeId] || decisions?.[String(homeId)] || {};
-}
-
-function semanticsLabel(home) {
-  if (home?.sourceSemantics === 'historical_transaction') return 'Historical transaction · not a current listing';
-  if (['fixture', 'illustrative_fixture'].includes(home?.sourceSemantics) || /\bfixture\b/i.test(home?.source || '')) {
-    return 'Illustrative sample · not verified source data';
-  }
-  return 'Source semantics unavailable';
-}
-
-function sourceDate(home) {
-  return hasValue(home?.sourceUpdated) && String(home.sourceUpdated).toLocaleLowerCase() !== 'illustrative only'
-    ? home.sourceUpdated
-    : 'Unavailable';
-}
-
-function firstHomeValue(home, keys) {
-  for (const key of keys) {
-    if (hasValue(home?.[key])) return home[key];
-  }
-  return null;
-}
-
-function floorAreaLabel(home) {
-  const value = firstHomeValue(home, ['floorAreaSqm', 'floor_area_sqm', 'floorArea', 'areaSqm']);
-  if (!hasValue(value)) return null;
-  const numeric = Number(value);
-  return Number.isFinite(numeric) ? `${numeric.toLocaleString()} m²` : `${value} m²`;
-}
-
-function remainingLeaseLabel(home) {
-  const value = firstHomeValue(home, ['remainingLeaseYears', 'remaining_lease_years', 'remainingLease', 'remaining_lease']);
-  if (!hasValue(value)) return null;
-  const text = String(value);
-  return typeof value === 'number' || /^\d+(?:\.\d+)?$/.test(text.trim()) ? `${text} years` : text;
-}
-
-function leaseCommencementLabel(home) {
-  return firstHomeValue(home, ['leaseCommenceYear', 'lease_commence_year', 'leaseCommenceDate', 'lease_commence_date']);
-}
+const definitionList = entries => `<dl>${entries.map(([label, value]) => `<div class="pair"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('')}</dl>`;
+const textSection = (title, value) => hasValue(value) ? `<section><h4>${escapeHtml(title)}</h4><p>${escapeHtml(value)}</p></section>` : '';
 
 function evidenceEntries(home) {
+  const details = home.scoreDetails || {};
+  const components = Array.isArray(details.components) ? details.components : [];
+  const missing = [...new Set([...(Array.isArray(details.missingEvidence) ? details.missingEvidence : []), ...components.filter(component => component.evidenceStatus === 'missing' || !Number.isFinite(component.normalizedValue) || !Number.isFinite(component.contribution)).map(component => component.name)])];
   return [
-    ['Record meaning', semanticsLabel(home)],
-    ['Source', hasValue(home?.source) ? home.source : 'Unavailable'],
-    ['Source date', sourceDate(home)],
-    ['Transaction date', home?.observedOn || home?.transactionDate || 'Unavailable'],
-    ['Geocoding', hasValue(home?.geocodeStatus) ? home.geocodeStatus : 'Unavailable'],
+    ['Record meaning', home.sourceSemantics === 'historical_transaction' ? 'Historical transaction · not a current listing' : /fixture/i.test(`${home.sourceSemantics} ${home.source}`) ? 'Illustrative sample · not verified source data' : 'Source semantics unavailable'],
+    ['Source', home.source || 'Unavailable'], ['Source date', home.sourceUpdated || 'Unavailable'],
+    ['Transaction date', home.observedOn || home.transactionDate || 'Unavailable'],
+    ['Source score', Number.isFinite(home.score) ? `${home.score} / 100` : 'Insufficient evidence'],
+    ['Evidence coverage', Number.isFinite(details.coverage) ? `${Math.round(details.coverage * 100)}%` : 'Unavailable'],
+    ['Score policy', details.policyVersion || 'Unavailable'],
+    ...components.map(component => [`${titleCase(component.name)} score component`, component.evidenceStatus === 'missing' || !Number.isFinite(component.normalizedValue) || !Number.isFinite(component.contribution) ? 'Evidence missing; no contribution assigned' : `Normalized ${component.normalizedValue} / 100 · weight ${component.weight ?? 'unavailable'} · ${component.contribution} points`]),
+    ['Missing score evidence', missing.length ? missing.map(titleCase).join(' · ') : Array.isArray(details.missingEvidence) ? 'No missing evidence reported' : 'Unavailable'],
+    ['Geocoding', home.geocodeStatus || 'Unavailable'], ['Geocode source', home.geocodeSource || 'Unavailable'],
+    ['Current availability', 'Unavailable; not a live listing feed'],
   ];
 }
 
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (character) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  })[character]);
+function distanceEntries(home) {
+  if (!home.placeDistances?.length) return [['Saved place distances', 'No distance evidence recorded']];
+  return home.placeDistances.map(distance => [`Distance to ${distance.label || distance.placeId || 'saved place'}`, `${distance.method === 'straight-line' && Number.isFinite(Number(distance.distanceM)) && distance.distanceM != null ? `${Math.round(Number(distance.distanceM))} m straight-line estimate` : 'Distance unavailable; method unverified'}${distance.maximumDistanceM != null ? ` · target maximum ${distance.maximumDistanceM} m` : ''}. Travel time and route unavailable.`]);
 }
 
-function htmlDefinitionList(entries) {
-  return entries.map(([label, value]) => `<div class="pair"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('');
-}
+const safePhoto = photo => typeof photo?.dataUrl === 'string' && /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(photo.dataUrl);
 
-function htmlTextSection(title, value) {
-  if (!hasValue(value)) return '';
-  return `<section><h4>${escapeHtml(title)}</h4><p class="preserve-lines">${escapeHtml(value)}</p></section>`;
-}
-
-function standaloneHtml(homes, brief, decisions) {
+function summaryBody(homes, brief, decisions, photos, includePhotos) {
   const preferences = preferenceEntries(brief);
-  const homeSections = homes.map((home) => {
-    const decision = decisionFor(decisions, home.id);
+  const sections = homes.map(home => {
+    const decision = decisions?.[home.id] || {};
+    const checklist = { ...defaultChecks, ...(decision.checklist || {}) };
+    const checks = Object.entries(checklist);
+    const completed = checks.filter(([, checked]) => checked === true).length;
     const ratings = Array.isArray(decision.ratings) ? decision.ratings : [];
-    const checklist = decision.checklist && typeof decision.checklist === 'object' ? decision.checklist : {};
-    const checked = Object.entries(checklist).filter(([, value]) => value === true).map(([key]) => checklistLabel(key));
-    const scoreValue = hasValue(home.score) ? Number(home.score) : NaN;
-    const score = Number.isFinite(scoreValue) ? `${scoreValue.toFixed(1)} / 100` : 'Unavailable';
-    const floorArea = floorAreaLabel(home);
-    const remainingLease = remainingLeaseLabel(home);
-    const leaseCommencement = leaseCommencementLabel(home);
-    const summaryDetails = [
-      ['Decision', STATUS_LABELS[decision.status] || STATUS_LABELS.research],
-      ['Visit', dateLabel(decision.visitDate)],
-      ['Price observation', hasValue(home.price) ? money(Number(home.price)) : 'Unavailable'],
-      ...(floorArea ? [['Floor area', floorArea]] : []),
-      ...(remainingLease ? [['Remaining lease', remainingLease]] : []),
-      ...(leaseCommencement ? [['Lease commenced', leaseCommencement]] : []),
-      ['Fit score', score],
-      ['Viewing checks complete', `${checked.length} of ${Object.keys(checklist).length}`],
-      ...ratings.map((rating, index) => [hasValue(rating.name) ? `${rating.name} rating` : `Household rating ${index + 1}`, `${rating.score || 3} / 5`]),
+    const viewingPhotos = includePhotos ? (photos?.[home.id] || []).filter(safePhoto) : [];
+    const facts = [
+      ['Decision', statuses[decision.status] || statuses.research], ['Scheduled visit', visitDateLabel(decision.visitDate)],
+      ['Recorded price', Number.isFinite(home.price) ? money(home.price) : 'Unavailable'],
+      ['Floor area', home.floorAreaSqm != null ? `${home.floorAreaSqm} m²` : 'Unavailable'],
+      ['Storey range', home.storeyRange || 'Unavailable'],
+      ['Remaining lease', home.remainingLeaseYears != null ? `${home.remainingLeaseYears} years (estimate)` : 'Unavailable'],
+      ['School access', home.school || 'Unavailable'], ['Childcare access', home.childcare || 'Unavailable'],
+      ['Care access', home.care || 'Unavailable'], ['Dengue context', home.risk || 'Unavailable'],
+      ...ratings.map((rating, index) => [`${rating.name || `Household member ${index + 1}`} rating`, `${rating.score ?? 'Unavailable'} / 5`]),
     ];
-    const evidence = htmlDefinitionList(evidenceEntries(home));
-    return `<article class="home"><header><p class="eyebrow">${escapeHtml(home.town || 'Saved home')} · ${escapeHtml(home.type || 'Home type unavailable')}</p><h3>${escapeHtml(home.address || 'Saved home')}</h3></header><dl>${htmlDefinitionList(summaryDetails)}</dl><section><h4>Evidence and source dates</h4><dl>${evidence}</dl></section>${htmlTextSection('Pros', decision.pros)}${htmlTextSection('Trade-offs', decision.cons)}${htmlTextSection('Household notes', decision.notes)}${checked.length ? `<section><h4>Completed viewing checks</h4><p>${escapeHtml(checked.join(' · '))}</p></section>` : ''}</article>`;
+    return `<article class="summary-home"><header><p class="eyebrow">${escapeHtml(home.town || 'Town unavailable')} · ${escapeHtml(home.type || 'Flat type unavailable')}</p><h3>${escapeHtml(home.address || 'Saved candidate')}</h3></header>${definitionList(facts)}<section><h4>Evidence and source coverage</h4>${definitionList(evidenceEntries(home))}</section><section><h4>Private place distance context</h4>${definitionList(distanceEntries(home))}</section>${textSection('Pros', decision.pros)}${textSection('Trade-offs', decision.cons)}${textSection('Household notes', decision.notes)}<section><h4>Viewing checklist: ${completed} of ${checks.length} complete</h4><ul>${checks.map(([key, checked]) => `<li>${checked === true ? 'Complete' : 'To check'}: ${escapeHtml(decision.checklistLabels?.[key] || titleCase(key))}</li>`).join('')}</ul></section>${viewingPhotos.length ? `<section><h4>Viewing photos (included by your choice)</h4><div class="summary-photos">${viewingPhotos.map(photo => `<figure><img src="${escapeHtml(photo.dataUrl)}" alt="${escapeHtml(photo.name || 'Viewing photo')}"/><figcaption>${escapeHtml(photo.name || 'Viewing photo')}</figcaption></figure>`).join('')}</div></section>` : ''}</article>`;
   }).join('');
-
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HomeCompass decision summary</title><style>
-    :root{font-family:Arial,Helvetica,sans-serif;color:#1d2922;background:#fff}*{box-sizing:border-box}body{margin:0;padding:32px;max-width:1100px;margin-inline:auto}h1,h2,h3,h4,p,dl{margin:0}h1{font-size:30px;letter-spacing:-.03em}h2{margin:28px 0 12px;font-size:18px}.lede{margin-top:8px;color:#526057;font-size:13px}.home{break-inside:avoid-page;border:1px solid #d9e1da;border-radius:12px;padding:18px;margin-top:14px}.home header{border-bottom:1px solid #e2e8e3;padding-bottom:12px;margin-bottom:12px}.home h3{margin-top:5px;font-size:19px}.eyebrow{font-size:11px;color:#46654f;font-weight:700;letter-spacing:.04em}.home dl{display:grid;grid-template-columns:minmax(135px,190px) 1fr;gap:6px 14px;font-size:12px}.pair{display:contents}.pair dt{color:#647168}.pair dd{margin:0;overflow-wrap:anywhere}.home section{margin-top:14px}.home h4{margin-bottom:6px;font-size:12px}.home section p{font-size:12px;line-height:1.55;white-space:pre-wrap}.preserve-lines{white-space:pre-wrap}.preferences{border:1px solid #d9e1da;border-radius:12px;padding:16px}.preferences dl{display:grid;grid-template-columns:minmax(135px,190px) 1fr;gap:7px 14px;font-size:12px}@media print{body{padding:0}.home,.preferences{break-inside:avoid-page}}
-  </style></head><body><header><p class="eyebrow">HomeCompass · Household planning</p><h1>Decision summary</h1><p class="lede">Evidence and household notes for the selected saved homes.</p></header><section class="preferences"><h2>Household preferences</h2><dl>${htmlDefinitionList(preferences.length ? preferences : [['Preferences', 'No preferences recorded']])}</dl></section><h2>Selected homes (${homes.length})</h2>${homeSections}</body></html>`;
+  return `<header><p class="eyebrow">HomeCompass · Household planning</p><h2>Decision summary</h2><p>Evidence and household notes for ${homes.length} selected candidates. This copy contains private notes and saved place labels; choose who receives it.</p></header><section class="summary-preferences"><h3>Household criteria</h3>${definitionList(preferences.length ? preferences : [['Criteria', 'No criteria recorded']])}</section>${sections}`;
 }
 
-export function DecisionSummary({ homes = [], brief = {}, decisions = {} }) {
-  const preferences = preferenceEntries(brief);
+const summaryStyles = `
+.decision-print{font-family:Arial,Helvetica,sans-serif;color:inherit;font-size:13px;line-height:1.55}.decision-print h2{font-size:26px;font-weight:600;margin:4px 0}.decision-print h3{font-size:18px;font-weight:600;margin:4px 0 12px}.decision-print h4{font-size:13px;font-weight:600;margin:0 0 8px}.decision-print .eyebrow{font-size:11px;opacity:.8}.decision-print dl{display:grid;grid-template-columns:minmax(110px,1fr) 2fr;gap:7px 16px;margin:0}.decision-print .pair{display:contents}.decision-print dt{opacity:.75}.decision-print dd{margin:0;overflow-wrap:anywhere}.decision-print p{margin:0;white-space:pre-wrap}.decision-print section{margin-top:16px}.decision-print .summary-home,.decision-print .summary-preferences{border:1px solid #a9b9ac;border-radius:12px;padding:16px;margin-top:20px;break-inside:avoid-page}.decision-print .summary-home header{border-bottom:1px solid #a9b9ac;margin-bottom:14px;padding-bottom:8px}.decision-print ul{padding-left:20px}.decision-print .summary-photos{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.decision-print figure{margin:0}.decision-print img{max-width:100%;height:auto}.decision-print figcaption{overflow-wrap:anywhere;font-size:11px}
+`;
 
+export function standaloneHtml(homes = [], brief = {}, decisions = {}, photos = {}, includePhotos = false) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HomeCompass decision summary</title><style>body{margin:0 auto;max-width:1000px;padding:24px;color:#1d2922;background:white}${summaryStyles}@media print{body{padding:0}}</style></head><body><main class="decision-print">${summaryBody(homes, brief, decisions, photos, includePhotos)}</main></body></html>`;
+}
+
+export function DecisionSummary({ homes = [], brief = {}, decisions = {}, photos = {} }) {
+  const [includePhotos, setIncludePhotos] = useState(false);
+  const hasPhotos = homes.some(home => (photos?.[home.id] || []).some(safePhoto));
   function downloadHtml() {
-    const content = standaloneHtml(homes, brief, decisions);
-    const blob = new Blob([content], { type: 'text/html;charset=utf-8' });
+    const blob = new Blob([standaloneHtml(homes, brief, decisions, photos, includePhotos)], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = `homecompass-decision-summary-${new Date().toISOString().slice(0, 10)}.html`;
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
+    document.body.append(anchor); anchor.click(); anchor.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
-
   return <div className="space-y-4">
-    <style>{`
-      @media print {
-        @page { margin: 14mm; }
-        body * { visibility: hidden !important; }
-        [data-homecompass-decision-summary], [data-homecompass-decision-summary] * { visibility: visible !important; }
-        body *:has([data-homecompass-decision-summary]) { display: block !important; height: auto !important; overflow: visible !important; padding: 0 !important; margin: 0 !important; }
-        body *:not(:has([data-homecompass-decision-summary])):not([data-homecompass-decision-summary]):not([data-homecompass-decision-summary] *) { display: none !important; }
-        [data-homecompass-decision-summary] { position: static !important; width: 100% !important; max-width: none !important; max-height: none !important; overflow: visible !important; margin: 0 !important; padding: 0 !important; border: 0 !important; border-radius: 0 !important; background: #fff !important; color: #17231b !important; box-shadow: none !important; }
-        [data-homecompass-decision-summary] .no-print { display: none !important; }
-        [data-homecompass-decision-summary] * { color: #17231b !important; box-shadow: none !important; text-shadow: none !important; }
-        [data-homecompass-decision-summary] .print-home { break-inside: avoid-page; border-color: #d7ded8 !important; background: #fff !important; }
-        [data-homecompass-decision-summary] time { white-space: nowrap; }
-      }
-    `}</style>
-    <section data-homecompass-decision-summary aria-label="Printable decision summary" className="rounded-2xl border bg-card p-4 shadow-sm sm:p-6">
-      <div className="no-print mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div><p className="text-xs font-semibold uppercase tracking-[0.1em] text-primary">Ready to share</p><p className="mt-1 text-xs text-muted-foreground">Print or save a standalone copy of these selected homes.</p></div>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={() => window.print()}><Printer className="size-4" />Print summary</Button>
-          <Button type="button" variant="outline" onClick={downloadHtml}><Download className="size-4" />Download HTML</Button>
-        </div>
-      </div>
-
-      <header className="border-b border-border/70 pb-4">
-        <p className="text-xs font-semibold uppercase tracking-[0.12em] text-primary">HomeCompass · Household planning</p>
-        <h2 className="mt-1 font-display text-2xl font-semibold tracking-tight">Decision summary</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Evidence and household notes for {homes.length} selected {homes.length === 1 ? 'home' : 'homes'}.</p>
-      </header>
-
-      <section aria-labelledby="summary-preferences-title" className="mt-5 rounded-xl border bg-background/50 p-4">
-        <h3 id="summary-preferences-title" className="font-display text-lg font-semibold">Household preferences</h3>
-        {preferences.length ? <dl className="mt-3 grid gap-x-5 gap-y-2 text-sm sm:grid-cols-[minmax(150px,0.4fr)_1fr]">
-          {preferences.map(([label, value]) => <div key={label} className="contents"><dt className="text-muted-foreground">{label}</dt><dd className="min-w-0 font-medium">{value}</dd></div>)}
-        </dl> : <p className="mt-2 text-sm text-muted-foreground">No household preferences recorded.</p>}
-      </section>
-
-      <div className="mt-5 space-y-4">
-        {homes.map((home) => {
-          const decision = decisionFor(decisions, home.id);
-          const ratings = Array.isArray(decision.ratings) ? decision.ratings : [];
-          const checklist = decision.checklist && typeof decision.checklist === 'object' ? decision.checklist : {};
-          const checked = Object.entries(checklist).filter(([, value]) => value === true).map(([key]) => checklistLabel(key));
-          const floorArea = floorAreaLabel(home);
-          const remainingLease = remainingLeaseLabel(home);
-          const leaseCommencement = leaseCommencementLabel(home);
-          return <article key={home.id} className="print-home rounded-xl border bg-background/40 p-4 sm:p-5">
-            <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 pb-3">
-              <div className="min-w-0">
-                <div className="mb-2 flex flex-wrap items-center gap-2"><Badge variant="secondary">{home.town || 'Town unavailable'}</Badge><span className="text-xs text-muted-foreground">{home.type || 'Home type unavailable'}</span></div>
-                <h3 className="font-display text-lg font-semibold">{home.address || 'Saved home'}</h3>
-                <p className="mt-1 font-medium">{hasValue(home.price) ? money(Number(home.price)) : 'Price unavailable'}</p>
-              </div>
-              <Badge variant="outline">{STATUS_LABELS[decision.status] || STATUS_LABELS.research}</Badge>
-            </header>
-            <EvidenceContext home={home} className="mt-4" />
-            <dl className="mt-4 grid gap-x-5 gap-y-2 text-sm sm:grid-cols-[minmax(150px,0.4fr)_1fr]">
-              {floorArea && <><dt className="text-muted-foreground">Floor area</dt><dd>{floorArea}</dd></>}
-              {remainingLease && <><dt className="text-muted-foreground">Remaining lease</dt><dd>{remainingLease}</dd></>}
-              {leaseCommencement && <><dt className="text-muted-foreground">Lease commenced</dt><dd>{leaseCommencement}</dd></>}
-              <dt className="text-muted-foreground">Scheduled visit</dt><dd>{hasValue(decision.visitDate) ? <time dateTime={decision.visitDate}>{dateLabel(decision.visitDate)}</time> : 'Not scheduled'}</dd>
-              {ratings.map((rating, index) => <div key={`rating-${index}`} className="contents"><dt className="text-muted-foreground">{hasValue(rating.name) ? `${rating.name}’s rating` : `Household rating ${index + 1}`}</dt><dd>{rating.score || 3} / 5</dd></div>)}
-              {checked.length > 0 && <><dt className="text-muted-foreground">Viewing checks complete</dt><dd>{checked.join(' · ')}</dd></>}
-            </dl>
-            {(hasValue(decision.pros) || hasValue(decision.cons) || hasValue(decision.notes)) && <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              {hasValue(decision.pros) && <section className="rounded-lg border bg-card p-3"><h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Pros</h4><p className="mt-1 whitespace-pre-wrap text-sm leading-6">{decision.pros}</p></section>}
-              {hasValue(decision.cons) && <section className="rounded-lg border bg-card p-3"><h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Trade-offs</h4><p className="mt-1 whitespace-pre-wrap text-sm leading-6">{decision.cons}</p></section>}
-              {hasValue(decision.notes) && <section className="rounded-lg border bg-card p-3 sm:col-span-2"><h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Household notes</h4><p className="mt-1 whitespace-pre-wrap text-sm leading-6">{decision.notes}</p></section>}
-            </div>}
-          </article>;
-        })}
-      </div>
-    </section>
+    <style>{summaryStyles}{`@media print{@page{margin:14mm}body *{visibility:hidden!important}[data-homecompass-decision-summary],[data-homecompass-decision-summary] *{visibility:visible!important}body *:has([data-homecompass-decision-summary]){display:block!important;height:auto!important;overflow:visible!important;max-height:none!important;padding:0!important;margin:0!important}body *:not(:has([data-homecompass-decision-summary])):not([data-homecompass-decision-summary]):not([data-homecompass-decision-summary] *){display:none!important}[data-homecompass-decision-summary]{position:static!important;max-height:none!important;overflow:visible!important;background:white!important;color:#17231b!important}[data-homecompass-decision-summary] *{box-shadow:none!important;color:#17231b!important}}`}</style>
+    <p className="text-xs leading-6 text-muted-foreground">Your copy includes household notes, criteria and private place distance context. Photos are excluded unless you select them here. Downloads do not put personal locations into a shared URL.</p>
+    {hasPhotos && <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={includePhotos} onChange={event => setIncludePhotos(event.target.checked)} />Include viewing photos in print and download</label>}
+    <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => window.print()}><Printer className="size-4" />Print summary</Button><Button variant="outline" onClick={downloadHtml}><Download className="size-4" />Download HTML</Button></div>
+    <section data-homecompass-decision-summary aria-label="Printable decision summary" className="decision-print rounded-xl border bg-card p-4 sm:p-6" dangerouslySetInnerHTML={{ __html: summaryBody(homes, brief, decisions, photos, includePhotos) }} />
   </div>;
 }

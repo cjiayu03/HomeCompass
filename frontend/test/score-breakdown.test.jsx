@@ -68,7 +68,7 @@ describe('ScoreBreakdown', () => {
     render(<ScoreBreakdown score={76.4} scoreDetails={scoreDetails} />);
 
     expect(screen.getByText('76.4 / 100')).toBeInTheDocument();
-    expect(screen.getByText('Trade-off candidate')).toBeInTheDocument();
+    expect(screen.getByText('Source score')).toBeInTheDocument();
     expect(screen.getByText('Coverage 80%')).toBeInTheDocument();
     expect(screen.getByText('Policy home-fit-v1')).toBeInTheDocument();
   });

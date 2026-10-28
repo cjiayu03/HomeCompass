@@ -5,9 +5,11 @@ import { HomeCard } from '../components/home-card.jsx';
 import ComparePage from '../app/(workspace)/compare/page.jsx';
 import ShortlistPage from '../app/(workspace)/shortlist/page.jsx';
 
-const { useWorkspaceMock } = vi.hoisted(() => ({ useWorkspaceMock: vi.fn() }));
+const { useWorkspaceMock } = vi.hoisted(() => ({ useWorkspaceMock: vi.fn(() => ({ brief: {} })) }));
 
 vi.mock('../components/workspace-provider.jsx', () => ({ useWorkspace: useWorkspaceMock }));
+vi.mock('../components/auth-provider.jsx', () => ({ useAuth: () => ({ user: null }) }));
+vi.mock('../components/planning-provider.jsx', () => ({ usePlanning: () => ({ decisions: {}, photos: {}, scenarios: [], ready: true }) }));
 vi.mock('next/link', () => ({ default: ({ href, children, ...props }) => <a href={href} {...props}>{children}</a> }));
 
 const historicalHome = {
@@ -60,6 +62,7 @@ const fixtureHome = {
 
 function workspace(overrides = {}) {
   return {
+    brief: {},
     selectedHomes: [],
     compareIds: [],
     setCompareIds: vi.fn(),

@@ -8,6 +8,8 @@ import SourcesPage from '../app/(workspace)/sources/page.jsx';
 const { useWorkspaceMock } = vi.hoisted(() => ({ useWorkspaceMock: vi.fn() }));
 
 vi.mock('../components/workspace-provider.jsx', () => ({ useWorkspace: useWorkspaceMock }));
+vi.mock('../components/planning-provider.jsx', () => ({ usePlanning: () => ({ scenarios: [], decisions: {}, photos: {} }) }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: vi.fn() }) }));
 vi.mock('../components/auth-provider.jsx', () => ({ useAuth: () => ({ client: null, user: null }) }));
 vi.mock('next/dynamic', () => ({ default: () => function MapCanvas() { return <div data-testid="map-canvas" />; } }));
 vi.mock('next/link', () => ({ default: ({ href, children, ...props }) => <a href={href} {...props}>{children}</a> }));
@@ -44,6 +46,8 @@ function workspace(overrides = {}) {
     setQuery: noop,
     selectedHomes: [],
     shortlistIds: [],
+    shortlistHomes: [],
+    workspaceReady: false,
     toggleShortlist: noop,
     toggleCompare: noop,
     applySearch: noop,
@@ -145,9 +149,9 @@ describe('workspace status integration', () => {
     render(<ExplorePage />);
 
     expect(screen.getByRole('alert')).toHaveTextContent('Live home data is unavailable.');
-    expect(screen.getByRole('status')).toHaveTextContent(/no resource/i);
-    expect(screen.getByRole('region', { name: 'Candidate places' })).toHaveTextContent('Home data unavailable');
-    expect(screen.getByRole('region', { name: 'Candidate places' })).not.toHaveTextContent('No places found');
+    expect(screen.getByRole('region', { name: 'Movable OpenStreetMap view' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Historical transaction results' })).toHaveTextContent('Housing evidence unavailable');
+    expect(screen.getByRole('region', { name: 'Historical transaction results' })).not.toHaveTextContent('No places found');
     expect(screen.queryByText(/illustrative fixture/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /retry home data/i }));
     expect(retryHomes).toHaveBeenCalledTimes(1);
@@ -166,7 +170,7 @@ describe('workspace status integration', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent(/showing previous results/i);
     expect(screen.getByRole('alert')).toHaveTextContent('Resource refresh failed.');
-    expect(screen.getByText(/2\/3 snapshots/)).toBeInTheDocument();
+    expect(screen.getByText('Silver Zones')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /retry resource data/i }));
     expect(retryResources).toHaveBeenCalledTimes(1);
   });

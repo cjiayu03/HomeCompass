@@ -11,12 +11,12 @@ from uuid import UUID, uuid4
 
 import asyncpg
 import httpx
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from . import database
+from . import database, recovery
 from .ai import gemini_configuration_ready, interpret_query, summarize_record
 from .contracts import live_result_metadata
 from .database import (
@@ -46,6 +46,8 @@ from . import saved_searches as saved_search_service
 from .planning import router as planning_router
 from .schemas import (
     AuthCredentials,
+    ForgotPasswordRequest,
+    ResetPasswordRequest,
     FamilyProfileUpdate,
     GuestSyncRequest,
     InterpretRequest,
@@ -749,15 +751,18 @@ async def login_local_account(
     token = new_session_token()
     expires_at = datetime.now(timezone.utc) + SESSION_LIFETIME
     try:
-        await database.create_local_session(
+        created = await database.create_local_session(
             identity["user_id"],
             hash_session_token(token),
             expires_at,
+            identity["password_hash"],
         )
     except HTTPException:
         raise
     except (asyncpg.PostgresError, OSError) as exc:
         raise _storage_unavailable() from exc
+    if not created:
+        raise HTTPException(status_code=401, detail={"code": "INVALID_CREDENTIALS", "message": "Email or password is incorrect."})
     _set_session_cookie(response, token)
     return {"user": {"id": str(identity["user_id"]), "email": identity["email"]}}
 
@@ -778,7 +783,6 @@ async def logout_local_account(request: Request, response: Response) -> dict | J
                     status_code=exc.status_code,
                     content={"detail": exc.detail},
                 )
-                _clear_session_cookie(failure)
                 return failure
             except (asyncpg.PostgresError, OSError):
                 failure = JSONResponse(
@@ -790,8 +794,33 @@ async def logout_local_account(request: Request, response: Response) -> dict | J
                         }
                     },
                 )
-                _clear_session_cookie(failure)
                 return failure
+    _clear_session_cookie(response)
+    return {"ok": True}
+
+
+@app.post("/api/v1/auth/forgot-password", status_code=202)
+async def forgot_password(data: ForgotPasswordRequest, request: Request, background_tasks: BackgroundTasks) -> dict:
+    _check_auth_rate_limit(request, data.email)
+    config = recovery.mail_configuration()
+    if config is None:
+        raise HTTPException(status_code=503, detail={"code": "RECOVERY_UNAVAILABLE", "message": "Password recovery is unavailable. Email delivery has not been configured."})
+    database.require_pool()
+    # Account lookup and SMTP happen after the generic response is sent, so delivery
+    # latency and missing accounts cannot change the response or expose membership.
+    background_tasks.add_task(recovery.request_password_reset, data.email, config)
+    return {"message": "If this address has an account and email delivery succeeds, a reset link will arrive shortly. Check your spam folder. Links expire after 30 minutes."}
+
+
+@app.post("/api/v1/auth/reset-password")
+async def reset_password(data: ResetPasswordRequest, request: Request, response: Response) -> dict:
+    _check_auth_rate_limit(request)
+    try:
+        changed = await recovery.consume_reset_token(hash_session_token(data.token), hash_password(data.password))
+    except (asyncpg.PostgresError, OSError) as exc:
+        raise _storage_unavailable() from exc
+    if not changed:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_RESET_TOKEN", "message": "This reset link is invalid or expired. Request a new link."})
     _clear_session_cookie(response)
     return {"ok": True}
 

@@ -620,3 +620,22 @@ def test_guest_sync_request_normalizes_place_text_and_deduplicates_history_sourc
     assert request.history[0].source_snapshot_ids == [UUID(source_id)]
     assert request.places[0].label == "Work"
     assert request.places[0].address == "1 Harbour Road"
+
+
+def test_search_and_profile_accept_more_than_three_towns():
+    from app.schemas import SearchRequest, FamilyProfileUpdate
+    towns = ['Bishan', 'Queenstown', 'Tampines', 'Woodlands']
+    assert len(SearchRequest(towns=towns).towns) == 4
+    assert len(FamilyProfileUpdate(adults=2, children=0, older_adults=0, preferred_towns=towns).preferred_towns) == 4
+
+
+def test_decision_preserves_checklist_labels_and_singapore_offset():
+    from app.schemas import PlanningDecision
+    decision = PlanningDecision(checklist={'custom-id': False}, checklistLabels={'custom-id': '看阳光'}, visitDate='2026-11-01T14:30+08:00')
+    assert decision.checklistLabels['custom-id'] == '看阳光'
+    assert decision.visitDate.endswith('+08:00')
+
+
+def test_legacy_visit_is_explicitly_normalized_to_singapore():
+    from app.schemas import PlanningDecision
+    assert PlanningDecision(visitDate='2026-11-01T14:30').visitDate == '2026-11-01T14:30+08:00'

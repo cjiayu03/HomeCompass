@@ -25,15 +25,18 @@ function formatDistance(distance) {
 function formatTimestamp(value) {
   if (!value) return 'Not recorded';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? value : `${date.toLocaleString('en-SG', {timeZone:'Asia/Singapore'})} SGT`;
 }
 
 export function PlaceManager() {
-  const { places, placeState, suggestPlaces, createPlace, deletePlace } = useWorkspace();
+  const { places, placeState, suggestPlaces, createPlace, createLocalPlace, deletePlace } = useWorkspace();
   const [label, setLabel] = useState('');
   const [kind, setKind] = useState('workplace');
   const [maximumDistanceM, setMaximumDistanceM] = useState('2500');
   const [query, setQuery] = useState('');
+  const [manualLatitude, setManualLatitude] = useState('');
+  const [manualLongitude, setManualLongitude] = useState('');
+  const local = placeState.status === 'local';
   const [candidates, setCandidates] = useState([]);
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [suggestionState, setSuggestionState] = useState('idle');
@@ -67,7 +70,8 @@ export function PlaceManager() {
     setSaving(true);
     setSaveError('');
     try {
-      await createPlace({
+      const save = selectedCandidate.provider === 'user-entered' ? createLocalPlace : createPlace;
+      await save({
         ...selectedCandidate,
         label: label.trim(),
         kind,
@@ -86,6 +90,7 @@ export function PlaceManager() {
   }
 
   async function removePlace(place) {
+    if(!window.confirm(`Remove ${place.label}? Any saved search using it will need its place constraint repaired.`))return;
     setDeletingId(place.id);
     setDeleteError('');
     try {
@@ -100,7 +105,7 @@ export function PlaceManager() {
   return <Card aria-label="Account places">
     <CardHeader>
       <CardTitle>Places for your household</CardTitle>
-      <p className="text-sm text-muted-foreground">Save a work, school, childcare or care address using a selected OneMap result.</p>
+      <p className="text-sm text-muted-foreground">Save a work, school, childcare or care address for straight-line distance checks. Manual pins stay in this browser until you choose to upload them.</p>
     </CardHeader>
     <CardContent className="space-y-6">
       {signedOut && <Alert tone="info">Sign in to manage account places.</Alert>}
@@ -111,7 +116,7 @@ export function PlaceManager() {
       {deleteError && <Alert tone="warning">{deleteError}</Alert>}
 
       <div className="space-y-4 rounded-xl border border-border/70 bg-background/35 p-4">
-        <h4 className="text-sm font-semibold">Add an account place</h4>
+        <h4 className="text-sm font-semibold">{local ? 'Add a browser place' : 'Add an account place'}</h4>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-2 text-xs font-semibold">Place label
             <input aria-label="Place label" autoComplete="off" maxLength={80} value={label} onChange={(event) => setLabel(event.target.value)} className="h-10 rounded-lg border bg-background px-3 text-sm font-normal" placeholder="Office or child's school" />
@@ -138,8 +143,10 @@ export function PlaceManager() {
             {suggestionState === 'loading' ? 'Searching…' : 'Find address candidates'}
           </Button>
         </form>
-        <p className="text-[11px] leading-4 text-muted-foreground">Coordinates are taken only from the OneMap candidate you select. Provider: OneMap.</p>
+        <p className="text-[11px] leading-4 text-muted-foreground">OneMap candidates use the coordinates you select. Manual pins are labelled user-entered and must be checked independently.</p>
 
+        {!signedOut && <details className="rounded-lg border p-3"><summary className="cursor-pointer text-sm font-semibold">Enter known coordinates instead</summary><p className="mt-2 text-xs text-muted-foreground">Use coordinates you have checked on a map. These browser-only pins are not verified addresses or travel times. Singapore coordinates only.</p><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="grid gap-1 text-xs">Latitude<input type="number" min="1.13" max="1.47" step="any" value={manualLatitude} onChange={e=>setManualLatitude(e.target.value)} className="h-10 rounded-lg border bg-background px-3"/></label><label className="grid gap-1 text-xs">Longitude<input type="number" min="103.59" max="104.07" step="any" value={manualLongitude} onChange={e=>setManualLongitude(e.target.value)} className="h-10 rounded-lg border bg-background px-3"/></label></div><Button type="button" variant="outline" size="sm" className="mt-3" disabled={!manualLatitude||!manualLongitude} onClick={()=>{const latitude=Number(manualLatitude),longitude=Number(manualLongitude);if(!Number.isFinite(latitude)||!Number.isFinite(longitude)||latitude<1.13||latitude>1.47||longitude<103.59||longitude>104.07){setSaveError('Enter coordinates within Singapore.');return;}setSelectedCandidate({latitude,longitude,provider:'user-entered',address:query.trim()||'User-entered map pin'});setSaveError('');}}>Use these coordinates</Button></details>}
+        {selectedCandidate?.provider === 'user-entered' && <p role="status" className="text-xs">User-entered pin selected: {selectedCandidate.latitude}, {selectedCandidate.longitude}</p>}
         {suggestionState === 'empty' && <p className="text-sm text-muted-foreground">No address candidates found. Try a more specific address.</p>}
         {candidates.length > 0 && <fieldset className="space-y-2" aria-label="OneMap address candidates">
           <legend className="mb-2 text-xs font-semibold">Choose one address candidate</legend>

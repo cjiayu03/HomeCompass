@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { briefFromCriteria } from '@/lib/planning';
 import { Bookmark, Clock3, Pencil, RefreshCw, Trash2 } from 'lucide-react';
 import { useWorkspace } from '@/components/workspace-provider';
 import { Alert } from '@/components/ui/alert';
@@ -13,7 +15,7 @@ import { LoadingScene } from '@/components/loading-scene';
 function formatDate(value) {
   if (!value) return 'Not available';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? 'Not available' : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? 'Not available' : `${date.toLocaleString('en-SG', { timeZone: 'Asia/Singapore' })} SGT`;
 }
 
 function savedPolicyVersion(search) {
@@ -45,7 +47,8 @@ function differenceText(difference) {
   return `Latest rerun: ${previous} to ${change.current} results${delta ? ` (${delta})` : ''}.`;
 }
 
-function SavedSearchRow({ search, state, renameSavedSearch, deleteSavedSearch, rerunSavedSearch }) {
+function SavedSearchRow({ search, state, renameSavedSearch, deleteSavedSearch, rerunSavedSearch, editSearch, onApplied }) {
+  const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [nameDraft, setNameDraft] = useState(search.name);
   const busy = state.action && state.activeId === search.id;
@@ -95,13 +98,14 @@ function SavedSearchRow({ search, state, renameSavedSearch, deleteSavedSearch, r
         {rerun?.metadata?.warnings?.length > 0 && <p className="mt-2 text-xs text-muted-foreground">{rerun.metadata.warnings.join(' ')}</p>}
       </div>
       <div className="flex shrink-0 flex-wrap gap-2">
-        <Button size="sm" variant="outline" aria-label={`Rerun ${search.name}`} disabled={Boolean(busy)} onClick={() => rerunSavedSearch(search.id)}>
-          <RefreshCw className="size-3.5" />{busy && state.action === 'rerunning' ? 'Running…' : 'Rerun'}
+        <Button size="sm" variant="outline" aria-label={`Rerun ${search.name}`} disabled={Boolean(busy)} onClick={async () => { const result = await rerunSavedSearch(search.id); if(result != null) { onApplied?.(); router.replace('/explore'); } }}>
+          <RefreshCw className="size-3.5" />{busy && state.action === 'rerunning' ? 'Running…' : 'Rerun & view results'}
         </Button>
+        <Button size="sm" variant="outline" aria-label={`Edit criteria for ${search.name}`} onClick={()=>editSearch(search)}>Edit criteria / repair places</Button>
         {!editing && <Button size="sm" variant="ghost" aria-label={`Rename ${search.name}`} disabled={Boolean(busy)} onClick={() => { setNameDraft(search.name); setEditing(true); }}>
           <Pencil className="size-3.5" />Rename
         </Button>}
-        <Button size="sm" variant="ghost" aria-label={`Delete ${search.name}`} disabled={Boolean(busy)} onClick={() => deleteSavedSearch(search.id)}>
+        <Button size="sm" variant="ghost" aria-label={`Delete ${search.name}`} disabled={Boolean(busy)} onClick={() => { if(window.confirm(`Delete saved search “${search.name}”? This cannot be undone.`)) deleteSavedSearch(search.id); }}>
           <Trash2 className="size-3.5" />Delete
         </Button>
       </div>
@@ -109,7 +113,7 @@ function SavedSearchRow({ search, state, renameSavedSearch, deleteSavedSearch, r
   </article>;
 }
 
-function HistoryRow({ entry }) {
+function HistoryRow({ entry, resumeSearch }) {
   const criteria = entry.criteria && typeof entry.criteria === 'object' ? entry.criteria : {};
   const query = typeof criteria.query === 'string' && criteria.query.trim() ? criteria.query.trim() : 'Search without a text query';
   const snapshots = Array.isArray(entry.sourceSnapshotIds) ? entry.sourceSnapshotIds : [];
@@ -119,12 +123,36 @@ function HistoryRow({ entry }) {
       <p className="mt-1 text-xs text-muted-foreground">{entry.mode === 'natural_language' ? 'Phrase search' : 'Structured search'} · Budget {Number.isFinite(criteria.budget) ? new Intl.NumberFormat('en-SG', { style: 'currency', currency: 'SGD', maximumFractionDigits: 0 }).format(criteria.budget) : 'not set'}</p>
       <p className="mt-1 text-xs text-muted-foreground">{snapshots.length} source {snapshots.length === 1 ? 'snapshot' : 'snapshots'} · Policy version {entry.scoringVersion || 'not available'}</p>
     </div>
-    <time className="shrink-0 text-xs text-muted-foreground">{formatDate(entry.createdAt)}</time>
+    <div className="flex shrink-0 flex-col gap-2"><time className="text-xs text-muted-foreground">{formatDate(entry.createdAt)}</time><Button variant="outline" size="sm" onClick={()=>resumeSearch(entry)}>Resume search</Button></div>
   </article>;
 }
 
-export function SavedDecisionSections() {
-  const { history, historyState, savedSearches, savedSearchState, refreshSavedDecisions, renameSavedSearch, deleteSavedSearch, rerunSavedSearch } = useWorkspace();
+export function SavedDecisionSections({ onEdit, onApplied } = {}) {
+  const { history, historyState, savedSearches, savedSearchState, refreshSavedDecisions, renameSavedSearch, deleteSavedSearch, rerunSavedSearch, brief, places, placeState, setBrief, setQuery, applySearch, flash } = useWorkspace();
+  const router = useRouter();
+  const [resumeBusy,setResumeBusy]=useState(false);
+  function editableCriteria(criteria) {
+    const availableIds = new Set((places || []).map(place=>String(place.id)));
+    return {...criteria, place_constraints:(criteria?.place_constraints || []).filter(item=>availableIds.has(String(item.place_id)))};
+  }
+  function editSearch(search) {
+    if((search.criteria?.place_constraints?.length||0)>0 && !['success','empty','local'].includes(placeState?.status)) { flash?.('Load your personal places before repairing this search. Retry loading places in Account settings.','info'); return; }
+    const criteria=editableCriteria(search.criteria || {});
+    const editedBrief = briefFromCriteria(brief,criteria);
+    setBrief(editedBrief);
+    onEdit?.(editedBrief);
+    setQuery(criteria.query || '');
+    flash?.('Search criteria loaded for editing. Unavailable personal places were removed. Review filters and apply; save a new search to keep the repaired criteria.','info');
+    router.replace('/explore');
+  }
+  async function resumeSearch(entry) {
+    if(resumeBusy)return;
+    const criteria=entry.criteria || {};
+    const repaired=editableCriteria(criteria);
+    if((repaired.place_constraints?.length||0)!==(criteria.place_constraints?.length||0)){editSearch(entry);return;}
+    setResumeBusy(true);
+    try{const result=await applySearch(criteria.query||'',briefFromCriteria(brief,criteria), { interpret: false });if(result!=null){onApplied?.();router.replace('/explore');}}finally{setResumeBusy(false);}
+  }
   const loading = savedSearchState.status === 'idle' || savedSearchState.status === 'loading';
   const signedOut = savedSearchState.status === 'signed_out';
   const historyLoading = historyState.status === 'idle' || historyState.status === 'loading';
@@ -147,7 +175,7 @@ export function SavedDecisionSections() {
                 <Button size="sm" variant="outline" onClick={refreshSavedDecisions}>Retry loading search history</Button>
               </Alert>}
               {history.length
-                ? <div className="divide-y divide-border/60">{history.map((entry) => <HistoryRow key={entry.id} entry={entry} />)}</div>
+                ? <div className="divide-y divide-border/60">{history.map((entry) => <HistoryRow key={entry.id} entry={entry} resumeSearch={resumeSearch} />)}</div>
                 : historyState.status === 'error'
                   ? null
                   : <p className="text-sm text-muted-foreground">No search history yet.</p>}
@@ -162,14 +190,14 @@ export function SavedDecisionSections() {
         {loading && <LoadingScene compact label="Loading saved searches…" />}
         {error && <Alert tone="warning" className="flex-col gap-2">
           {missingPlace
-            ? <p>No search was run; update or remove the unavailable place constraint.</p>
+            ? <p>No search was run. Use “Edit criteria / repair places” on the saved search below to remove unavailable places, review its filters and apply it again.</p>
             : <p>{error.message}</p>}
           {missingPlace && <p className="text-xs">{error.message}</p>}
           {!signedOut && <Button size="sm" variant="outline" onClick={refreshSavedDecisions}>Retry loading saved decisions</Button>}
         </Alert>}
         {!signedOut && !loading && savedSearches.length === 0 && savedSearchState.status !== 'error' && savedSearchState.status !== 'missing_place'
           && <p className="text-sm text-muted-foreground">No saved searches yet.</p>}
-        {savedSearches.map((search) => <SavedSearchRow key={search.id} search={search} state={savedSearchState} renameSavedSearch={renameSavedSearch} deleteSavedSearch={deleteSavedSearch} rerunSavedSearch={rerunSavedSearch} />)}
+        {savedSearches.map((search) => <SavedSearchRow key={search.id} search={search} state={savedSearchState} renameSavedSearch={renameSavedSearch} deleteSavedSearch={deleteSavedSearch} rerunSavedSearch={rerunSavedSearch} editSearch={editSearch} onApplied={onApplied} />)}
       </CardContent>
     </Card>
   </div>;

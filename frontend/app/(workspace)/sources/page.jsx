@@ -6,6 +6,8 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { ArrowUpRight, Database, MapPin } from 'lucide-react';
 import { DataStatus } from '@/components/data-status';
+import { sourceFreshness } from '@/components/evidence-helpers';
+import { Button } from '@/components/ui/button';
 
 const labels = {
   hdb_resale: 'HDB resale transactions', hdb_building: 'HDB building footprints', hdb_property: 'HDB property information',
@@ -22,11 +24,11 @@ function stateLabel(state) {
 function dateLabel(value) {
   if (!value) return 'Not reported by source';
   const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString();
+  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString('en-SG', { timeZone: 'Asia/Singapore', dateStyle: 'medium', timeStyle: 'short' }) + ' SGT';
 }
 
 export default function SourcesPage() {
-  const { sourceStatus, sourceState } = useWorkspace();
+  const { sourceStatus, sourceState, refreshSources } = useWorkspace();
   const sources = sourceStatus?.items || [];
   const imported = sources.filter((source) => ['valid', 'degraded'].includes(source.state)).length;
 
@@ -38,6 +40,8 @@ export default function SourcesPage() {
 
     <Alert><div className="flex gap-3"><MapPin className="mt-0.5 size-4 shrink-0 text-primary" /><div><p className="text-sm font-semibold">Why some access distances may still be blank</p><p className="mt-1 text-xs leading-5 text-muted-foreground">The source CSVs contain addresses rather than coordinates; verified OneMap points are attached in a separate step. A distance appears only when the corresponding current amenity snapshot also has a located record. Distances are straight-line estimates, not travel times or routes.</p></div></div></Alert>
 
+    <Button variant="outline" className="self-start" onClick={() => refreshSources()} disabled={sourceState?.status === 'loading'}>Retry source status</Button>
+    <p className="text-xs leading-6 text-muted-foreground">Retrieval only confirms that a snapshot was fetched; it does not confirm current service operations or vacancies. Review intervals below are HomeCompass review prompts, not official update guarantees. Unknown source dates stay unknown.</p>
     <DataStatus
       state={sourceState}
       hasData={sources.length > 0}
@@ -47,11 +51,12 @@ export default function SourcesPage() {
     />
 
     {sources.length > 0 && <div className="grid gap-3 md:grid-cols-2">
-      {sources.map((source) => <Card key={source.sourceId} className="overflow-hidden"><CardContent className="p-4 sm:p-5">
+      {sources.map((source) => { const freshness = sourceFreshness(source); return <Card key={source.sourceId} className="overflow-hidden"><CardContent className="p-4 sm:p-5">
         <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-display text-base font-semibold">{labels[source.resourceType] || source.resourceType}</p><p className="mt-1 truncate font-mono text-[10px] text-muted-foreground">{source.sourceId}</p></div><Badge variant={source.state === 'valid' ? 'secondary' : source.state === 'degraded' ? 'outline' : 'outline'} className="shrink-0">{stateLabel(source.state)}</Badge></div>
         <div className="mt-4 grid grid-cols-2 gap-3 text-xs"><div><p className="text-muted-foreground">Records</p><p className="mt-1 font-semibold">{source.rows?.toLocaleString?.() ?? '—'}{source.rejected ? <span className="font-normal text-muted-foreground"> · {source.rejected} rejected</span> : null}</p></div><div><p className="text-muted-foreground">Source updated</p><p className="mt-1 font-semibold">{dateLabel(source.sourceUpdatedAt || source.version)}</p></div><div className="col-span-2"><p className="text-muted-foreground">Retrieved locally</p><p className="mt-1 font-semibold">{dateLabel(source.retrievedAt)}</p></div></div>
+        <p className="mt-3 rounded-lg bg-muted/40 p-3 text-xs"><strong>{freshness.label}</strong>{freshness.ageDays != null && ` · ${freshness.ageDays} days since source date`}{freshness.thresholdDays != null && ` · review interval ${freshness.thresholdDays} days`}</p>
         <div className="mt-4 flex items-center justify-between border-t pt-3"><span className="text-[11px] text-muted-foreground">{source.state === 'valid' || source.state === 'degraded' ? 'Snapshot stored in the database' : source.resourceType === 'geocoding_and_routing' ? 'Not a data.gov.sg dataset' : 'Registered; not yet fetched'}</span>{source.url && <a href={source.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Official source <ArrowUpRight className="size-3.5" /></a>}</div>
-      </CardContent></Card>)}
+      </CardContent></Card>; })}
     </div>}
   </div>;
 }

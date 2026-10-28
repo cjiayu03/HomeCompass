@@ -153,16 +153,30 @@ async def create_local_session(
     user_id: UUID,
     token_hash: str,
     expires_at: datetime,
-) -> None:
+    verified_password_hash: str,
+) -> bool:
     pool = require_pool()
     async with pool.acquire() as connection:
-        await connection.execute(
-            """INSERT INTO local_auth_session (user_id, token_hash, expires_at)
-               VALUES ($1, $2, $3)""",
-            user_id,
-            token_hash,
-            expires_at,
-        )
+        async with connection.transaction():
+            # Recovery and password changes lock this same identity before
+            # revoking sessions. An in-progress old-password login must either
+            # insert before that revocation or fail this password recheck.
+            identity = await connection.fetchval(
+                """SELECT user_id FROM local_auth_identity
+                   WHERE user_id = $1 AND password_hash = $2 FOR UPDATE""",
+                user_id,
+                verified_password_hash,
+            )
+            if identity is None:
+                return False
+            await connection.execute(
+                """INSERT INTO local_auth_session (user_id, token_hash, expires_at)
+                   VALUES ($1, $2, $3)""",
+                user_id,
+                token_hash,
+                expires_at,
+            )
+    return True
 
 
 async def resolve_local_session(token_hash: str):
@@ -200,6 +214,14 @@ async def change_local_password(
     pool = require_pool()
     async with pool.acquire() as connection:
         async with connection.transaction():
+            identity = await connection.fetchval(
+                """SELECT user_id FROM local_auth_identity
+                   WHERE user_id = $1 AND password_hash = $2 FOR UPDATE""",
+                user_id,
+                current_hash,
+            )
+            if identity is None:
+                return False
             active_session = await connection.fetchval(
                 """SELECT id FROM local_auth_session
                    WHERE user_id = $1 AND id = $2
@@ -221,6 +243,7 @@ async def change_local_password(
             )
             if updated is None:
                 return False
+            await connection.execute("DELETE FROM password_recovery WHERE user_id = $1", user_id)
             await connection.execute(
                 """UPDATE local_auth_session SET revoked_at = now()
                    WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL""",
@@ -248,6 +271,7 @@ async def set_local_password_by_email(email: str, password_hash: str) -> bool:
                 user_id,
                 password_hash,
             )
+            await connection.execute("DELETE FROM password_recovery WHERE user_id = $1", user_id)
             await connection.execute(
                 """UPDATE local_auth_session SET revoked_at = now()
                    WHERE user_id = $1 AND revoked_at IS NULL""",

@@ -1,0 +1,11 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { DecisionBoard } from '../components/decision-board';
+const {state}=vi.hoisted(()=>({state:{decisions:{},photos:{},status:'local',ready:true,updateDecision:vi.fn(),addPhoto:vi.fn(),removePhoto:vi.fn()}}));
+vi.mock('../components/planning-provider',()=>({usePlanning:()=>state}));
+vi.mock('../components/evidence-context',()=>({EvidenceContext:()=>null}));
+afterEach(()=>{cleanup();state.updateDecision.mockClear();state.decisions={};});
+const home={id:'a',address:'Example home'};
+it('keeps Unicode checklist labels and independent stable IDs',()=>{render(<DecisionBoard homes={[home]}/>);fireEvent.change(screen.getByLabelText('New checklist item for Example home'),{target:{value:'看看 阳光 ☀️'}});fireEvent.click(screen.getByRole('button',{name:'Add check'}));const patch=state.updateDecision.mock.calls[0][1];const key=Object.keys(patch.checklistLabels)[0];expect(key).toMatch(/^custom-/);expect(patch.checklistLabels[key]).toBe('看看 阳光 ☀️');expect(patch.checklist[key]).toBe(false);});
+it('shows duplicate feedback and explicit photo guidance',()=>{state.decisions={a:{checklist:{'custom-uuid':false},checklistLabels:{'custom-uuid':'Air FLOW'}}};render(<DecisionBoard homes={[home]}/>);fireEvent.change(screen.getByLabelText('New checklist item for Example home'),{target:{value:'air flow'}});fireEvent.click(screen.getByRole('button',{name:'Add check'}));expect(screen.getByRole('alert')).toHaveTextContent('already');expect(state.updateDecision).not.toHaveBeenCalled();expect(screen.getByText(/JPG, PNG or WebP/)).toBeInTheDocument();});
+it('stores visit dates with Singapore offset',()=>{render(<DecisionBoard homes={[home]}/>);fireEvent.change(screen.getByLabelText('Visit date and time for Example home'),{target:{value:'2026-11-01T14:30'}});expect(state.updateDecision).toHaveBeenCalledWith('a',{visitDate:'2026-11-01T14:30+08:00'});});

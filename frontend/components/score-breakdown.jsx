@@ -1,7 +1,6 @@
 'use client';
 
 import { useId, useState } from 'react';
-import { scoreLabel } from '@/lib/utils';
 
 const criterionLabels = {
   school: 'School',
@@ -47,14 +46,12 @@ export function ScoreBreakdown({ score, scoreDetails, className = '' }) {
 
   return <section className={`rounded-xl border border-border/70 bg-background/35 p-3 ${className}`}>
     <button type="button" aria-expanded={expanded} aria-controls={evidenceId} onClick={() => setExpanded((current) => !current)} className="flex w-full cursor-pointer flex-col gap-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:flex-row sm:flex-wrap sm:items-baseline sm:justify-between">
-      <span className="font-display text-lg font-semibold text-foreground">{scoreText}</span>
-      {Number.isFinite(score) && <span className="text-xs font-medium text-primary">{scoreLabel(score)}</span>}
+      <span className="text-xs font-medium text-muted-foreground">Source score</span><span className="font-display text-lg font-semibold text-foreground">{scoreText}</span>
       <span className="text-xs text-muted-foreground">Coverage {coverage}</span>
-      <span className="text-xs text-muted-foreground">Policy {policyVersion}</span>
       <span className="sr-only">{expanded ? 'Hide' : 'View'} score evidence</span>
     </button>
     <div id={evidenceId} hidden={!expanded} className="mt-3 border-t border-border/70 pt-3">
-      <h4 className="text-xs font-semibold text-foreground">Score evidence</h4>
+      <h4 className="text-xs font-semibold text-foreground">Score evidence</h4><p className="mt-1 text-xs text-muted-foreground">Policy {policyVersion}</p>
       {components.length > 0 ? <ul aria-label="Score components" className="mt-2 space-y-2">
         {components.map((component, index) => {
           const name = component?.name;

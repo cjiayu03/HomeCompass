@@ -77,12 +77,12 @@ export function DataStatus({
       tone={tone}
       className={cn(
         'items-start justify-between gap-3',
-        compact ? 'px-2.5 py-2 text-[10px]' : 'px-3 py-2.5 text-xs',
+        compact ? 'px-3 py-2 text-xs' : 'px-3 py-2.5 text-xs',
         className,
       )}
     >
       <div className="min-w-0 flex-1">
-        {status === 'loading' || status === 'idle' ? <LoadingScene compact label={title} /> : <p className="font-semibold">{title}</p>}
+        {status === 'loading' || status === 'idle' ? <LoadingScene compact announce={false} label={title} /> : <p className="font-semibold">{title}</p>}
         {description && <p className="mt-0.5 leading-5 text-muted-foreground">{description}</p>}
         {showMetadata && retrievedAt && <p className="mt-1 text-muted-foreground">Retrieved at <time dateTime={retrievedAt}>{retrievedAt}</time></p>}
         {showMetadata && summary.length > 0 && <p className="mt-1 text-muted-foreground">Sources: {summary.join(', ')}</p>}

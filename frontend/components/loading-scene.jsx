@@ -1,5 +1,5 @@
-export function LoadingScene({ label = 'Getting things ready…', detail, compact = false }) {
-  return <span role="status" aria-live="polite" className={`loading-scene ${compact ? 'loading-scene-compact' : 'loading-scene-full'}`}>
+export function LoadingScene({ label = 'Getting things ready…', detail, compact = false, announce = true }) {
+  return <span role={announce ? "status" : undefined} aria-live={announce ? "polite" : undefined} className={`loading-scene ${compact ? 'loading-scene-compact' : 'loading-scene-full'}`}>
     <svg viewBox="0 0 96 96" aria-hidden="true" focusable="false" className="loading-compass">
       <circle cx="48" cy="48" r="39" fill="none" stroke="currentColor" strokeWidth="1" opacity=".15" />
       <circle className="loading-compass-orbit" cx="48" cy="48" r="39" pathLength="100" fill="none" stroke="currentColor" strokeWidth="3" strokeDasharray="24 76" strokeLinecap="round" />

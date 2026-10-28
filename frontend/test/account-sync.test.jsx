@@ -5,7 +5,7 @@ import { WorkspaceProvider, useWorkspace } from '../components/workspace-provide
 import { defaultBrief } from '../lib/data.js';
 import AccountPage from '../app/(workspace)/account/page.jsx';
 
-const { useAuthMock } = vi.hoisted(() => ({ useAuthMock: vi.fn(() => ({ client: null, user: null })) }));
+const { useAuthMock } = vi.hoisted(() => ({ useAuthMock: vi.fn(() => ({ user: null })) }));
 
 vi.mock('../components/auth-provider.jsx', () => ({ useAuth: useAuthMock }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: vi.fn() }) }));
@@ -49,16 +49,12 @@ const mergedResult = {
 };
 
 function authenticatedFetch({ shortlist = [], sync, shortlistMutation, aiInterpret, search } = {}) {
-  const client = {
-    auth: {
-      getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: 'test-token' } } }),
-    },
-  };
-  const auth = { client, user: { id: 'user-1', email: 'family@example.com' } };
+  const auth = { user: { id: 'user-1', email: 'family@example.com' } };
   useAuthMock.mockReturnValue(auth);
 
   const fetchMock = vi.fn(async (url, options = {}) => {
     const path = new URL(url, 'http://homecompass.test').pathname;
+    if (path === '/api/v1/auth/session') return json({ user: useAuthMock().user ?? null });
     if (path === '/api/v1/sync/guest') return sync ? sync(url, options) : json(mergedResult);
     if (path === '/api/v1/ai/interpret') return aiInterpret ? aiInterpret(url, options) : json({ filters: { query: 'interpreted' } });
     if (path === '/api/v1/search') return search ? search(url, options) : json({ items: [] });
@@ -125,7 +121,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   useAuthMock.mockReset();
-  useAuthMock.mockReturnValue({ client: null, user: null });
+  useAuthMock.mockReturnValue({ user: null });
 });
 
 describe('guest account synchronization', () => {
@@ -135,6 +131,7 @@ describe('guest account synchronization', () => {
       adults: 3,
       children: 2,
       budget: 690000,
+      requirements: { budget: true },
       priorityWeights: { school: 3, childcare: 1, care: 2, affordability: 0 },
     };
     const guestHistory = [{
@@ -152,7 +149,7 @@ describe('guest account synchronization', () => {
     }]));
     const fetchMock = authenticatedFetch({ shortlist: [homeB] });
     const signedInAuth = fetchMock.auth;
-    useAuthMock.mockReturnValue({ client: null, user: null });
+    useAuthMock.mockReturnValue({ user: null });
     const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     const state = readWorkspace;
 
@@ -168,7 +165,7 @@ describe('guest account synchronization', () => {
       brief: {
         adults: 3,
         children: 2,
-        olderAdults: 1,
+        olderAdults: guestBrief.olderAdults,
         budgetCents: 69000000,
         priorityWeights: guestBrief.priorityWeights,
       },
@@ -197,7 +194,7 @@ describe('guest account synchronization', () => {
       },
     });
     const signedInAuth = fetchMock.auth;
-    useAuthMock.mockReturnValue({ client: null, user: null });
+    useAuthMock.mockReturnValue({ user: null });
     const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     const state = readWorkspace;
     await waitFor(() => expect(JSON.parse(window.localStorage.getItem('homecompass.guest-sync-pending')).shortlistHomeIds).toEqual(['home-a']));
@@ -231,7 +228,7 @@ describe('guest account synchronization', () => {
       },
     });
     const signedInAuth = fetchMock.auth;
-    useAuthMock.mockReturnValue({ client: null, user: null });
+    useAuthMock.mockReturnValue({ user: null });
     const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     const state = readWorkspace;
     await waitFor(() => expect(JSON.parse(window.localStorage.getItem('homecompass.guest-sync-pending')).history).toEqual(history));
@@ -262,18 +259,17 @@ describe('guest account synchronization', () => {
     const history = [acceptedEntry, retryableEntry, acceptedEntry];
     const accountWorkspaceKey = (id) => `homecompass.account.${encodeURIComponent(id)}.workspace`;
     window.localStorage.setItem('search-history', JSON.stringify(history));
-    const clientFor = (token) => ({
-      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } } }) },
-    });
+    const userFor = (id) => ({ id, email: `${id}@example.com` });
     const syncPayloads = [];
     let accountAAttempts = 0;
     const fetchMock = vi.fn(async (url, options = {}) => {
       const path = new URL(url, 'http://homecompass.test').pathname;
-      if (path === '/api/v1/sync/guest') {
+      if (path === '/api/v1/auth/session') return json({ user: useAuthMock().user ?? null });
+    if (path === '/api/v1/sync/guest') {
         const payload = JSON.parse(options.body);
-        const token = options.headers.Authorization;
-        syncPayloads.push({ token, ...payload });
-        if (token === 'Bearer token-a' && accountAAttempts++ === 0) {
+        const ownerId = useAuthMock().user?.id ?? null;
+        syncPayloads.push({ ownerId, ...payload });
+        if (ownerId === 'user-a' && accountAAttempts++ === 0) {
           return json({
             accepted: { history: 1 },
             skipped: { history: 2, retryableHistoryIndexes: [1] },
@@ -296,41 +292,41 @@ describe('guest account synchronization', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    useAuthMock.mockReturnValue({ client: null, user: null });
+    useAuthMock.mockReturnValue({ user: null });
     const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     await waitFor(() => expect(JSON.parse(window.localStorage.getItem('homecompass.guest-sync-pending')).history).toEqual(history));
 
-    useAuthMock.mockReturnValue({ client: clientFor('token-a'), user: { id: 'user-a', email: 'a@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-a') });
     view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
-    await waitFor(() => expect(syncPayloads.some((payload) => payload.token === 'Bearer token-a')).toBe(true));
+    await waitFor(() => expect(syncPayloads.some((payload) => payload.ownerId === 'user-a')).toBe(true));
     await waitFor(() => expect(JSON.parse(window.localStorage.getItem(accountWorkspaceKey('user-a'))).pendingHistory).toEqual([retryableEntry]));
-    expect(syncPayloads.find((payload) => payload.token === 'Bearer token-a').history).toEqual(history);
+    expect(syncPayloads.find((payload) => payload.ownerId === 'user-a').history).toEqual(history);
     expect(readWorkspace().notice.text).toMatch(/2 items skipped/i);
     expect(window.localStorage.getItem('homecompass.guest-sync-pending')).toBeNull();
     expect(window.localStorage.getItem('search-history')).toBeNull();
 
-    useAuthMock.mockReturnValue({ client: null, user: null });
+    useAuthMock.mockReturnValue({ user: null });
     view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     await waitFor(() => expect(readWorkspace().syncState).toBe('local'));
 
-    useAuthMock.mockReturnValue({ client: clientFor('token-b'), user: { id: 'user-b', email: 'b@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-b') });
     view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
-    await waitFor(() => expect(syncPayloads.some((payload) => payload.token === 'Bearer token-b')).toBe(true));
-    expect(syncPayloads.find((payload) => payload.token === 'Bearer token-b').history).toEqual([]);
+    await waitFor(() => expect(syncPayloads.some((payload) => payload.ownerId === 'user-b')).toBe(true));
+    expect(syncPayloads.find((payload) => payload.ownerId === 'user-b').history).toEqual([]);
     expect(JSON.parse(window.localStorage.getItem(accountWorkspaceKey('user-a'))).pendingHistory).toEqual([retryableEntry]);
 
-    useAuthMock.mockReturnValue({ client: null, user: null });
+    useAuthMock.mockReturnValue({ user: null });
     view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     await waitFor(() => expect(readWorkspace().syncState).toBe('local'));
-    useAuthMock.mockReturnValue({ client: clientFor('token-a'), user: { id: 'user-a', email: 'a@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-a') });
     view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
-    await waitFor(() => expect(syncPayloads.filter((payload) => payload.token === 'Bearer token-a')).toHaveLength(2));
-    const accountARetry = syncPayloads.filter((payload) => payload.token === 'Bearer token-a')[1];
+    await waitFor(() => expect(syncPayloads.filter((payload) => payload.ownerId === 'user-a')).toHaveLength(2));
+    const accountARetry = syncPayloads.filter((payload) => payload.ownerId === 'user-a')[1];
     expect(accountARetry.history).toEqual([retryableEntry]);
     await waitFor(() => expect(JSON.parse(window.localStorage.getItem(accountWorkspaceKey('user-a'))).pendingHistory).toBeUndefined());
   });
 
-  it('sends the signed-in session token when interpreting a natural-language search', async () => {
+  it('uses cookie credentials when interpreting a signed-in natural-language search', async () => {
     let interpretationRequest;
     let searchRequest;
     authenticatedFetch({
@@ -347,11 +343,12 @@ describe('guest account synchronization', () => {
     await waitFor(() => expect(state().syncState).toBe('synced'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Search A query' }));
-    await waitFor(() => expect(searchRequest).not.toBeUndefined());
+    await waitFor(() => expect(searchRequest && JSON.parse(searchRequest.options.body).query).toBe('A query'));
 
-    expect(interpretationRequest.options.headers.Authorization).toBe('Bearer test-token');
+    expect(interpretationRequest.options.credentials).toBe('include');
+    expect(interpretationRequest.options.headers?.Authorization).toBeUndefined();
     expect(JSON.parse(interpretationRequest.options.body)).toEqual({ text: 'A query' });
-    expect(JSON.parse(searchRequest.options.body).query).toBe('Bishan');
+    expect(JSON.parse(searchRequest.options.body).query).toBe('A query');
   });
 
   it('shows sign-in-again guidance when signed-in AI interpretation returns AUTH_REQUIRED', async () => {
@@ -370,11 +367,14 @@ describe('guest account synchronization', () => {
     const state = renderWorkspace();
     await waitFor(() => expect(state().syncState).toBe('synced'));
 
+    await waitFor(() => expect(searches > 0 && !state().busy).toBe(true));
+    const initialSearches = searches;
     fireEvent.click(screen.getByRole('button', { name: 'Search A query' }));
     await waitFor(() => expect(state().notice?.text).toMatch(/session expired|sign in again/i));
 
-    expect(interpretationRequest.options.headers.Authorization).toBe('Bearer test-token');
-    expect(searches).toBe(0);
+    expect(interpretationRequest.options.credentials).toBe('include');
+    expect(interpretationRequest.options.headers?.Authorization).toBeUndefined();
+    expect(searches).toBe(initialSearches);
   });
 
   it('shows sign-in-again guidance for a signed-in AI HTTP 401 without an error code', async () => {
@@ -397,7 +397,7 @@ describe('guest account synchronization', () => {
         return json({ items: [] });
       },
     });
-    useAuthMock.mockReturnValue({ client: null, user: null });
+    useAuthMock.mockReturnValue({ user: null });
     const state = renderWorkspace();
 
     fireEvent.click(screen.getByRole('button', { name: 'Search A query' }));
@@ -415,9 +415,7 @@ describe('guest account synchronization', () => {
     window.localStorage.setItem(accountWorkspaceKey('user-b'), JSON.stringify({
       brief: { ...defaultBrief, adults: 7 }, shortlistIds: ['home-b'], compareIds: ['home-b'],
     }));
-    const clientFor = (token) => ({
-      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } } }) },
-    });
+    const userFor = (id) => ({ id, email: `${id}@example.com` });
     let resolveAShortlist;
     let aShortlistJsonStarted = false;
     const savedPlaceA = { id: 'place-a', label: 'A home', address: 'A address', latitude: 1.2, longitude: 103.8, kind: 'workplace' };
@@ -431,27 +429,28 @@ describe('guest account synchronization', () => {
     });
     const fetchMock = vi.fn(async (url, options = {}) => {
       const path = new URL(url, 'http://homecompass.test').pathname;
-      const token = options.headers?.Authorization;
-      if (path === '/api/v1/sync/guest') return json({ accepted: {}, skipped: {}, conflicts: [] });
+      const ownerId = useAuthMock().user?.id ?? null;
+      if (path === '/api/v1/auth/session') return json({ user: useAuthMock().user ?? null });
+    if (path === '/api/v1/sync/guest') return json({ accepted: {}, skipped: {}, conflicts: [] });
       if (path === '/api/v1/shortlists') {
-        if (token === 'Bearer token-a') {
+        if (ownerId === 'user-a') {
           return delayedJson(() => { aShortlistJsonStarted = true; }, (resolve) => { resolveAShortlist = resolve; });
         }
-        return json({ items: token === 'Bearer token-b' ? [homeB] : [] });
+        return json({ items: ownerId === 'user-b' ? [homeB] : [] });
       }
       if (path === '/api/v1/profile' && options.method === 'PUT') return json({});
       if (path === '/api/v1/profile') {
-        if (token === 'Bearer token-a') return json({ adults: 5, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights });
+        if (ownerId === 'user-a') return json({ adults: 5, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights });
         return json({ adults: 7, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights });
       }
-      if (path === '/api/v1/places') return json({ items: token === 'Bearer token-a' ? [savedPlaceA] : [savedPlaceB] });
+      if (path === '/api/v1/places') return json({ items: ownerId === 'user-a' ? [savedPlaceA] : [savedPlaceB] });
       if (path === '/api/v1/homes') return json({ items: [homeA, homeB] });
       if (path.startsWith('/api/v1/resources')) return json({ features: [] });
       if (path === '/api/v1/sources') return json({ items: [] });
       throw new Error(`Unexpected request: ${options.method || 'GET'} ${path}`);
     });
     vi.stubGlobal('fetch', fetchMock);
-    useAuthMock.mockReturnValue({ client: clientFor('token-a'), user: { id: 'user-a', email: 'a@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-a') });
     const snapshots = [];
     const view = render(<WorkspaceProvider><Probe snapshots={snapshots} /></WorkspaceProvider>);
     await waitFor(() => expect(aShortlistJsonStarted).toBe(true));
@@ -459,7 +458,7 @@ describe('guest account synchronization', () => {
     expect(readWorkspace()).toMatchObject({ briefAdults: 5, shortlistIds: ['home-a'], compareIds: ['home-a'] });
 
     const beforeSwitch = snapshots.length;
-    useAuthMock.mockReturnValue({ client: clientFor('token-b'), user: { id: 'user-b', email: 'b@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-b') });
     view.rerender(<WorkspaceProvider><Probe snapshots={snapshots} /></WorkspaceProvider>);
     expect(snapshots.slice(beforeSwitch)[0]).toMatchObject({
       briefAdults: defaultBrief.adults,
@@ -486,19 +485,18 @@ describe('guest account synchronization', () => {
     window.localStorage.setItem(accountWorkspaceKey('user-b'), JSON.stringify({
       brief: { ...defaultBrief, adults: 7 }, shortlistIds: ['home-b'], compareIds: [],
     }));
-    const clientFor = (token) => ({
-      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } } }) },
-    });
+    const userFor = (id) => ({ id, email: `${id}@example.com` });
     let homeLoads = 0;
     let resolveASearch;
     let aSearchStarted = false;
     const fetchMock = vi.fn(async (url, options = {}) => {
       const path = new URL(url, 'http://homecompass.test').pathname;
-      const token = options.headers?.Authorization;
-      if (path === '/api/v1/sync/guest') return json({ accepted: {}, skipped: {}, conflicts: [] });
-      if (path === '/api/v1/shortlists') return json({ items: token === 'Bearer token-a' ? [homeA] : token === 'Bearer token-b' ? [homeB] : [] });
+      const ownerId = useAuthMock().user?.id ?? null;
+      if (path === '/api/v1/auth/session') return json({ user: useAuthMock().user ?? null });
+    if (path === '/api/v1/sync/guest') return json({ accepted: {}, skipped: {}, conflicts: [] });
+      if (path === '/api/v1/shortlists') return json({ items: ownerId === 'user-a' ? [homeA] : ownerId === 'user-b' ? [homeB] : [] });
       if (path === '/api/v1/profile') return json({
-        adults: token === 'Bearer token-a' ? 5 : 7,
+        adults: ownerId === 'user-a' ? 5 : 7,
         children: 1,
         olderAdults: 0,
         budgetCents: 55000000,
@@ -513,6 +511,9 @@ describe('guest account synchronization', () => {
       }
       if (path === '/api/v1/ai/interpret') return json({ filters: { query: 'A query' } });
       if (path === '/api/v1/search') {
+        if(JSON.parse(options.body).query !== 'A query') return ownerId === 'user-a'
+          ? json({items:[homeA],total:60,nextCursor:'owner-a-next',hasMore:true,retrievedAt:'owner-a'})
+          : json({items:[homeB],total:1,nextCursor:null,hasMore:false,retrievedAt:'owner-b'});
         aSearchStarted = true;
         return new Promise((resolve) => { resolveASearch = resolve; });
       }
@@ -521,7 +522,7 @@ describe('guest account synchronization', () => {
       throw new Error(`Unexpected request: ${options.method || 'GET'} ${path}`);
     });
     vi.stubGlobal('fetch', fetchMock);
-    useAuthMock.mockReturnValue({ client: clientFor('token-a'), user: { id: 'user-a', email: 'a@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-a') });
     const snapshots = [];
     const view = render(<WorkspaceProvider><Probe snapshots={snapshots} /></WorkspaceProvider>);
     await waitFor(() => expect(readWorkspace()).toMatchObject({
@@ -535,7 +536,7 @@ describe('guest account synchronization', () => {
     await waitFor(() => expect(readWorkspace().query).toBe('A query'));
 
     const beforeSwitch = snapshots.length;
-    useAuthMock.mockReturnValue({ client: clientFor('token-b'), user: { id: 'user-b', email: 'b@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-b') });
     view.rerender(<WorkspaceProvider><Probe snapshots={snapshots} /></WorkspaceProvider>);
     expect(snapshots.slice(beforeSwitch)[0]).toMatchObject({
       homes: [],
@@ -571,18 +572,17 @@ describe('guest account synchronization', () => {
     window.localStorage.setItem(accountWorkspaceKey('user-b'), JSON.stringify({
       brief: { ...defaultBrief, adults: 7 }, shortlistIds: ['home-b'], compareIds: [],
     }));
-    const clientFor = (token) => ({
-      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } } }) },
-    });
+    const userFor = (id) => ({ id, email: `${id}@example.com` });
     let resolveAProfile;
     let aProfileJsonStarted = false;
     const fetchMock = vi.fn(async (url, options = {}) => {
       const path = new URL(url, 'http://homecompass.test').pathname;
-      const token = options.headers?.Authorization;
-      if (path === '/api/v1/sync/guest') return json({ accepted: {}, skipped: {}, conflicts: [] });
+      const ownerId = useAuthMock().user?.id ?? null;
+      if (path === '/api/v1/auth/session') return json({ user: useAuthMock().user ?? null });
+    if (path === '/api/v1/sync/guest') return json({ accepted: {}, skipped: {}, conflicts: [] });
       if (path === '/api/v1/shortlists') return { ok: false, json: async () => ({}) };
       if (path === '/api/v1/profile' && options.method === 'PUT') return json({});
-      if (path === '/api/v1/profile' && token === 'Bearer token-a') {
+      if (path === '/api/v1/profile' && ownerId === 'user-a') {
         return {
           ok: true,
           json: () => {
@@ -599,11 +599,11 @@ describe('guest account synchronization', () => {
       throw new Error(`Unexpected request: ${options.method || 'GET'} ${path}`);
     });
     vi.stubGlobal('fetch', fetchMock);
-    useAuthMock.mockReturnValue({ client: clientFor('token-a'), user: { id: 'user-a', email: 'a@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-a') });
     const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     await waitFor(() => expect(aProfileJsonStarted).toBe(true));
 
-    useAuthMock.mockReturnValue({ client: clientFor('token-b'), user: { id: 'user-b', email: 'b@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-b') });
     view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     await waitFor(() => expect(readWorkspace()).toMatchObject({ briefAdults: 7, shortlistIds: ['home-b'] }));
     await act(async () => resolveAProfile({ adults: 5, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights }));
@@ -620,22 +620,21 @@ describe('guest account synchronization', () => {
       brief: { ...defaultBrief, adults: 7 }, shortlistIds: ['home-b'], compareIds: [],
     }));
     window.localStorage.setItem('shortlist', JSON.stringify(['guest-home']));
-    const clientFor = (token) => ({
-      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } } }) },
-    });
+    const userFor = (id) => ({ id, email: `${id}@example.com` });
     let failAChange;
     const mutationCalls = [];
     const fetchMock = vi.fn((url, options = {}) => {
       const path = new URL(url, 'http://homecompass.test').pathname;
-      const token = options.headers?.Authorization;
-      if (path === '/api/v1/sync/guest') return Promise.resolve(json({ accepted: {}, skipped: {}, conflicts: [] }));
-      if (path === '/api/v1/shortlists' && (!options.method || options.method === 'GET')) return Promise.resolve(json({ items: token === 'Bearer token-a' ? [homeA] : [homeB] }));
+      const ownerId = useAuthMock().user?.id ?? null;
+      if (path === '/api/v1/auth/session') return json({ user: useAuthMock().user ?? null });
+    if (path === '/api/v1/sync/guest') return Promise.resolve(json({ accepted: {}, skipped: {}, conflicts: [] }));
+      if (path === '/api/v1/shortlists' && (!options.method || options.method === 'GET')) return Promise.resolve(json({ items: ownerId === 'user-a' ? [homeA] : [homeB] }));
       if (path.startsWith('/api/v1/shortlists') && options.method !== 'GET') {
-        mutationCalls.push({ path, token });
-        if (token === 'Bearer token-a') return new Promise((resolve) => { failAChange = resolve; });
+        mutationCalls.push({ path, ownerId });
+        if (ownerId === 'user-a') return new Promise((resolve) => { failAChange = resolve; });
         return Promise.resolve(json({}));
       }
-      if (path === '/api/v1/profile') return Promise.resolve(json({ adults: token === 'Bearer token-a' ? 5 : 7, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights }));
+      if (path === '/api/v1/profile') return Promise.resolve(json({ adults: ownerId === 'user-a' ? 5 : 7, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights }));
       if (path === '/api/v1/places') return Promise.resolve(json({ items: [] }));
       if (path === '/api/v1/homes') return Promise.resolve(json({ items: [homeA, homeB] }));
       if (path.startsWith('/api/v1/resources')) return Promise.resolve(json({ features: [] }));
@@ -643,7 +642,7 @@ describe('guest account synchronization', () => {
       throw new Error(`Unexpected request: ${options.method || 'GET'} ${path}`);
     });
     vi.stubGlobal('fetch', fetchMock);
-    useAuthMock.mockReturnValue({ client: clientFor('token-a'), user: { id: 'user-a', email: 'a@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-a') });
     const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     await waitFor(() => expect(readWorkspace().shortlistIds).toEqual(['home-a']));
 
@@ -651,14 +650,14 @@ describe('guest account synchronization', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Toggle home A' }));
     await waitFor(() => expect(mutationCalls).toHaveLength(1));
     await waitFor(() => expect(JSON.parse(window.localStorage.getItem(accountWorkspaceKey('user-a'))).shortlistIds).toEqual(['home-a', 'home-b']));
-    useAuthMock.mockReturnValue({ client: clientFor('token-b'), user: { id: 'user-b', email: 'b@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-b') });
     view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     await waitFor(() => expect(readWorkspace()).toMatchObject({ briefAdults: 7, shortlistIds: ['home-b'] }));
 
     await act(async () => failAChange(json({ detail: { code: 'UNAVAILABLE' } }, 503)));
     await waitFor(() => expect(readWorkspace()).toMatchObject({ briefAdults: 7, shortlistIds: ['home-b'] }));
     expect(mutationCalls).toHaveLength(1);
-    expect(mutationCalls[0].token).toBe('Bearer token-a');
+    expect(mutationCalls[0].ownerId).toBe('user-a');
     expect(JSON.parse(window.localStorage.getItem(accountWorkspaceKey('user-a'))).shortlistIds).toEqual(['home-a']);
     expect(JSON.parse(window.localStorage.getItem(accountWorkspaceKey('user-b'))).shortlistIds).toEqual(['home-b']);
     expect(window.localStorage.getItem('shortlist')).toBe(JSON.stringify(['guest-home']));
@@ -673,25 +672,24 @@ describe('guest account synchronization', () => {
       brief: { ...defaultBrief, adults: 7 }, shortlistIds: ['home-b'], compareIds: [],
     }));
     window.localStorage.setItem('shortlist', JSON.stringify(['guest-home']));
-    const clientFor = (token) => ({
-      auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } } }) },
-    });
+    const userFor = (id) => ({ id, email: `${id}@example.com` });
     let failAReorder;
     const mutationCalls = [];
     const fetchMock = vi.fn((url, options = {}) => {
       const path = new URL(url, 'http://homecompass.test').pathname;
-      const token = options.headers?.Authorization;
-      if (path === '/api/v1/sync/guest') return Promise.resolve(json({ accepted: {}, skipped: {}, conflicts: [] }));
+      const ownerId = useAuthMock().user?.id ?? null;
+      if (path === '/api/v1/auth/session') return json({ user: useAuthMock().user ?? null });
+    if (path === '/api/v1/sync/guest') return Promise.resolve(json({ accepted: {}, skipped: {}, conflicts: [] }));
       if (path === '/api/v1/shortlists' && (!options.method || options.method === 'GET')) {
-        return Promise.resolve(json({ items: token === 'Bearer token-a' ? [homeA, homeB] : token === 'Bearer token-b' ? [homeB] : [] }));
+        return Promise.resolve(json({ items: ownerId === 'user-a' ? [homeA, homeB] : ownerId === 'user-b' ? [homeB] : [] }));
       }
       if (path.startsWith('/api/v1/shortlists') && options.method !== 'GET') {
-        mutationCalls.push({ path, token });
-        if (token === 'Bearer token-a') return new Promise((resolve) => { failAReorder = resolve; });
+        mutationCalls.push({ path, ownerId });
+        if (ownerId === 'user-a') return new Promise((resolve) => { failAReorder = resolve; });
         return Promise.resolve(json({}));
       }
       if (path === '/api/v1/profile') return Promise.resolve(json({
-        adults: token === 'Bearer token-a' ? 5 : 7,
+        adults: ownerId === 'user-a' ? 5 : 7,
         children: 1,
         olderAdults: 0,
         budgetCents: 55000000,
@@ -704,21 +702,21 @@ describe('guest account synchronization', () => {
       throw new Error(`Unexpected request: ${options.method || 'GET'} ${path}`);
     });
     vi.stubGlobal('fetch', fetchMock);
-    useAuthMock.mockReturnValue({ client: clientFor('token-a'), user: { id: 'user-a', email: 'a@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-a') });
     const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     await waitFor(() => expect(readWorkspace().shortlistIds).toEqual(['home-a', 'home-b']));
 
     fireEvent.click(screen.getByRole('button', { name: 'Move home B up' }));
     await waitFor(() => expect(mutationCalls).toHaveLength(1));
     await waitFor(() => expect(JSON.parse(window.localStorage.getItem(accountWorkspaceKey('user-a'))).shortlistIds).toEqual(['home-b', 'home-a']));
-    useAuthMock.mockReturnValue({ client: clientFor('token-b'), user: { id: 'user-b', email: 'b@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-b') });
     view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     await waitFor(() => expect(readWorkspace()).toMatchObject({ briefAdults: 7, shortlistIds: ['home-b'] }));
 
     await act(async () => failAReorder(json({ detail: { code: 'UNAVAILABLE' } }, 503)));
     expect(readWorkspace()).toMatchObject({ briefAdults: 7, shortlistIds: ['home-b'] });
     expect(mutationCalls).toHaveLength(1);
-    expect(mutationCalls[0]).toMatchObject({ path: '/api/v1/shortlists/order', token: 'Bearer token-a' });
+    expect(mutationCalls[0]).toMatchObject({ path: '/api/v1/shortlists/order', ownerId: 'user-a' });
     expect(JSON.parse(window.localStorage.getItem(accountWorkspaceKey('user-a'))).shortlistIds).toEqual(['home-a', 'home-b']);
     expect(JSON.parse(window.localStorage.getItem(accountWorkspaceKey('user-b'))).shortlistIds).toEqual(['home-b']);
     expect(window.localStorage.getItem('shortlist')).toBe(JSON.stringify(['guest-home']));
@@ -732,7 +730,8 @@ describe('guest account synchronization', () => {
     }));
     let syncAttempts = 0;
     const fetchMock = vi.fn(async (path, options = {}) => {
-      if (path === '/api/v1/sync/guest') {
+      if (path === '/api/v1/auth/session') return json({ user: useAuthMock().user ?? null });
+    if (path === '/api/v1/sync/guest') {
         syncAttempts += 1;
         return json(syncAttempts === 1
           ? { accepted: { history: 0 }, skipped: { history: 1, retryableHistoryIndexes: [0] }, conflicts: [] }
@@ -748,7 +747,6 @@ describe('guest account synchronization', () => {
       throw new Error(`Unexpected request: ${options.method || 'GET'} ${path}`);
     });
     useAuthMock.mockReturnValue({
-      client: { auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: 'test-token' } } }) } },
       user: { id: 'user-1', email: 'family@example.com' },
       configured: true,
     });
@@ -769,7 +767,7 @@ describe('guest account synchronization', () => {
   it('refreshes an existing guest snapshot when more local choices are made before sign-in', async () => {
     window.localStorage.setItem('shortlist', JSON.stringify(['home-a']));
     const fetchMock = authenticatedFetch();
-    useAuthMock.mockReturnValue({ client: null, user: null });
+    useAuthMock.mockReturnValue({ user: null });
     const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     const state = readWorkspace;
 
@@ -778,7 +776,6 @@ describe('guest account synchronization', () => {
     await waitFor(() => expect(state().shortlistIds).toEqual(['home-a', 'home-b']));
 
     useAuthMock.mockReturnValue({
-      client: { auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: 'test-token' } } }) } },
       user: { id: 'user-1', email: 'family@example.com' },
     });
     view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
@@ -792,7 +789,8 @@ describe('guest account synchronization', () => {
     const fetchMock = authenticatedFetch();
     fetchMock.mockImplementation(async (url, options = {}) => {
       const path = new URL(url, 'http://homecompass.test').pathname;
-      if (path === '/api/v1/sync/guest') return json(mergedResult);
+      if (path === '/api/v1/auth/session') return json({ user: useAuthMock().user ?? null });
+    if (path === '/api/v1/sync/guest') return json(mergedResult);
       if (path === '/api/v1/shortlists') return json({ items: [] });
       if (path === '/api/v1/profile' && options.method === 'PUT') return json({});
       if (path === '/api/v1/profile') return json({ adults: 5, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights });
@@ -819,18 +817,19 @@ describe('guest account synchronization', () => {
       shortlistIds: ['home-a'],
       compareIds: ['home-a'],
     }));
-    const clientFor = (token) => ({ auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: token } } }) } });
-    useAuthMock.mockReturnValue({ client: clientFor('token-a'), user: { id: 'user-a', email: 'a@example.com' } });
+    const userFor = (id) => ({ id, email: `${id}@example.com` });
+    useAuthMock.mockReturnValue({ user: userFor('user-a') });
     const syncPayloads = [];
     const fetchMock = vi.fn(async (url, options = {}) => {
       const path = new URL(url, 'http://homecompass.test').pathname;
-      const token = options.headers?.Authorization;
-      if (path === '/api/v1/sync/guest') {
-        syncPayloads.push({ token, ...JSON.parse(options.body) });
+      const ownerId = useAuthMock().user?.id ?? null;
+      if (path === '/api/v1/auth/session') return json({ user: useAuthMock().user ?? null });
+    if (path === '/api/v1/sync/guest') {
+        syncPayloads.push({ ownerId, ...JSON.parse(options.body) });
         return json({ accepted: {}, skipped: {}, conflicts: [] });
       }
-      if (path === '/api/v1/shortlists') return json({ items: token === 'Bearer token-a' ? [homeA] : [homeB] });
-      if (path === '/api/v1/profile') return json({ adults: token === 'Bearer token-a' ? 5 : 7, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights });
+      if (path === '/api/v1/shortlists') return json({ items: ownerId === 'user-a' ? [homeA] : [homeB] });
+      if (path === '/api/v1/profile') return json({ adults: ownerId === 'user-a' ? 5 : 7, children: 1, olderAdults: 0, budgetCents: 55000000, priorityWeights: defaultBrief.priorityWeights });
       if (path === '/api/v1/places') return json({ items: [] });
       if (path === '/api/v1/homes') return json({ items: [homeA, homeB] });
       if (path.startsWith('/api/v1/resources')) return json({ features: [] });
@@ -850,18 +849,18 @@ describe('guest account synchronization', () => {
     expect(window.localStorage.getItem('shortlist')).not.toBe(JSON.stringify(['home-a']));
 
     view.unmount();
-    useAuthMock.mockReturnValue({ client: null, user: null });
+    useAuthMock.mockReturnValue({ user: null });
     const guestState = renderWorkspace();
     await waitFor(() => expect(window.localStorage.getItem('shortlist')).toBe('[]'));
     expect(guestState().shortlistIds).toEqual([]);
     expect(guestState().compareIds).toEqual([]);
     expect(guestState().briefAdults).toBe(defaultBrief.adults);
 
-    useAuthMock.mockReturnValue({ client: clientFor('token-b'), user: { id: 'user-b', email: 'b@example.com' } });
+    useAuthMock.mockReturnValue({ user: userFor('user-b') });
     cleanup();
     const accountBView = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     await waitFor(() => expect(state().shortlistIds).toEqual(['home-b']));
-    const accountBSync = syncPayloads.find((payload) => payload.token === 'Bearer token-b');
+    const accountBSync = syncPayloads.find((payload) => payload.ownerId === 'user-b');
     expect(accountBSync).toMatchObject({ brief: null, shortlistHomeIds: [], compareHomeIds: [] });
     expect(accountBSync.brief?.adults).not.toBe(5);
     expect(accountBSync.shortlistHomeIds).not.toContain('home-a');
@@ -1002,7 +1001,7 @@ describe('guest account synchronization', () => {
       },
     });
     const signedInAuth = fetchMock.auth;
-    useAuthMock.mockReturnValue({ client: null, user: null });
+    useAuthMock.mockReturnValue({ user: null });
     const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
     const state = readWorkspace;
     await waitFor(() => expect(JSON.parse(window.localStorage.getItem('homecompass.guest-sync-pending')).places).toHaveLength(1));
@@ -1020,7 +1019,7 @@ describe('guest account synchronization', () => {
       const confirmedPayload = JSON.parse(requests[1][1].body);
       expect(confirmedPayload.confirmPlaces).toBe(true);
       expect(confirmedPayload.places).toEqual([{
-        label: 'Work', address: '1 Harbour Road', latitude: 1.29, longitude: 103.85,
+        label: 'Work', address: '1 Harbour Road', latitude: 1.29, longitude: 103.85, kind:'other', maximumDistanceM:null,
       }]);
       expect(confirmedPayload.sync_key).not.toBe(JSON.parse(requests[0][1].body).sync_key);
     });

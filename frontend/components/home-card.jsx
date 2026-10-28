@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { MagicCard } from '@/components/ui/magic-card';
 import { EvidenceContext } from '@/components/evidence-context';
 import { PlaceDistanceList } from '@/components/place-picker';
-import { MatchReasons } from '@/components/search-workbench';
+import { candidateReasons } from '@/components/evidence-helpers';
 import { useWorkspace } from '@/components/workspace-provider';
 
 function AccessTile({ icon: Icon, label, value }) {
@@ -20,9 +20,10 @@ function AccessTile({ icon: Icon, label, value }) {
 
 export function HomeCard({ home, saved, selected, mapActive = false, onLocate, onSave, onCompare, onInspect, compact = false, variant = 'default', entranceDelay = 0 }) {
   const reduceMotion = useReducedMotion();
-  const { brief, setHoveredHome } = useWorkspace();
+  const { brief, appliedBrief, setHoveredHome } = useWorkspace();
+  const reasons = candidateReasons(home, appliedBrief || brief || {});
+  const matchEvidence = <div className="mt-3 space-y-2 text-xs leading-5"><ul aria-label="Evidence-backed matches" className="space-y-1">{reasons.matches.map(reason => <li key={reason}>✓ {reason}</li>)}</ul><p className="text-muted-foreground"><span className="font-medium text-foreground">To check:</span> {reasons.tradeoff}</p></div>;
   if (variant === 'browse') {
-    const historical = home.sourceSemantics === 'historical_transaction';
     return <article
       className="browse-home-card border bg-card p-4"
       data-selected={selected}
@@ -41,19 +42,16 @@ export function HomeCard({ home, saved, selected, mapActive = false, onLocate, o
           <div className="min-w-0"><p className="text-sm text-muted-foreground">{home.town} · {String(home.type || '').replace(/ROOM/g, 'room')}</p>
           <h3 className="mt-1 break-words font-display text-lg font-semibold leading-6">{onLocate ? <button className="min-h-11 text-left underline-offset-4 hover:text-primary hover:underline" aria-label={`Show ${home.address} on map`} aria-pressed={mapActive} onClick={() => onLocate(home)}>{home.address}</button> : home.address}</h3></div>
         </div>
-        <Button variant={saved ? 'soft' : 'ghost'} className="-mr-1 -mt-1 h-11 shrink-0 px-2 text-sm" aria-label={saved ? `Remove ${home.address} from shortlist` : `Save ${home.address} to shortlist`} aria-pressed={saved} onClick={() => onSave(home)}><Bookmark className={`size-4 ${saved ? 'fill-current' : ''}`} /><span>{saved ? 'Saved' : 'Save'}</span></Button>
+        <Button variant={saved ? 'soft' : 'ghost'} className="-mr-1 -mt-1 h-11 shrink-0 px-2 text-sm" aria-label={saved ? `Remove ${home.address} from shortlist` : `Save ${home.address} to shortlist`} aria-pressed={saved} onClick={() => onSave(home)}><Bookmark className={`size-4 ${saved ? 'fill-current' : ''}`} /><span>{saved ? 'Remove' : 'Save'}</span></Button>
       </div>
-      <p className="mt-3 font-display text-2xl font-semibold tracking-tight">{money(home.price)}<span className="ml-2 text-xs font-normal tracking-normal text-muted-foreground">recorded price</span></p>
+      <p className="mt-3 font-display text-2xl font-semibold tracking-tight">{money(home.price)}<span className="ml-2 text-xs font-normal tracking-normal text-muted-foreground">recorded {home.observedOn || home.transactionDate || '(date unavailable)'}</span></p>
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
         {home.floorAreaSqm != null && <span>{home.floorAreaSqm} m²</span>}
         {home.storeyRange && <span>Storeys {home.storeyRange}</span>}
         {home.remainingLeaseYears != null && <span>≈ {home.remainingLeaseYears} years lease</span>}
       </div>
-      <div className="mt-3 border-t pt-2 text-xs leading-[18px] text-muted-foreground">
-        <p>{historical ? 'Historical transaction · not a current listing' : 'Illustrative sample · not verified data'}</p>
-        <p className="mt-0.5 break-words">{home.source?.split(' · ')[0] || 'Source unavailable'} · Source date: {home.sourceUpdated || 'unavailable'}</p>
-        {home.observedOn && <p>Transaction: {home.observedOn}</p>}
-      </div>
+      {matchEvidence}
+      <EvidenceContext home={home} className="mt-3" />
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <Button variant="soft" className="h-11 px-4 text-sm" onClick={() => onInspect(home)}>Details <ArrowUpRight className="size-4" /></Button>
         <Button variant={selected ? 'soft' : 'outline'} className="h-11 px-4 text-sm" onClick={() => onCompare(home)} aria-pressed={selected}>{selected ? <Check className="size-4" /> : <Scale className="size-4" />}{selected ? 'Selected' : 'Compare'}</Button>
@@ -87,13 +85,13 @@ export function HomeCard({ home, saved, selected, mapActive = false, onLocate, o
           <div className="min-w-0">
             <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><Badge variant="secondary">{home.town}</Badge><span className="rounded-md border border-border/70 bg-background/35 px-2 py-1">{home.type}</span></div>
             <h3 className="font-display text-lg font-semibold tracking-tight text-foreground sm:text-xl">{home.address}</h3>
-            <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1"><span className="font-display text-2xl font-semibold tracking-tight text-foreground">{money(home.price)}</span></div>
+            <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1"><span className="font-display text-2xl font-semibold tracking-tight text-foreground">{money(home.price)}</span><span className="text-xs text-muted-foreground">recorded {home.observedOn || home.transactionDate || '(date unavailable)'}</span></div>
           </div>
         </div>
 
         <EvidenceContext home={home} className="mt-4 w-full" />
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">{home.floorAreaSqm!=null&&<span>{home.floorAreaSqm} m²</span>}{home.storeyRange&&<span>Storeys {home.storeyRange}</span>}{home.remainingLeaseYears!=null&&<span>Lease ≈ {home.remainingLeaseYears} years</span>}{home.pricePerSqm!=null&&<span>{money(home.pricePerSqm)} / m²</span>}</div>
-        {!compact && <div className="mt-3"><MatchReasons home={home} brief={brief}/></div>}
+        {matchEvidence}
         {Array.isArray(home.placeDistances) && home.placeDistances.length > 0 && <div className="mt-4"><PlaceDistanceList distances={home.placeDistances} /></div>}
 
         {!compact && <div className="mt-4"><div className="mb-2 flex items-center justify-between text-[10px] font-medium text-muted-foreground"><span>Household access</span><span>{home.distance || 'Distance unavailable'} to a key amenity</span></div><div className="grid grid-cols-1 gap-2 sm:grid-cols-3">

@@ -10,17 +10,18 @@ export const homes = [
 
 export const defaultBrief = {
   adults: 2,
-  children: 1,
-  olderAdults: 1,
-  budget: 550000,
+  children: 0,
+  olderAdults: 0,
+  budget: null,
   preferredTowns: [],
   preferredFlatType: null,
-  schoolDistance: 1000,
+  schoolDistance: null,
   childcareDistance: null,
-  careDistance: 1200,
-  pinLabel: 'Workplace',
-  pinLocation: 'Raffles Place',
-  priorityWeights: { school: 2, childcare: 2, care: 2, affordability: 1 },
+  careDistance: null,
+  pinLabel: '',
+  pinLocation: '',
+  requirements: { budget: false },
+  priorityWeights: { school: 1, childcare: 1, care: 1, affordability: 1 },
 };
 
 export const navigation = [
@@ -40,10 +41,10 @@ export function filterHomes(source, query, brief) {
     ? brief.preferredFlatType.toLocaleUpperCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim()
     : '';
   return source.filter((home) => {
-    const matchesQuery = !q || `${home.address} ${home.town} ${home.school} ${home.childcare} ${home.care} ${home.highlights.join(' ')}`.toLowerCase().includes(q) || /school|child|care|clinic|quiet|elder/.test(q);
+    const matchesQuery = !q || `${home.address} ${home.town} ${home.school} ${home.childcare} ${home.care} ${(home.highlights || []).join(' ')}`.toLowerCase().includes(q) || /school|child|care|clinic|quiet|elder/.test(q);
     const matchesTown = brief.requirements?.towns===false || !preferredTowns.length || preferredTowns.includes(String(home.town || '').toLocaleLowerCase());
     const homeFlatType = String(home.type || '').toLocaleUpperCase().replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
     const matchesFlatType = brief.requirements?.flatType===false || !preferredFlatType || homeFlatType === preferredFlatType;
-    return matchesQuery && matchesTown && matchesFlatType && (brief.requirements?.budget===false || home.price <= Number(brief.budget || Infinity));
+    return matchesQuery && matchesTown && matchesFlatType && (brief.requirements?.budget===false || (brief.budget == null || brief.budget === '' || (home.price != null && home.price <= Number(brief.budget))));
   });
 }

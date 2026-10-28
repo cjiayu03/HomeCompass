@@ -45,11 +45,8 @@ export function AuthProvider({ children }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    try {
-      await requestJson('/api/v1/auth/logout', { method: 'POST' });
-    } finally {
-      setUser(null);
-    }
+    await requestJson('/api/v1/auth/logout', { method: 'POST' });
+    setUser(null);
   }, []);
 
   const value = useMemo(() => ({ user, loading, signIn, signUp, signOut, refreshSession }), [user, loading, signIn, signUp, signOut, refreshSession]);

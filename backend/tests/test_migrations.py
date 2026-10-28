@@ -20,6 +20,8 @@ EXPECTED_MIGRATIONS = [
     (8, "008_local_auth.sql"),
     (9, "009_onboarding_profile.sql"),
     (10, "010_planning_workspace.sql"),
+    (11, "011_password_recovery.sql"),
+    (12, "012_town_preferences.sql"),
 ]
 
 

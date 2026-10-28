@@ -26,19 +26,51 @@ export function storeyOverlap(value, min, max) {
 }
 
 export function storeyRangeValidationError(brief) {
-  const values = [brief.minStorey, brief.maxStorey].map(value => value === '' || value == null ? null : Number(value));
+  const values = [brief.minStorey, brief.maxStorey].map(value => value === '' || value == null ? null : !['number', 'string'].includes(typeof value) || (typeof value === 'string' && !value.trim()) ? NaN : Number(value));
   if (values.some(value => value != null && (!Number.isInteger(value) || value < 1 || value > 100))) return 'Enter whole storeys from 1 to 100.';
   if (values[0] != null && values[1] != null && values[0] > values[1]) return 'Minimum storey cannot exceed maximum storey.';
+  return null;
+}
+
+// Validate every entered value before any request or local filtering.
+export function briefValidationError(brief) {
+  const present = value => value !== '' && value != null;
+  for (const [key, label, min, max, integer] of [
+    ['budget', 'Budget', 0, 10_000_000, true],
+    ['adults', 'Adults', 1, 30, true], ['children', 'Children', 0, 30, true], ['olderAdults', 'Older adults', 0, 30, true],
+    ['schoolDistance', 'School distance', 0, 100_000, true], ['childcareDistance', 'Childcare distance', 0, 100_000, true], ['careDistance', 'Care distance', 0, 100_000, true],
+    ['minFloorArea', 'Minimum floor area', 0, 1000, false], ['maxFloorArea', 'Maximum floor area', 0, 1000, false],
+    ['minLease', 'Minimum lease', 0, 99, true], ['maxPricePerSqm', 'Maximum price per square metre', 0, 1_000_000, false],
+  ]) {
+    if (!present(brief[key])) continue;
+    const value = Number(brief[key]);
+    if (!['number', 'string'].includes(typeof brief[key]) || (typeof brief[key] === 'string' && !brief[key].trim()) || !Number.isFinite(value) || value < min || value > max || (integer && !Number.isInteger(value))) {
+      return `${label} must be ${integer ? 'a whole number' : 'a number'} from ${min} to ${max.toLocaleString()}.`;
+    }
+  }
+  const storeyError = storeyRangeValidationError(brief);
+  if (storeyError) return storeyError;
+  if (present(brief.minFloorArea) && present(brief.maxFloorArea) && Number(brief.minFloorArea) > Number(brief.maxFloorArea)) return 'Minimum floor area cannot exceed maximum floor area.';
+  if (present(brief.observedAfter)) {
+    const value = String(brief.observedAfter);
+    const parsed = new Date(`${value}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) return 'Enter a valid transaction date.';
+  }
+  if (brief.preferredTowns && (!Array.isArray(brief.preferredTowns) || brief.preferredTowns.length > 30 || brief.preferredTowns.some(town => typeof town !== 'string' || !town.trim() || town.length > 80))) return 'Choose up to 30 valid towns.';
+  if (brief.preferredFlatType != null && (typeof brief.preferredFlatType !== 'string' || brief.preferredFlatType.length > 40)) return 'Choose a valid flat type.';
+  if (brief.priorityWeights != null && (Object.keys(brief.priorityWeights).length !== 4 || ['school', 'childcare', 'care', 'affordability'].some(key => typeof brief.priorityWeights[key] !== 'number' || !Number.isFinite(brief.priorityWeights[key]) || brief.priorityWeights[key] < 0 || brief.priorityWeights[key] > 3))) return 'Priority weights must be numbers from 0 to 3.';
+  const constraints = brief.placeConstraints || [];
+  if (!Array.isArray(constraints) || constraints.length > 10 || constraints.some(c => typeof c?.placeId !== 'string' || !c.placeId || c.maxDistanceM == null || c.maxDistanceM === '' || !['number', 'string'].includes(typeof c.maxDistanceM) || !Number.isInteger(Number(c.maxDistanceM)) || Number(c.maxDistanceM) < 0 || Number(c.maxDistanceM) > 100_000) || new Set(constraints.map(c => c.placeId)).size !== constraints.length) return 'Choose unique places and whole maximum distances from 0 to 100,000 metres.';
   return null;
 }
 
 export function buildCriteria(brief) {
   const hard = key => brief.requirements?.[key] !== false;
   const criteria = {};
-  if (hard('budget')) criteria.budget = brief.budget;
+  if (hard('budget') && brief.budget !== '' && brief.budget != null) criteria.budget = Number(brief.budget);
   if (hard('towns') && brief.preferredTowns?.length) criteria.towns = brief.preferredTowns;
   if (hard('flatType') && brief.preferredFlatType) criteria.flat_type = brief.preferredFlatType;
-  for(const [key,api] of [['schoolDistance','max_school_distance_m'],['childcareDistance','max_childcare_distance_m'],['careDistance','max_care_distance_m']]) if(hard(key)&&Number.isInteger(brief[key])) criteria[api]=brief[key];
+  for(const [key,api] of [['schoolDistance','max_school_distance_m'],['childcareDistance','max_childcare_distance_m'],['careDistance','max_care_distance_m']]) if(hard(key)&&brief[key]!==''&&brief[key]!=null&&Number.isInteger(Number(brief[key]))) criteria[api]=Number(brief[key]);
   for(const [key,[api]] of Object.entries(advancedFields)) if(hard(key) && brief[key]!=='' && brief[key]!=null) criteria[api]=key==='observedAfter' ? brief[key] : Number(brief[key]);
   return criteria;
 }
@@ -143,11 +175,12 @@ export function previewRank(home, brief, weights, areaRange) {
 
 export function applyLocalRequirements(homes, brief) {
   return homes.filter(home => {
-    const n=(key)=>brief.requirements?.[key]===false ? 0 : Number(brief[key])||0;
-    if (n('minFloorArea') && !(home.floorAreaSqm >= n('minFloorArea'))) return false;
-    if (n('maxFloorArea') && !(home.floorAreaSqm != null && home.floorAreaSqm <= n('maxFloorArea'))) return false;
-    if (n('minLease') && !(home.remainingLeaseYears >= n('minLease'))) return false;
-    if (n('maxPricePerSqm') && !(home.pricePerSqm != null && home.pricePerSqm <= n('maxPricePerSqm'))) return false;
+    const active = key => brief.requirements?.[key] !== false && brief[key] !== '' && brief[key] != null;
+    const n = key => active(key) ? Number(brief[key]) : null;
+    if (active('minFloorArea') && !(home.floorAreaSqm != null && home.floorAreaSqm >= n('minFloorArea'))) return false;
+    if (active('maxFloorArea') && !(home.floorAreaSqm != null && home.floorAreaSqm <= n('maxFloorArea'))) return false;
+    if (active('minLease') && !(home.remainingLeaseYears != null && home.remainingLeaseYears >= n('minLease'))) return false;
+    if (active('maxPricePerSqm') && !(home.pricePerSqm != null && home.pricePerSqm <= n('maxPricePerSqm'))) return false;
     const minStorey = n('minStorey') || null, maxStorey = n('maxStorey') || null;
     if ((minStorey != null || maxStorey != null) && storeyOverlap(home.storeyRange, minStorey, maxStorey) !== true) return false;
     if(brief.requirements?.observedAfter!==false && brief.observedAfter && !(home.observedOn && home.observedOn>=brief.observedAfter)) return false;

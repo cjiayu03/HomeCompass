@@ -11,7 +11,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useWorkspace } from '@/components/workspace-provider';
-import { EvidenceContext } from '@/components/evidence-context';
+import { CandidateDetails } from '@/components/candidate-details';
+import { useAuth } from '@/components/auth-provider';
 import { money } from '@/lib/utils';
 
 const DecisionBoard = dynamic(() => import('@/components/decision-board').then(module => module.DecisionBoard), {
@@ -19,7 +20,8 @@ const DecisionBoard = dynamic(() => import('@/components/decision-board').then(m
 });
 
 export default function ShortlistPage() {
-  const { shortlistHomes, shortlistIds, selectedHomes, toggleShortlist, reorderShortlist, toggleCompare } = useWorkspace();
+  const { shortlistHomes, shortlistIds, selectedHomes, toggleShortlist, ensureSaved, reorderShortlist, toggleCompare, brief } = useWorkspace();
+  const { user } = useAuth();
   const [sort, setSort] = useState('manual');
   const [view, setView] = useState('cards');
   const [detail, setDetail] = useState(null);
@@ -38,8 +40,8 @@ export default function ShortlistPage() {
     <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
       <div>
         <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-muted-foreground"><Bookmark className="size-3.5 text-primary" />Saved places</div>
-        <h1 className="font-display text-4xl font-semibold tracking-[-0.04em] sm:text-5xl">Keep the places worth a conversation.</h1>
-        <p className="mt-3 max-w-2xl text-base leading-7 text-muted-foreground">Saved places stay in this browser until you connect an account.</p>
+        <h1 className="font-display text-4xl font-semibold tracking-[-0.04em] sm:text-5xl">Your household decision plans.</h1>
+        <p className="mt-3 max-w-2xl text-base leading-7 text-muted-foreground">{user ? 'Saved records sync with your account. Photos remain in this browser.' : 'Saved records and notes stay in this browser. Sign in to sync records and notes.'}</p>
       </div>
       <Button asChild variant="outline"><Link href="/explore">Explore more <ArrowRight className="size-4" /></Link></Button>
     </div>
@@ -84,12 +86,12 @@ export default function ShortlistPage() {
       <Button asChild className="mt-6"><Link href="/explore">Explore places <ArrowRight className="size-4" /></Link></Button>
     </CardContent></Card>}
 
-    <p className="flex items-center justify-center gap-2 text-xs text-muted-foreground"><MapPin className="size-3.5 text-primary" />Saved locally in this browser until you sign in.</p>
+    <p className="flex items-center justify-center gap-2 text-xs text-muted-foreground"><MapPin className="size-3.5 text-primary" />{user ? 'Account records synced; viewing photos remain in this browser.' : 'Saved locally in this browser until you sign in.'}</p>
 
     <Dialog open={Boolean(detail)} onOpenChange={(open) => { if (!open) setDetail(null); }}>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-2xl overflow-y-auto overscroll-contain">
         <DialogHeader><Badge className="w-fit">Saved home</Badge><DialogTitle>{detail?.address}</DialogTitle><DialogDescription>{detail ? `${money(detail.price)} · ${Number.isFinite(detail.score) ? `${detail.score} / 100` : 'Insufficient evidence'}` : ''}</DialogDescription></DialogHeader>
-        {detail && <><EvidenceContext home={detail} />{Array.isArray(detail.highlights) && detail.highlights.length > 0 && <p className="text-sm leading-6 text-muted-foreground">{detail.highlights.join(' · ')}</p>}</>}
+        {detail && <CandidateDetails home={detail} homes={shortlistHomes} brief={brief} saved selected={selectedHomes.some(home => home.id === detail.id)} onSave={home => ensureSaved(home, true)} onCompare={toggleCompare} />}
         <DialogFooter><Button onClick={() => setDetail(null)}>Close</Button></DialogFooter>
       </DialogContent>
     </Dialog>

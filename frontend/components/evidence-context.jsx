@@ -40,7 +40,7 @@ export function EvidenceContext({ home, className = '' }) {
   return <section aria-label={`Evidence context for ${home?.address || 'this home'}`} className={`rounded-xl border border-border/70 bg-background/35 p-3 ${className}`}>
     <div className="space-y-2 text-xs leading-5">
       <p className="font-semibold text-foreground">{semanticsLabel(home)}</p>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-muted-foreground">
+      <details><summary className="min-h-11 cursor-pointer content-center font-medium text-foreground">Source and location provenance</summary><dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-muted-foreground">
         <dt>Source</dt><dd className="min-w-0 break-words">{hasValue(home?.source) ? home.source : 'Unavailable'}</dd>
         {transactionDate
           ? <><dt>Transaction date</dt><dd><time dateTime={transactionDate}>{transactionDate}</time></dd></>
@@ -53,7 +53,7 @@ export function EvidenceContext({ home, className = '' }) {
         {hasValue(home?.geocodedAt)
           ? <><dt>Geocoded at</dt><dd><time dateTime={home.geocodedAt}>{home.geocodedAt}</time></dd></>
           : null}
-      </dl>
+      </dl></details>
     </div>
     <ScoreBreakdown score={home?.score} scoreDetails={home?.scoreDetails} className="mt-3" />
   </section>;

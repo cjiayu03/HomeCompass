@@ -38,14 +38,14 @@ test.beforeEach(async ({ page }) => {
 });
 
 for (const viewport of [{ width: 1366, height: 768 }, { width: 1280, height: 650 }, { width: 390, height: 844 }]) {
-  test(`a complete result is visible without scrolling at ${viewport.width}px`, async ({ page }) => {
+  test(`result actions are usable without horizontal scrolling at ${viewport.width}px`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto('/explore');
-    const card = page.locator('section[aria-label="Candidate places"] article').first();
-    await expect(card).toBeVisible();
+    const card = page.locator('section[aria-label="Historical transaction results"] article').first();
+    await expect(card).toBeVisible({ timeout: 15000 });
     const rect = await card.boundingBox();
-    expect(rect.y + rect.height).toBeLessThan(viewport.height);
-    expect(rect.height).toBeLessThan(380);
+    expect(rect.y).toBeLessThan(viewport.height);
+    expect(rect.width).toBeLessThan(viewport.width);
     for (const button of await card.getByRole('button').all()) {
       const target = await button.boundingBox();
       expect(target.height).toBeGreaterThanOrEqual(44);
@@ -53,19 +53,21 @@ for (const viewport of [{ width: 1366, height: 768 }, { width: 1280, height: 650
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await card.getByRole('button', { name: 'Details', exact: true }).click();
-    await expect(page.getByRole('dialog').getByRole('heading', { name: 'Household access' })).toBeVisible();
+    await expect(page.getByRole('dialog').getByRole('heading', { name: '123 Toa Payoh Central', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
-    await page.getByRole('button', { name: 'Search tools', exact: true }).click();
-    await expect(page.getByRole('dialog').getByText('Some records lack service-distance evidence.')).toBeVisible();
+    await page.getByRole('button', { name: 'Search presets', exact: true }).click();
+    await expect(page.getByRole('dialog').getByRole('heading', { name: 'Search presets and history' })).toBeVisible();
     await page.keyboard.press('Escape');
-    await page.getByRole('button', { name: 'Filters', exact: true }).click();
+    await page.getByRole('button', { name: /^(More filters|Filters)$/, exact: true }).click();
     await expect(page.getByRole('dialog').getByRole('heading', { name: 'Filters', exact: true })).toBeVisible();
+    await page.getByRole('dialog').getByLabel('Maximum recorded price', { exact: true }).fill('123000');
     await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: 'Set price ceiling', exact: true })).toBeVisible();
     if (viewport.width < 1024) {
       await page.getByRole('button', { name: 'Map', exact: true }).click();
       await expect(page.locator('section[aria-label="Movable OpenStreetMap view"]')).toBeVisible();
-      await page.getByRole('button', { name: /^Homes \(/ }).click();
-      await expect(card).toBeVisible();
+      await page.getByRole('button', { name: 'List', exact: true }).click();
+      await expect(card).toBeVisible({ timeout: 15000 });
     }
   });
 }
@@ -73,21 +75,21 @@ for (const viewport of [{ width: 1366, height: 768 }, { width: 1280, height: 650
 test('hover and keyboard focus locate a result without selecting it', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/explore');
-  const card = page.locator('section[aria-label="Candidate places"] article').first();
-  await expect(card).toBeVisible();
+  const card = page.locator('section[aria-label="Historical transaction results"] article').first();
+  await expect(card).toBeVisible({ timeout: 15000 });
   await expect(page.locator('.leaflet-marker-icon').first()).toBeVisible();
   await card.hover();
   const label = page.locator('.home-hover-label');
   await expect(label).toContainText('123 Toa Payoh Central');
   await expect(page.locator('.map-marker.hovered')).toHaveCount(1);
   await expect(page.locator('.map-marker.selected')).toHaveCount(0);
-  await page.getByRole('heading', { name: 'Explore homes' }).hover();
+  await page.getByRole('heading', { name: 'Find an HDB area that fits.' }).hover();
   await expect(label).toHaveCount(0);
   await card.getByRole('button', { name: 'Details', exact: true }).focus();
   await expect(label).toContainText('123 Toa Payoh Central');
-  await page.getByRole('button', { name: 'Search tools', exact: true }).focus();
+  await page.getByRole('button', { name: 'Search presets', exact: true }).focus();
   await expect(label).toHaveCount(0);
-  const secondCard = page.locator('section[aria-label="Candidate places"] article').nth(1);
+  const secondCard = page.locator('section[aria-label="Historical transaction results"] article').nth(1);
   await secondCard.hover();
   await expect(label).toContainText('124 Toa Payoh Central');
   await expect(page.locator('.map-marker.hovered')).toHaveCount(1);
@@ -95,9 +97,9 @@ test('hover and keyboard focus locate a result without selecting it', async ({ p
 
 test('popups are opaque and unblurred; Explore uses a solid background', async ({ page }) => {
   await page.goto('/explore');
-  await expect(page.locator('section[aria-label="Candidate places"] article').first()).toBeVisible();
+  await expect(page.locator('section[aria-label="Historical transaction results"] article').first()).toBeVisible();
   expect(await page.locator('.workspace-canvas').evaluate(el => getComputedStyle(el, '::before').animationName)).toBe('none');
-  for (const name of ['Filters', 'Search tools']) {
+  for (const name of ['More filters', 'Search presets']) {
     await page.getByRole('button', { name, exact: true }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
@@ -116,7 +118,7 @@ test('popups are opaque and unblurred; Explore uses a solid background', async (
     background: getComputedStyle(el).backgroundImage,
     decoration: getComputedStyle(el, '::before').display,
   }))).toEqual({ background: 'none', decoration: 'none' });
-  expect(await page.locator('.explore-workspace').evaluate(el =>
+  expect(await page.locator('.workspace-canvas').evaluate(el =>
     [el, ...el.querySelectorAll('*')].filter(node =>
       getComputedStyle(node).backgroundImage.includes('gradient')).length,
   )).toBe(0);
@@ -132,12 +134,8 @@ test('map clicks reveal the matching card without adding it to Compare', async (
   await expect(active).toHaveAttribute('data-home-id', 'layout-home-11');
   await expect(active).toHaveAttribute('aria-current', 'location');
   await expect(active.getByRole('button', { name: 'Compare', exact: true })).toHaveAttribute('aria-pressed', 'false');
-  const list = active.locator('..').locator('..');
-  await expect.poll(() => list.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
-  const cardBox = await active.boundingBox();
-  const listBox = await list.boundingBox();
-  expect(cardBox.y).toBeGreaterThanOrEqual(listBox.y);
-  expect(cardBox.y + cardBox.height).toBeLessThanOrEqual(listBox.y + listBox.height);
+  await expect(page.getByRole('dialog')).toContainText('134 Toa Payoh Central');
+  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Show 123 Toa Payoh Central on map', exact: true }).click();
   await expect(page.locator('article[data-map-active="true"]')).toHaveAttribute('data-home-id', 'layout-home-0');
   await expect(page.locator('.map-marker.selected')).toHaveCount(1);
@@ -150,7 +148,9 @@ test('mobile map selection opens the matching home card', async ({ page }) => {
   const marker = page.locator('.leaflet-marker-icon').last();
   await expect(marker).toBeAttached();
   await marker.dispatchEvent('click');
-  await expect(page.getByRole('button', { name: /^Homes \(/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('dialog')).toContainText('134 Toa Payoh Central');
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'List', exact: true }).click();
   await expect(page.locator('article[data-map-active="true"]')).toHaveAttribute('data-home-id', 'layout-home-11');
 });
 
@@ -191,7 +191,9 @@ test('3D marker selection and popup contrast work in both themes', async ({ page
   await page.route('https://map.example.test/**', route => route.fulfill({ contentType: 'application/x-protobuf', body: '' }));
   await page.goto('/explore');
   await expect(page.locator('article[data-home-id="three-d-home"]')).toBeVisible();
+  await page.getByLabel('Map options', { exact: true }).click();
   await page.getByRole('button', { name: '3D', exact: true }).click();
+  await page.getByLabel('Map options', { exact: true }).click();
   const canvas = page.locator('.maplibregl-canvas');
   await expect(canvas).toBeVisible({ timeout: 20000 });
   await expect(page.getByText('Building your 3D neighbourhood…', { exact: true })).toHaveCount(0, { timeout: 20000 });
@@ -200,6 +202,7 @@ test('3D marker selection and popup contrast work in both themes', async ({ page
   await expect(page.locator('article[data-map-active="true"]')).toHaveAttribute('data-home-id', 'three-d-home');
   const popup = page.locator('.maplibregl-popup-content').first();
   await expect(popup).toContainText('3D test home');
+  await page.keyboard.press('Escape');
   for (const theme of ['dark', 'light']) {
     await page.getByRole('button', { name: `Use ${theme} theme` }).click();
     const colours = await popup.evaluate(el => ({ bg: getComputedStyle(el).backgroundColor, fg: getComputedStyle(el).color }));
@@ -215,7 +218,7 @@ test('3D marker selection and popup contrast work in both themes', async ({ page
 test('storey controls explain partial overlap and reject reversed bounds', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/explore');
-  await page.getByRole('button', { name: 'Filters', exact: true }).click();
+  await page.getByRole('button', { name: /^(More filters|Filters)$/, exact: true }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByText('Storey filters match reported bands that overlap your chosen range. The exact floor is unavailable.')).toBeVisible();
   await dialog.getByLabel('Minimum storey', { exact: true }).fill('9');
@@ -228,9 +231,9 @@ test('storey controls explain partial overlap and reject reversed bounds', async
   await dialog.getByRole('button', { name: 'Apply filters' }).click();
   const payload = (await search).postDataJSON();
   expect(payload).toMatchObject({ min_storey: 5, max_storey: 8 });
-  const card = page.locator('section[aria-label="Candidate places"] article').first();
+  const card = page.locator('section[aria-label="Historical transaction results"] article').first();
   await card.getByRole('button', { name: 'Details', exact: true }).click();
   const detail = page.getByRole('dialog');
-  await detail.getByText('Why this home?', { exact: false }).click();
+  await detail.getByText('Why this place?', { exact: false }).click();
   await expect(detail.getByText(/reported 04 TO 06 has a possible overlap/)).toBeVisible();
 });

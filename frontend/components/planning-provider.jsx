@@ -29,6 +29,7 @@ function PlanningOwner({ owner, signedIn, children }) {
   const [workspace, setWorkspace] = useState(empty);
   const [photos, setPhotos] = useState({});
   const [ready, setReady] = useState(false);
+  const [cleared, setCleared] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [onlineReady, setOnlineReady] = useState(false);
   const [status, setStatus] = useState('loading');
@@ -40,9 +41,13 @@ function PlanningOwner({ owner, signedIn, children }) {
   const photoRef = useRef({});
   const inFlight = useRef(false);
   const requestSequence = useRef(0);
+  const clearVersion = useRef(0);
 
   const refresh = useCallback(async (replace = false) => {
     if (!signedIn) return;
+    active.current = true;
+    setCleared(false);
+    setReady(true);
     const sequence=++requestSequence.current;
     setError('');
     try {
@@ -79,8 +84,9 @@ function PlanningOwner({ owner, signedIn, children }) {
     } catch { setError('Browser storage could not be read.'); }
     setReady(true);
     if (signedIn) refresh(); else setStatus('local');
+    const loadVersion=clearVersion.current;
     photoStore(store => store.getAll()).then(rows => {
-      if (!active.current) return;
+      if (!active.current || loadVersion!==clearVersion.current) return;
       const grouped = {};
       for (const row of rows.filter(row => row.owner === owner)) (grouped[row.homeId] ||= []).push(row);
       photoRef.current = grouped;
@@ -88,6 +94,40 @@ function PlanningOwner({ owner, signedIn, children }) {
     }).catch(() => { /* Photos are optional; addPhoto reports failures. */ });
     return () => { active.current = false; requestSequence.current+=1; };
   }, [owner, key, signedIn, refresh]);
+
+  useEffect(() => {
+    function clearBrowserPlan(event) {
+      active.current = false;
+      clearVersion.current += 1;
+      requestSequence.current += 1;
+      generation.current += 1;
+      pending.current = false;
+      current.current = empty;
+      photoRef.current = {};
+      setReady(false);
+      setCleared(true);
+      setDirty(false);
+      setOnlineReady(false);
+      setWorkspace(empty);
+      setPhotos({});
+      setError('');
+      setStatus(signedIn ? 'cleared' : 'local');
+      const cleanup = (async () => {
+        for (const storageKey of Object.keys(localStorage)) {
+          if (storageKey.startsWith('homecompass-planning:')) localStorage.removeItem(storageKey);
+        }
+        await photoStore(store => store.clear());
+      })().catch(() => {
+        const message = 'Browser photos could not be cleared. Use your browser’s site storage settings to remove them.';
+        setError(message);
+        throw new Error(message);
+      });
+      if (event.detail?.waitUntil) event.detail.waitUntil(cleanup);
+      else cleanup.catch(() => {});
+    }
+    window.addEventListener('homecompass:clear-local-data', clearBrowserPlan);
+    return () => window.removeEventListener('homecompass:clear-local-data', clearBrowserPlan);
+  }, [signedIn]);
 
   useEffect(() => {
     if (!ready) return;
@@ -101,15 +141,16 @@ function PlanningOwner({ owner, signedIn, children }) {
       if(inFlight.current)return;
       inFlight.current=true;
       const localGeneration=generation.current;
+      const localRequestSequence=requestSequence.current;
       setStatus('saving');
       try {
         const saved = await requestJson('/api/v1/planning/workspace', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(current.current)});
-        if (!active.current) return;
+        if (!active.current || localRequestSequence!==requestSequence.current) return;
         current.current = { ...current.current, revision: saved.revision };
         setWorkspace(w => ({...w, revision:saved.revision}));
         if (generation.current === localGeneration) { pending.current = false; setDirty(false); setStatus('saved'); }
       } catch (e) {
-        if (!active.current) return;
+        if (!active.current || localRequestSequence!==requestSequence.current) return;
         setError(e.status===409 ? 'This plan changed in another session. Your edits remain in this browser.' : e.message);
         setStatus(e.status===409 ? 'conflict' : 'offline');
         setOnlineReady(false);
@@ -119,14 +160,15 @@ function PlanningOwner({ owner, signedIn, children }) {
   }, [ready, signedIn, onlineReady, dirty, workspace]);
 
   const mutate = useCallback(fn => {
-    if (!ready) return;
+    if (!ready && !cleared) return;
+    if (cleared) { active.current=true; setReady(true); setCleared(false); }
     generation.current += 1;
     current.current = fn(current.current);
     pending.current = true;
     setWorkspace(current.current);
     setDirty(true);
     setStatus(previous => signedIn ? onlineReady ? 'pending' : previous==='conflict'?'conflict':'offline' : 'local');
-  }, [ready, signedIn, onlineReady]);
+  }, [ready, cleared, signedIn, onlineReady]);
 
   const updateDecision = useCallback((homeId, patch) => {
     if (!current.current.decisions[homeId] && Object.keys(current.current.decisions).length >= 100) {setError('This plan contains the maximum of 100 decision records.');return;}
@@ -142,10 +184,19 @@ function PlanningOwner({ owner, signedIn, children }) {
   }, [mutate]);
 
   const addPhoto = useCallback(async (homeId, file) => {
+    if (cleared) { active.current=true; setReady(true); setCleared(false); }
+    const photoVersion=clearVersion.current;
     if (!['image/jpeg','image/png','image/webp'].includes(file?.type) || file.size > 5*1024*1024) throw new Error('Choose a JPG, PNG or WebP image up to 5 MB.');
     const existing = photoRef.current;
     if ((existing[homeId]?.length||0)>=6 || Object.values(existing).flat().length>=40) throw new Error('Photo limit reached (six per home, forty in this browser account).');
-    const bitmap = await createImageBitmap(file);
+    const bytes = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+    const isJpeg = bytes[0]===255 && bytes[1]===216 && bytes[2]===255;
+    const isPng = [137,80,78,71,13,10,26,10].every((byte,index)=>bytes[index]===byte);
+    const isWebp = String.fromCharCode(...bytes.slice(0,4))==='RIFF' && String.fromCharCode(...bytes.slice(8,12))==='WEBP';
+    if (!({ 'image/jpeg': isJpeg, 'image/png': isPng, 'image/webp': isWebp })[file.type]) throw new Error('This file is not a valid JPG, PNG or WebP image.');
+    let bitmap;
+    try { bitmap = await createImageBitmap(file); } catch { throw new Error('This image could not be decoded. Choose a valid JPG, PNG or WebP.'); }
+    if (bitmap.width * bitmap.height > 40000000) { bitmap.close(); throw new Error('Choose an image smaller than 40 megapixels.'); }
     const canvas = document.createElement('canvas');
     const factor = Math.min(1,1200/Math.max(bitmap.width,bitmap.height));
     canvas.width=Math.max(1,Math.round(bitmap.width*factor)); canvas.height=Math.max(1,Math.round(bitmap.height*factor));
@@ -153,17 +204,17 @@ function PlanningOwner({ owner, signedIn, children }) {
     bitmap.close();
     const dataUrl = canvas.toDataURL('image/jpeg',0.78);
     const row = {id:crypto.randomUUID(),owner,homeId,name:file.name.slice(0,120),dataUrl};
-    if(!active.current) return;
+    if(!active.current || photoVersion!==clearVersion.current) return;
     await photoStore(store=>store.put(row));
-    if(active.current) { photoRef.current={...photoRef.current,[homeId]:[...(photoRef.current[homeId]||[]),row]}; setPhotos(photoRef.current); }
-  }, [owner]);
+    if(active.current && photoVersion===clearVersion.current) { photoRef.current={...photoRef.current,[homeId]:[...(photoRef.current[homeId]||[]),row]}; setPhotos(photoRef.current); }
+  }, [owner, cleared]);
   const removePhoto = useCallback(async(homeId,id)=>{
     if(!(photoRef.current[homeId]||[]).some(p=>p.id===id)) return;
     await photoStore(store=>store.delete(id));
     if(active.current) { photoRef.current={...photoRef.current,[homeId]:(photoRef.current[homeId]||[]).filter(p=>p.id!==id)}; setPhotos(photoRef.current); }
   },[]);
 
-  return <Context.Provider value={{...workspace,photos,updateDecision,saveScenario,deleteScenario:id=>mutate(w=>({...w,scenarios:w.scenarios.filter(s=>s.id!==id)})),status,error,ready,retry:()=>refresh(),reloadRemote:()=>refresh(true),addPhoto,removePhoto}}>{children}</Context.Provider>;
+  return <Context.Provider value={{...workspace,photos,updateDecision,saveScenario,deleteScenario:id=>{if(window.confirm('Delete this saved scenario?'))mutate(w=>({...w,scenarios:w.scenarios.filter(s=>s.id!==id)}));},status,error,ready:ready||cleared,retry:()=>refresh(),reloadRemote:()=>refresh(true),addPhoto,removePhoto}}>{children}</Context.Provider>;
 }
 
 export function PlanningProvider({children}) {

@@ -13,7 +13,7 @@ export const viewport = { width: 'device-width', initialScale: 1, themeColor: '#
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en-SG" suppressHydrationWarning>
+    <html lang="en-SG" data-scroll-behavior="smooth" suppressHydrationWarning>
       <body>
         <Providers>{children}</Providers>
       </body>

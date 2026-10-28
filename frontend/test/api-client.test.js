@@ -12,11 +12,11 @@ describe('requestJson', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ homes: [{ id: 'home-1' }] }), { status: 200 })));
 
     await expect(requestJson('/api/v1/homes')).resolves.toEqual({ homes: [{ id: 'home-1' }] });
-    expect(fetch).toHaveBeenCalledWith('https://api.example.test/api/v1/homes', {});
+    expect(fetch).toHaveBeenCalledWith('https://api.example.test/api/v1/homes', { credentials: 'include' });
   });
 
   it('throws an ApiError with HTTP status and detail code for a structured error', async () => {
-    const payload = { detail: { code: 'SEARCH_UNAVAILABLE', message: 'internal details' } };
+    const payload = { detail: { code: 'SEARCH_UNAVAILABLE', message: 'Search is temporarily unavailable.' } };
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 503 })));
 
     const error = await requestJson('/api/v1/search').catch((error) => error);
@@ -27,7 +27,7 @@ describe('requestJson', () => {
       code: 'SEARCH_UNAVAILABLE',
       payload,
     });
-    expect(error.message).not.toContain('internal details');
+    expect(error.message).toBe('Search is temporarily unavailable.');
   });
 
   it('throws an ApiError with a stable network code when Fetch rejects', async () => {
@@ -57,6 +57,7 @@ describe('requestJson', () => {
     await requestJson('/api/v1/search', { signal: controller.signal, method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 
     expect(fetch).toHaveBeenCalledWith('/api/v1/search', {
+      credentials: 'include',
       signal: controller.signal,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

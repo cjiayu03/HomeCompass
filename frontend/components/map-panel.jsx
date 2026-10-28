@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { useWorkspace } from '@/components/workspace-provider';
 import { distanceM } from '@/lib/planning';
 import { LoadingScene } from '@/components/loading-scene';
+import { sourceFreshness } from '@/components/evidence-helpers';
 
 class MapBoundary extends Component {
   state={failed:false};
@@ -22,7 +23,7 @@ const Map3DView = dynamic(() => import('@/components/map-3d-view'), { ssr: false
 const mapLayers = [
   ['silver_zone', 'Silver Zones', '#68886c'], ['dementia_gtp', 'Dementia-friendly points', '#697d91'],
   ['chas_clinic', 'CHAS clinics', '#7887a2'], ['childcare', 'Child care', '#8a7898'], ['student_care', 'Student care', '#6e8b7c'],
-  ['kindergarten', 'Kindergartens', '#627f90'], ['school_zone', 'School zones', '#8291a6'], ['dengue_cluster', 'Active dengue clusters', '#b65360'],
+  ['kindergarten', 'Kindergartens', '#627f90'], ['school_zone', 'School zones', '#8291a6'], ['dengue_cluster', 'Dengue source snapshot', '#b65360'],
 ];
 
 function viewportLabel(bounds) {
@@ -30,8 +31,9 @@ function viewportLabel(bounds) {
   return `${bounds.west.toFixed(3)}, ${bounds.south.toFixed(3)} to ${bounds.east.toFixed(3)}, ${bounds.north.toFixed(3)}`;
 }
 
-export function MapPanel({ homes, resources = [], resourceState, retryResources, sourceStatus, selectedHome, hoveredHome, onSelect, refreshViewport, viewportBounds, className }) {
-  const {places,brief}=useWorkspace();
+export function MapPanel({ homes, resources = [], resourceState, retryResources, sourceStatus, selectedHome, hoveredHome, onSelect, refreshViewport, viewportBounds, onSearchArea, searchBusy = false, className }) {
+  const {places,brief: currentBrief,appliedBrief}=useWorkspace();
+  const brief = appliedBrief || currentBrief;
   const [reach,setReach]=useState(false);
   const [mapNotice,setMapNotice]=useState('');
   const [centerRequest, setCenterRequest] = useState(0);
@@ -40,7 +42,9 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
   const anchors=useMemo(()=>reach?(brief.placeConstraints||[]).map(c=>{const place=places.find(p=>p.id===c.placeId);return place&&place.latitude!=null&&place.longitude!=null?{id:place.id,label:place.label,lat:Number(place.latitude),lng:Number(place.longitude),radius:Number(c.maxDistanceM)}:null;}).filter(a=>a&&Number.isFinite(a.lat)&&Number.isFinite(a.lng)&&Number.isFinite(a.radius)&&a.radius>=0):[],[reach,brief.placeConstraints,places]);
   const inReach=anchors.length?homes.filter(home=>anchors.every(a=>{const d=distanceM(a,home);return d!=null&&d<=a.radius;})).length:0;
   const nearest=useMemo(()=>!selectedHome?[]:resources.filter(f=>f.geometry?.type==='Point').map(f=>({name:f.properties?.name||f.properties?.resourceType,distance:distanceM(selectedHome,{lng:f.geometry.coordinates[0],lat:f.geometry.coordinates[1]})})).filter(f=>f.distance!=null).sort((a,b)=>a.distance-b.distance).slice(0,3),[selectedHome,resources]);
-  const [visibleResourceTypes, setVisibleResourceTypes] = useState(['silver_zone', 'dengue_cluster']);
+  const [visibleResourceTypes, setVisibleResourceTypes] = useState(['silver_zone']);
+  const dengueSource = sourceStatus?.items?.find(source => source.resourceType === 'dengue_cluster');
+  const dengueReview = sourceFreshness(dengueSource);
   const mappedCount = homes.filter((home) => home.lat !== null && home.lat !== undefined && home.lng !== null && home.lng !== undefined && Number.isFinite(Number(home.lat)) && Number.isFinite(Number(home.lng))).length;
   const counts = resources.reduce((result, feature) => { const type = feature.properties?.resourceType; result[type] = (result[type] || 0) + 1; return result; }, {});
   function toggleLayer(type, checked) { setVisibleResourceTypes((current) => checked ? [...new Set([...current, type])] : current.filter((item) => item !== type)); }
@@ -49,6 +53,7 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
       <div className="absolute inset-0 z-0">{mapMode === '3d'
         ? <MapBoundary onUnavailable={fallback}><Map3DView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onUnavailable={fallback} onSelect={onSelect} centerRequest={centerRequest} onViewportChange={refreshViewport} /></MapBoundary>
         : <MapView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onSelect={onSelect} centerRequest={centerRequest} onViewportChange={refreshViewport} />}</div>
+      {onSearchArea && <div className="absolute left-3 top-3 z-10"><Button variant="outline" disabled={searchBusy || !viewportBounds} onClick={onSearchArea}>{searchBusy ? 'Searching…' : 'Search this area'}</Button></div>}
       <div className="pointer-events-none absolute right-0 top-0 z-10 flex items-start gap-2 p-3">
         <details className="pointer-events-auto">
           <summary aria-label={`Map options${reach ? ', family reach on' : ''}${resourceState?.status === 'error' ? ', nearby data unavailable' : ''}${mapNotice ? ', map warning' : ''}`} className="glass-card flex h-11 cursor-pointer list-none items-center gap-2 rounded-xl px-3 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
@@ -95,7 +100,7 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
                   <label key={type} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg px-2 hover:bg-secondary/70">
                     <input type="checkbox" className="size-4 accent-primary" checked={visibleResourceTypes.includes(type)} disabled={!counts[type]} onChange={(event) => toggleLayer(type, event.target.checked)} />
                     <span aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
-                    <span className="min-w-0 flex-1 text-xs">{label}</span>
+                    <span className="min-w-0 flex-1 text-xs">{label}{type === 'dengue_cluster' && <span className="mt-1 block text-xs text-muted-foreground">{dengueReview.label} · updated {dengueSource?.sourceUpdatedAt || dengueSource?.version || 'unknown'}. Snapshot does not establish current risk.</span>}</span>
                     <span className="text-xs text-muted-foreground">{(counts[type] || 0).toLocaleString()}</span>
                   </label>
                 ))}
@@ -103,7 +108,7 @@ export function MapPanel({ homes, resources = [], resourceState, retryResources,
             </section>
 
             {resourceState?.status === 'loading' && <p className="mt-3 border-t pt-3 text-xs text-muted-foreground" role="status">Loading nearby map data…</p>}
-            {resourceState?.status === 'error' && <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3 text-xs" role="alert"><span>Nearby map data could not load.</span><Button variant="outline" className="h-9 rounded-lg px-3 text-xs" onClick={retryResources}>Retry</Button></div>}
+            {resourceState?.status === 'error' && <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3 text-xs" role="alert"><span>{resources.length ? "Update failed; showing previous results. " : "Nearby map data could not load. "}{resourceState.error?.message}</span><Button variant="outline" className="h-9 rounded-lg px-3 text-xs" aria-label="Retry resource data" onClick={retryResources}>Retry</Button></div>}
           </div>
         </details>
         <Button size="icon" variant="outline" className="h-11 w-11" aria-label="Center map on Singapore" onClick={() => setCenterRequest((value) => value + 1)}><LocateFixed className="size-4" /></Button>

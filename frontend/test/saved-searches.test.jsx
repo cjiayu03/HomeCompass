@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import AccountPage from '../app/(workspace)/account/page.jsx';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { SavedDecisionSections } from '../components/saved-searches.jsx';
 import ExplorePage from '../app/(workspace)/explore/page.jsx';
+import { PlanningProvider } from '../components/planning-provider.jsx';
 import { WorkspaceProvider, useWorkspace } from '../components/workspace-provider.jsx';
 
 const { useAuthMock, routerReplaceMock } = vi.hoisted(() => ({
-  useAuthMock: vi.fn(() => ({ client: null, user: null, loading: false, configured: false })),
+  useAuthMock: vi.fn(() => ({ user: null, loading: false, configured: false })),
   routerReplaceMock: vi.fn(),
 }));
 
@@ -86,6 +87,7 @@ function json(payload, status = 200) {
 
 function defaultFetch(path, options = {}) {
   const method = options.method || 'GET';
+  if (path === '/api/v1/auth/session') return Promise.resolve(json({ user: useAuthMock().user ?? null }));
   if (path === '/api/v1/sync/guest') return Promise.resolve(json({ accepted: {}, skipped: {}, conflicts: [] }));
   if (path === '/api/v1/shortlists') return Promise.resolve(json({ items: [] }));
   if (path === '/api/v1/profile' && method === 'PUT') return Promise.resolve(json({}));
@@ -93,6 +95,8 @@ function defaultFetch(path, options = {}) {
   if (path === '/api/v1/homes') return Promise.resolve(json({ items: [initialHome], dataMode: 'live', retrievedAt: timestampOld }));
   if (path.startsWith('/api/v1/resources')) return Promise.resolve(json({ features: [] }));
   if (path === '/api/v1/sources') return Promise.resolve(json({ items: [] }));
+  if (path === '/api/v1/planning/workspace') return Promise.resolve(json({ scenarios: [], decisions: {}, revision: 0 }));
+  if (path === '/api/v1/search/options') return Promise.resolve(json({ towns: ['Queenstown'], flatTypes: ['3-room'] }));
   if (path === '/api/v1/places') return Promise.resolve(json({ items: [] }));
   if (path === '/api/v1/history' && method === 'POST') {
     return Promise.resolve(json({ id: 'history-created', created: true, sourceSnapshotIds: [snapshotOld] }));
@@ -155,7 +159,6 @@ function defaultFetch(path, options = {}) {
 
 function authenticatedUser() {
   useAuthMock.mockReturnValue({
-    client: { auth: { getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: 'test-token' } } }) } },
     user: { id: 'user-1', email: 'person@example.com' },
     loading: false,
     configured: true,
@@ -178,10 +181,12 @@ function WorkspaceProbe() {
       selectedHomes: workspace.selectedHomes.map(({ id, address }) => ({ id, address })),
       historyState: workspace.historyState,
       brief: workspace.brief,
+      profileLoadState: workspace.profileLoadState,
     })}</output>
     <button onClick={() => workspace.setBrief({
       ...workspace.brief,
       budget: 700000,
+      requirements: { ...workspace.brief.requirements, budget: true },
       schoolDistance: 500,
       careDistance: 1200,
       priorityWeights: weights,
@@ -200,11 +205,12 @@ function WorkspaceProbe() {
 
 function renderWorkspace(children = <WorkspaceProbe />, { authenticated = true, route = () => undefined } = {}) {
   if (authenticated) authenticatedUser();
-  else useAuthMock.mockReturnValue({ client: null, user: null, loading: false, configured: false });
+  else useAuthMock.mockReturnValue({ user: null, loading: false, configured: false });
+  window.history.replaceState({}, '', '/explore');
   vi.stubEnv('NEXT_PUBLIC_HOME_DATA_MODE', 'live');
   const fetchMock = vi.fn((path, options = {}) => route(path, options) ?? defaultFetch(path, options));
   vi.stubGlobal('fetch', fetchMock);
-  render(<WorkspaceProvider>{children}</WorkspaceProvider>);
+  render(<WorkspaceProvider><PlanningProvider>{children}</PlanningProvider></WorkspaceProvider>);
   const state = () => JSON.parse(screen.getByTestId('saved-decision-state').textContent);
   return { fetchMock, state };
 }
@@ -216,10 +222,11 @@ function requestFor(fetchMock, path, method = 'GET') {
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  window.history.replaceState({}, '', '/explore');
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   useAuthMock.mockReset();
-  useAuthMock.mockReturnValue({ client: null, user: null, loading: false, configured: false });
+  useAuthMock.mockReturnValue({ user: null, loading: false, configured: false });
 });
 
 describe('workspace saved searches and history', () => {
@@ -229,12 +236,16 @@ describe('workspace saved searches and history', () => {
     await waitFor(() => expect(state().history).toEqual([historyEntry]));
     expect(state().savedSearches).toEqual([savedSearch]);
     expect(state().savedSearchState.status).toBe('success');
-    expect(requestFor(fetchMock, '/api/v1/history').headers.Authorization).toBe('Bearer test-token');
-    expect(requestFor(fetchMock, '/api/v1/saved-searches').headers.Authorization).toBe('Bearer test-token');
+    const historyRequest = requestFor(fetchMock, '/api/v1/history');
+    const searchesRequest = requestFor(fetchMock, '/api/v1/saved-searches');
+    expect(historyRequest.credentials).toBe('include');
+    expect(historyRequest.headers?.Authorization).toBeUndefined();
+    expect(searchesRequest.credentials).toBe('include');
+    expect(searchesRequest.headers?.Authorization).toBeUndefined();
   });
 
   it('keeps saved searches visible when history fails to load', async () => {
-    renderWorkspace(<AccountPage />, {
+    renderWorkspace(<SavedDecisionSections />, {
       route: (path) => path === '/api/v1/history'
         ? Promise.resolve(json({ detail: { code: 'HISTORY_UNAVAILABLE', message: 'Search history is temporarily unavailable.' } }, 503))
         : undefined,
@@ -245,7 +256,7 @@ describe('workspace saved searches and history', () => {
   });
 
   it('keeps history visible when saved searches fail to load', async () => {
-    renderWorkspace(<AccountPage />, {
+    renderWorkspace(<SavedDecisionSections />, {
       route: (path) => path === '/api/v1/saved-searches'
         ? Promise.resolve(json({ detail: { code: 'SAVED_SEARCHES_UNAVAILABLE', message: 'Saved searches are temporarily unavailable.' } }, 503))
         : undefined,
@@ -256,17 +267,21 @@ describe('workspace saved searches and history', () => {
   });
 
   it('renders saved searches while the independent history request is still loading', async () => {
-    let finishHistory;
-    renderWorkspace(<AccountPage />, {
-      route: (path) => path === '/api/v1/history'
-        ? new Promise((resolve) => { finishHistory = () => resolve(json({ items: [historyEntry] })); })
+    const pendingHistory = [];
+    let historyReleased = false;
+    renderWorkspace(<SavedDecisionSections />, {
+      route: (path, options) => path === '/api/v1/history' && (options.method || 'GET') === 'GET' && !historyReleased
+        ? new Promise(resolve => pendingHistory.push(resolve))
         : undefined,
     });
 
-    await waitFor(() => expect(finishHistory).toBeTypeOf('function'));
+    await waitFor(() => expect(pendingHistory.length).toBeGreaterThan(0));
     expect(await screen.findByRole('heading', { name: 'Near the office' })).toBeInTheDocument();
     expect(screen.getByText('Loading search history…')).toBeInTheDocument();
-    finishHistory();
+    await act(async () => {
+      historyReleased = true;
+      pendingHistory.forEach(resolve => resolve(json({ items: [historyEntry] })));
+    });
     expect(await screen.findByRole('heading', { name: 'Harbour Road' })).toBeInTheDocument();
   });
 
@@ -293,7 +308,8 @@ describe('workspace saved searches and history', () => {
 
     await waitFor(() => expect(requestFor(fetchMock, '/api/v1/saved-searches', 'POST')).toBeTruthy());
     const request = requestFor(fetchMock, '/api/v1/saved-searches', 'POST');
-    expect(request.headers.Authorization).toBe('Bearer test-token');
+    expect(request.credentials).toBe('include');
+    expect(request.headers?.Authorization).toBeUndefined();
     const body = JSON.parse(request.body);
     expect(body).toMatchObject({
       name: 'Harbour Road family search',
@@ -318,13 +334,15 @@ describe('workspace saved searches and history', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Rename saved search' }));
     await waitFor(() => expect(state().savedSearches[0].name).toBe('Renamed search'));
     const renameRequest = requestFor(fetchMock, `/api/v1/saved-searches/${savedSearch.id}`, 'PATCH');
-    expect(renameRequest.headers.Authorization).toBe('Bearer test-token');
+    expect(renameRequest.credentials).toBe('include');
+    expect(renameRequest.headers?.Authorization).toBeUndefined();
     expect(JSON.parse(renameRequest.body)).toEqual({ name: 'Renamed search' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete saved search' }));
     await waitFor(() => expect(state().savedSearches).toEqual([]));
     const deleteRequest = requestFor(fetchMock, `/api/v1/saved-searches/${savedSearch.id}`, 'DELETE');
-    expect(deleteRequest.headers.Authorization).toBe('Bearer test-token');
+    expect(deleteRequest.credentials).toBe('include');
+    expect(deleteRequest.headers?.Authorization).toBeUndefined();
   });
 
   it('keeps current results until rerun succeeds, then retains source and result differences', async () => {
@@ -335,11 +353,11 @@ describe('workspace saved searches and history', () => {
         : undefined,
     });
     await waitFor(() => expect(state().savedSearches).toHaveLength(1));
-    expect(state().homes).toEqual([initialHome]);
+    await waitFor(() => expect(state().homes).toEqual([searchedHome]));
 
     fireEvent.click(screen.getByRole('button', { name: 'Rerun saved search' }));
     await waitFor(() => expect(state().savedSearchState.action).toBe('rerunning'));
-    expect(state().homes).toEqual([initialHome]);
+    expect(state().homes).toEqual([searchedHome]);
     await waitFor(() => expect(finishRerun).toBeTypeOf('function'));
     finishRerun();
 
@@ -355,7 +373,9 @@ describe('workspace saved searches and history', () => {
         scorePolicyVersion: { changed: true },
       },
     });
-    expect(requestFor(fetchMock, `/api/v1/saved-searches/${savedSearch.id}/run`, 'POST').headers.Authorization).toBe('Bearer test-token');
+    const rerunRequest = requestFor(fetchMock, `/api/v1/saved-searches/${savedSearch.id}/run`, 'POST');
+    expect(rerunRequest.credentials).toBe('include');
+    expect(rerunRequest.headers?.Authorization).toBeUndefined();
 
     fireEvent.click(screen.getByRole('button', { name: 'Load more homes' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([path, options = {}]) => path === '/api/v1/search'
@@ -365,7 +385,7 @@ describe('workspace saved searches and history', () => {
 
   it('preserves shortlist and compare home records when a rerun replaces the current page', async () => {
     const { state } = renderWorkspace();
-    await waitFor(() => expect(state().homes).toEqual([initialHome]));
+    await waitFor(() => expect(state().homes).toEqual([searchedHome]));
     fireEvent.click(screen.getByRole('button', { name: 'Keep initial home in decisions' }));
     await waitFor(() => expect(state().shortlistIds).toContain(initialHome.id));
     expect(state().compareIds).toContain(initialHome.id);
@@ -413,13 +433,15 @@ describe('workspace saved searches and history', () => {
         : undefined,
     });
     await waitFor(() => expect(state().savedSearches).toHaveLength(1));
+    await waitFor(() => expect(state().homes).toEqual([searchedHome]));
+    const priorSearchCount = fetchMock.mock.calls.filter(([path]) => path === '/api/v1/search').length;
 
     fireEvent.click(screen.getByRole('button', { name: 'Rerun saved search' }));
 
     await waitFor(() => expect(state().savedSearchState.status).toBe('missing_place'));
-    expect(state().homes).toEqual([initialHome]);
+    expect(state().homes).toEqual([searchedHome]);
     expect(state().savedSearchState.error).toMatchObject({ code: 'SAVED_SEARCH_PLACE_UNAVAILABLE', missingPlaceIds: [placeId] });
-    expect(fetchMock.mock.calls.some(([path]) => path === '/api/v1/search')).toBe(false);
+    expect(fetchMock.mock.calls.filter(([path]) => path === '/api/v1/search')).toHaveLength(priorSearchCount);
   });
 
   it('requires authentication for saved-search operations without calling account endpoints', async () => {
@@ -436,7 +458,7 @@ describe('workspace saved searches and history', () => {
 
 describe('saved-search decision surfaces', () => {
   it('shows explicit empty states for account history and saved searches', async () => {
-    renderWorkspace(<AccountPage />, {
+    renderWorkspace(<SavedDecisionSections />, {
       route: (path) => path === '/api/v1/history' || path === '/api/v1/saved-searches'
         ? Promise.resolve(json({ items: [] }))
         : undefined,
@@ -449,17 +471,21 @@ describe('saved-search decision surfaces', () => {
   it('offers saving the current live search from Explore', async () => {
     renderWorkspace(<ExplorePage />);
 
-    const saveButton = screen.getByRole('button', { name: 'Save search' });
+    const searchButton = await screen.findByRole('button', { name: 'Search', exact: true });
+    await waitFor(() => expect(searchButton).toBeEnabled());
+    fireEvent.click(searchButton);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Search', exact: true })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Search presets' }));
+    const saveButton = await screen.findByRole('button', { name: 'Save evidence search' });
     expect(saveButton).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Search', exact: true }));
-    await waitFor(() => expect(saveButton).toBeEnabled());
-    fireEvent.change(screen.getByRole('textbox', { name: 'Name this search' }), { target: { value: 'Workplace options' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Saved evidence search name' }), { target: { value: 'Workplace options' } });
+    expect(saveButton).toBeEnabled();
     fireEvent.click(saveButton);
 
-    expect(await screen.findByText('Saved search created.')).toBeInTheDocument();
+    expect(await screen.findByText('Evidence search saved to your account.')).toBeInTheDocument();
   });
 
-  it('shows per-source retrieval time in the Explore detail evidence context', async () => {
+  it('shows source provenance in the Explore record detail dialog', async () => {
     const detailHome = {
       ...initialHome,
       source: 'HDB resale transactions',
@@ -475,7 +501,7 @@ describe('saved-search decision surfaces', () => {
       risk: 'Historical record',
     };
     renderWorkspace(<ExplorePage />, {
-      route: (path) => path === '/api/v1/homes'
+      route: (path) => path === '/api/v1/homes' || path === '/api/v1/search'
         ? Promise.resolve(json({ items: [detailHome], dataMode: 'live', retrievedAt: timestampOld }))
         : undefined,
     });
@@ -483,25 +509,28 @@ describe('saved-search decision surfaces', () => {
     await screen.findByRole('button', { name: 'Details' });
     expect(screen.getAllByRole('region', { name: `Evidence context for ${detailHome.address}` })).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
-    expect(screen.getAllByRole('region', { name: `Evidence context for ${detailHome.address}` })).toHaveLength(2);
+    const dialog = await screen.findByRole('dialog');
+    const evidence = within(dialog).getByRole('region', { name: `Evidence context for ${detailHome.address}` });
+    fireEvent.click(within(evidence).getByText('Source and location provenance'));
+    expect(within(evidence).getByText('HDB resale transactions')).toBeInTheDocument();
+    expect(within(evidence).getByText('2026-10-10')).toBeInTheDocument();
   });
 
   it('shows sourceSummary retrieval times instead of the response timestamp', async () => {
-    renderWorkspace(<AccountPage />);
+    renderWorkspace(<SavedDecisionSections />);
 
     const searchHeading = await screen.findByRole('heading', { name: 'Near the office' });
     const searchRow = searchHeading.closest('article');
     const freshness = within(searchRow).getByText('Source freshness').parentElement;
     expect(freshness).toHaveTextContent('hdb-resale');
-    expect(freshness).toHaveTextContent(new Date(sourceRetrievedAt).toLocaleString());
+    expect(freshness).toHaveTextContent(new Date(sourceRetrievedAt).toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }));
     expect(freshness).toHaveTextContent('moe-school');
-    expect(freshness).toHaveTextContent(new Date(schoolSourceRetrievedAt).toLocaleString());
-    expect(freshness).not.toHaveTextContent(new Date(timestampOld).toLocaleString());
+    expect(freshness).toHaveTextContent(new Date(schoolSourceRetrievedAt).toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }));
+    expect(freshness).not.toHaveTextContent(new Date(timestampOld).toLocaleString('en-SG', { timeZone: 'Asia/Singapore' }));
   });
 
   it('renders missing-place rerun failures in the account saved-search list', async () => {
-    renderWorkspace(<AccountPage />, {
+    renderWorkspace(<SavedDecisionSections />, {
       route: (path) => path === `/api/v1/saved-searches/${savedSearch.id}/run`
         ? Promise.resolve(json({ detail: {
           code: 'SAVED_SEARCH_PLACE_UNAVAILABLE',
@@ -512,7 +541,7 @@ describe('saved-search decision surfaces', () => {
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Rerun Near the office' }));
 
-    expect(await screen.findByText(/No search was run; update or remove the unavailable place constraint/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No search was run\. Use.*Edit criteria \/ repair places/i)).toBeInTheDocument();
     expect(screen.getByText(/Score policy/i)).toBeInTheDocument();
     expect(screen.getByText(/Source freshness/i)).toBeInTheDocument();
   });
