@@ -68,14 +68,15 @@ function normalizeTownName(town) {
 
 function TransitBadges({ town }) {
   const lines = TOWN_MRT_LINES[normalizeTownName(town)] || [];
-  return <span className="inline-flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
+  const accessibleName = lines.length
+    ? `MRT lines: ${lines.map((code) => `${MRT_LINE_INFO[code].name}${MRT_LINE_INFO[code].planned ? ', under construction' : ''}`).join(', ')}`
+    : `MRT lines vary by area in ${town}`;
+
+  return <span role="img" aria-label={accessibleName} className="inline-flex shrink-0 flex-wrap items-center justify-start gap-1">
     {lines.length ? lines.map((code) => {
       const line = MRT_LINE_INFO[code];
-      return <span key={code} title={line.planned ? `${line.name} — under construction` : line.name} className="inline-flex min-w-0 items-center gap-1.5">
-        <span aria-hidden="true" className="inline-flex h-6 min-w-10 shrink-0 items-center justify-center rounded-lg px-2 text-[10px] font-bold tracking-wide text-white" style={{ backgroundColor: line.color }}>{line.planned ? 'U/C' : code}</span>
-        <span className="text-[11px] leading-3 text-foreground/85">{line.name}{line.planned ? ' · under construction' : ''}</span>
-      </span>;
-    }) : <span title="Rail services vary across the town" className="text-[10px] text-muted-foreground">MRT varies by area</span>}
+      return <span key={code} aria-hidden="true" className="inline-flex h-[18px] min-w-7 items-center justify-center rounded-md px-1.5 text-[9px] font-bold tracking-wide text-white" style={{ backgroundColor: line.color }}>{line.planned ? 'U/C' : code}</span>;
+    }) : <span className="text-[10px] text-muted-foreground">MRT varies by area</span>}
   </span>;
 }
 const priorityNames = [
@@ -161,7 +162,7 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
       <div className="mb-3 mt-1 flex items-start justify-between gap-3">
         <div className="space-y-1">
           <p className="text-xs text-muted-foreground">Choose up to three. Clear them to keep every town in play.</p>
-          <p className="text-[11px] leading-4 text-muted-foreground">Line tags and names show rail lines in or near each town; exact access varies by estate and block. JRL is under construction.</p>
+          <p className="text-[11px] leading-4 text-muted-foreground">Badges show rail lines in or near each town; exact access varies by estate and block. The dark U/C badge marks the Jurong Region Line under construction.</p>
         </div>
         <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold tabular-nums text-primary">{selectedTowns.length}/3</span>
       </div>
@@ -172,8 +173,8 @@ function AreaChoices({ brief, setBrief, towns, flatTypes, optionsState, retryOpt
             const atLimit = !selected && selectedTowns.length >= 3;
             return <motion.button key={town} type="button" whileTap={reduceMotion ? undefined : { scale: 0.98 }} aria-pressed={selected} disabled={atLimit} onClick={() => toggleTown(town)} className={`flex min-h-12 items-center gap-2.5 rounded-xl border px-3 py-2 text-left text-xs transition-colors ${selected ? 'border-primary/40 bg-primary/10 text-foreground shadow-sm' : 'border-border/70 bg-background/75 text-muted-foreground hover:border-primary/35 hover:text-foreground'} disabled:cursor-not-allowed disabled:opacity-45`}>
               <span className={`grid size-4 shrink-0 place-items-center rounded-full border ${selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input'}`}>{selected && <Check aria-hidden="true" className="size-2.5" />}</span>
-              <span className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                <span className="font-medium">{town}</span>
+              <span className="flex min-w-0 flex-1 items-center gap-2">
+                <span className="truncate font-medium">{town}</span>
                 <TransitBadges town={town} />
               </span>
             </motion.button>;
@@ -278,7 +279,7 @@ function SearchSummary({ brief, step }) {
       <dl className="divide-y divide-border/70 rounded-xl border bg-background/55 px-3">
         <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Household</dt><dd className="max-w-[72%] text-right text-xs font-medium">{summarizeHouseholdAges(brief)}</dd></div>
         <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Budget</dt><dd className="text-right text-xs font-semibold">Up to {money(brief.budget)}</dd></div>
-        <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Areas</dt><dd className="flex max-w-[72%] flex-col items-end gap-1.5 text-right text-xs font-medium">{towns.length ? towns.map((town) => <span key={town} className="inline-flex max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-1"><span className="max-w-40 truncate">{town}</span><TransitBadges town={town} /></span>) : 'No preference'}</dd></div>
+        <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Areas</dt><dd className="flex max-w-[72%] flex-col items-end gap-1.5 text-right text-xs font-medium">{towns.length ? towns.map((town) => <span key={town} className="inline-flex max-w-full items-center justify-end gap-1.5"><span className="max-w-40 truncate">{town}</span><TransitBadges town={town} /></span>) : 'No preference'}</dd></div>
         <div className="flex items-center justify-between gap-3 py-2.5"><dt className="text-xs text-muted-foreground">Flat type</dt><dd className="text-right text-xs font-medium">{brief.preferredFlatType || 'No preference'}</dd></div>
         <div className="flex items-start justify-between gap-3 py-2.5"><dt className="pt-0.5 text-xs text-muted-foreground">Nearby</dt><dd className="max-w-[68%] text-right text-xs font-medium">Schools {distanceLabel(brief.schoolDistance)}<br />Childcare {distanceLabel(brief.childcareDistance)}<br />Care {distanceLabel(brief.careDistance)}</dd></div>
       </dl>
