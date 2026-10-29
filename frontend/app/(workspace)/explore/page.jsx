@@ -54,6 +54,7 @@ export default function ExplorePage() {
   const [stageWidth, setStageWidth] = useState(1000);
   const [resizing, setResizing] = useState(false);
   const detailOpener = useRef(null);
+  const previousDetailId = useRef('');
   const [sort, setSort] = useState('recent');
   const [groupBlocks, setGroupBlocks] = useState(true);
   const [linkedRecord, setLinkedRecord] = useState(null);
@@ -102,6 +103,23 @@ export default function ExplorePage() {
   }, [detail?.id]);
   useEffect(() => {
     detailRef.current?.querySelector('.explore-detail-scroll')?.scrollTo?.({ top: 0 });
+  }, [detailId]);
+  useEffect(() => {
+    const previous = previousDetailId.current;
+    previousDetailId.current = detailId;
+    if ((!detailId && !previous) || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const content = detailId ? detailRef.current?.querySelector('.explore-detail-scroll') : resultsRef.current;
+    if (!content?.animate) return;
+    const animations = [content.animate([
+      { opacity: .35, transform: `translateX(${detailId ? 24 : -16}px)` },
+      { opacity: 1, transform: 'translateX(0)' },
+    ], { duration: 340, easing: 'cubic-bezier(.16,1,.3,1)' })];
+    const heading = detailRef.current?.querySelector('.explore-detail-heading');
+    if (detailId && heading) animations.push(heading.animate([
+      { backgroundColor: 'hsl(var(--primary) / .22)' },
+      { backgroundColor: 'hsl(var(--accent) / .35)' },
+    ], { duration: 1300, easing: 'ease-out' }));
+    return () => animations.forEach(animation => animation.cancel());
   }, [detailId]);
   useEffect(() => {
     if (!detailId) return;
@@ -269,7 +287,7 @@ export default function ExplorePage() {
       </div></section>
   );
   const detailsPanel = (
-detailId && <aside ref={detailRef} tabIndex={-1} className="explore-detail" aria-labelledby="record-detail-title"><header className="explore-detail-heading"><div className="min-w-0"><p className="text-xs text-muted-foreground">Record details</p><h2 id="record-detail-title" aria-live="polite" className="mt-1 break-words font-display text-lg font-semibold">{detail?.address || 'Transaction record'}</h2></div><Button size="icon" variant="ghost" aria-label="Close record details" onClick={closeDetail}><X aria-hidden="true" className="size-4" /></Button></header><div className="explore-detail-scroll">{detail ? <CandidateDetails home={detail} homes={allKnown} brief={appliedBrief} saved={shortlistIds.includes(detail.id)} selected={selectedHomes.some(item => item.id === detail.id)} onSave={home => workspace.ensureSaved ? workspace.ensureSaved(home, true) : !shortlistIds.includes(home.id) && workspace.toggleShortlist(home)} onCompare={toggleCompare} onLocate={locate} /> : <p className="text-sm text-muted-foreground">This record is not in the loaded results. Restore its search, check Saved, or load more records.</p>}</div><footer className="explore-detail-footer"><Button variant="ghost" onClick={closeDetail}><ArrowLeft aria-hidden="true" className="size-4" />Results</Button><div className="flex items-center gap-1"><span className="mr-2 text-xs text-muted-foreground" aria-live="polite">{detailIndex >= 0 ? `${detailIndex + 1} / ${navigationHomes.length}` : 'Linked record'}</span><Button variant="outline" size="icon" aria-label="Previous record" disabled={detailIndex <= 0} onClick={() => inspect(navigationHomes[detailIndex - 1])}><ArrowLeft aria-hidden="true" className="size-4" /></Button><Button variant="outline" size="icon" aria-label="Next record" disabled={detailIndex < 0 || detailIndex >= navigationHomes.length - 1} onClick={() => inspect(navigationHomes[detailIndex + 1])}><ArrowRight aria-hidden="true" className="size-4" /></Button></div></footer></aside>
+detailId && <aside ref={detailRef} tabIndex={-1} className="explore-detail" aria-labelledby="record-detail-title"><header className="explore-detail-heading"><div className="min-w-0"><p className="explore-detail-label"><ArrowRight aria-hidden="true" className="size-4" />Record details</p><h2 id="record-detail-title" aria-live="polite" className="mt-1 break-words font-display text-lg font-semibold">{detail?.address || 'Transaction record'}</h2></div><Button size="icon" variant="ghost" aria-label="Close record details" onClick={closeDetail}><X aria-hidden="true" className="size-4" /></Button></header><div className="explore-detail-scroll">{detail ? <CandidateDetails home={detail} homes={allKnown} brief={appliedBrief} saved={shortlistIds.includes(detail.id)} selected={selectedHomes.some(item => item.id === detail.id)} onSave={home => workspace.ensureSaved ? workspace.ensureSaved(home, true) : !shortlistIds.includes(home.id) && workspace.toggleShortlist(home)} onCompare={toggleCompare} onLocate={locate} /> : <p className="text-sm text-muted-foreground">This record is not in the loaded results. Restore its search, check Saved, or load more records.</p>}</div><footer className="explore-detail-footer"><Button variant="ghost" onClick={closeDetail}><ArrowLeft aria-hidden="true" className="size-4" />Results</Button><div className="flex items-center gap-1"><span className="mr-2 text-xs text-muted-foreground" aria-live="polite">{detailIndex >= 0 ? `${detailIndex + 1} / ${navigationHomes.length}` : 'Linked record'}</span><Button variant="outline" size="icon" aria-label="Previous record" disabled={detailIndex <= 0} onClick={() => inspect(navigationHomes[detailIndex - 1])}><ArrowLeft aria-hidden="true" className="size-4" /></Button><Button variant="outline" size="icon" aria-label="Next record" disabled={detailIndex < 0 || detailIndex >= navigationHomes.length - 1} onClick={() => inspect(navigationHomes[detailIndex + 1])}><ArrowRight aria-hidden="true" className="size-4" /></Button></div></footer></aside>
   );
   const recordPanels = <>{resultsPanel}{detailsPanel}</>;
   return <div style={{ '--sidebar-width': `${sidebarWidth}px` }} className={`explore-desk workspace-canvas ${layoutMode === 'map' ? 'explore-desk--map' : ''}`}>
