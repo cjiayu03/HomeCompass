@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Download, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { money } from '@/lib/utils';
+import { summarizeHouseholdAges } from '@/lib/household';
 
 const statuses = { research: 'Researching', visit: 'Plan a visit', considering: 'Considering', 'ruled-out': 'Ruled out' };
 const defaultChecks = { daylight: false, noise: false, ventilation: false, condition: false, accessibility: false };
@@ -23,8 +24,8 @@ export function preferenceEntries(brief = {}) {
   const entries = [];
   const rule = key => brief.requirements?.[key] === false ? 'preference' : 'must-have';
   const add = (key, label, value) => { if (hasValue(value)) entries.push([`${label} (${rule(key)})`, value]); };
-  const household = [['Adults', brief.adults], ['Children', brief.children], ['Older adults', brief.olderAdults]].filter(([, value]) => hasValue(value));
-  if (household.length) entries.push(['Household', household.map(([label, value]) => `${value} ${label.toLowerCase()}`).join(' · ')]);
+  const household = summarizeHouseholdAges(brief);
+  if (household) entries.push(['Household', household]);
   if (hasValue(brief.budget)) add('budget', 'Budget', money(Number(brief.budget)));
   if (brief.preferredTowns?.length) add('towns', 'Towns', brief.preferredTowns.join(', '));
   add('flatType', 'Flat type', brief.preferredFlatType);
