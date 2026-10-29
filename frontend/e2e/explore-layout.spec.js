@@ -83,7 +83,7 @@ test('hover and keyboard focus locate a result without selecting it', async ({ p
   await expect(label).toContainText('123 Toa Payoh Central');
   await expect(page.locator('.map-marker.hovered')).toHaveCount(1);
   await expect(page.locator('.map-marker.selected')).toHaveCount(0);
-  await page.getByRole('heading', { name: 'Find an HDB area that fits.' }).hover();
+  await page.getByRole('heading', { name: 'HomeCompass housing explorer' }).hover();
   await expect(label).toHaveCount(0);
   await card.getByRole('button', { name: 'Details', exact: true }).focus();
   await expect(label).toContainText('123 Toa Payoh Central');

@@ -6,8 +6,10 @@ import { useAuth } from '@/components/auth-provider';
 import { ApiError, requestJson } from '@/lib/api-client';
 import { buildCriteria, applyLocalRequirements, briefFromCriteria, briefValidationError, distanceM } from '@/lib/planning';
 
+import { resourceTypes } from '@/lib/map-layers';
+import { HOME_SAVED_EVENT, COMPARISON_ADDED_EVENT } from '@/lib/workspace-events';
+
 const WorkspaceContext = createContext(null);
-const resourceTypes = ['silver_zone', 'dementia_gtp', 'chas_clinic', 'childcare', 'student_care', 'kindergarten', 'school_zone', 'dengue_cluster'];
 const priorityWeightKeys = Object.keys(defaultBrief.priorityWeights);
 const HOME_PAGE_LIMIT = 50;
 const RESOURCE_PAGE_LIMIT = 500;
@@ -16,6 +18,7 @@ const GUEST_SYNC_KEY_STORAGE_KEY = 'homecompass.guest-sync-key';
 const GUEST_SYNC_FINGERPRINT_STORAGE_KEY = 'homecompass.guest-sync-fingerprint';
 const GUEST_BRIEF_KEY = 'homecompass.guest.brief';
 const GUEST_DECISION_HOMES_KEY = 'homecompass.guest.decision-homes';
+
 const LOCAL_DATA_CLEARED_EVENT = 'homecompass:clear-local-data';
 const AUTHENTICATED_WORKSPACE_SEEN_STORAGE_KEY = 'homecompass.authenticated-workspace-seen';
 
@@ -500,6 +503,8 @@ export function WorkspaceProvider({ children }) {
   const [compareIds, setCompareIds] = useState([]);
   const [homes, setHomes] = useState(() => fixtureMode ? fixtureHomes : []);
   const [resourceFeatures, setResourceFeatures] = useState([]);
+  const mapResourceTypesRef = useRef(['silver_zone']);
+  const mapResourceCountsRef = useRef([]);
   const compareIdsRef = useRef([]);
   const [sourceStatus, setSourceStatus] = useState(null);
   const [homeState, setHomeState] = useState(() => initialState(fixtureMode ? 'fixture' : 'live'));
@@ -902,9 +907,22 @@ export function WorkspaceProvider({ children }) {
   const loadResources = useCallback((bounds = null) => {
     const params = new URLSearchParams({ limit: String(RESOURCE_PAGE_LIMIT) });
     if (bounds) params.set('bounds', [bounds.west, bounds.south, bounds.east, bounds.north].join(','));
-    resourceTypes.forEach((type) => params.append('resource_type', type));
-    return runRequest('resource', (signal) => requestJson(`/api/v1/resources?${params}`, { signal }),
+    const selectedTypes = [...mapResourceTypesRef.current];
+    return runRequest('resource', async (signal) => {
+      if (!selectedTypes.length) return { features: [], dataMode: 'live', hasMore: false };
+      // Bound each enabled layer independently so dense park/clinic data cannot
+      // consume the whole page and hide smaller community or health layers.
+      const pages = await Promise.all(selectedTypes.map(type => {
+        const layerParams = new URLSearchParams(params);
+        layerParams.set('resource_type', type);
+        return requestJson(`/api/v1/resources?${layerParams}`, { signal });
+      }));
+      return { ...pages[0], features: pages.flatMap(page => requireResultArray(page, 'features')),
+        hasMore: pages.some(page => page.hasMore === true), nextCursor: null,
+        total: pages.reduce((sum, page) => sum + (Number.isFinite(page.total) ? page.total : page.features.length), 0) };
+    },
       (payload) => requireResultArray(payload, 'features'), (payload) => {
+        if (Array.isArray(payload.counts)) mapResourceCountsRef.current = payload.counts;
         setResourceState((current) => ({
           ...current,
           bounds,
@@ -912,7 +930,7 @@ export function WorkspaceProvider({ children }) {
           total: Number.isFinite(payload.total) ? payload.total : null,
           hasMore: payload.hasMore === true,
           nextCursor: typeof payload.nextCursor === 'string' ? payload.nextCursor : null,
-          counts: Array.isArray(payload.counts) ? payload.counts : [],
+          counts: mapResourceCountsRef.current,
         }));
       });
   }, [runRequest]);
@@ -1409,10 +1427,10 @@ export function WorkspaceProvider({ children }) {
     refreshHomeRecords(missing, { silent: true });
   }, [workspaceReady, shortlistIds, compareIds]);
 
-  function flash(text, tone = 'info') {
-    setNotice({ text, tone });
+  function flash(text, tone = 'info', action = null) {
+    setNotice({ text, tone, action });
     window.clearTimeout(flashTimeoutRef.current);
-    flashTimeoutRef.current = window.setTimeout(() => setNotice(null), 4800);
+    flashTimeoutRef.current = window.setTimeout(() => setNotice(null), 4000);
   }
 
   function retainDecisionHomes(items, explicitIds = []) {
@@ -1467,6 +1485,7 @@ export function WorkspaceProvider({ children }) {
       retainDecisionHomes([home], next);
 
       if (!mutationUserId) {
+        if (!isSaved) window.dispatchEvent(new Event(HOME_SAVED_EVENT));
         flash(isSaved ? `${home.address} removed from this browser.` : `${home.address} saved in this browser.`, isSaved ? 'info' : 'success');
         return true;
       }
@@ -1482,6 +1501,7 @@ export function WorkspaceProvider({ children }) {
         });
         if (!response.ok) throw new ApiError('The account could not be updated.', { status: response.status, code: 'HTTP_ERROR' });
         if (!isCurrentOwner()) return false;
+        if (!isSaved) window.dispatchEvent(new Event(HOME_SAVED_EVENT));
         flash(isSaved ? `${home.address} removed from your account shortlist.` : `${home.address} saved to your account.`, 'success');
         return true;
       } catch (error) {
@@ -1558,6 +1578,7 @@ export function WorkspaceProvider({ children }) {
     compareIdsRef.current = next;
     setCompareIds(next);
     retainDecisionHomes([home]);
+    if (!isSelected) window.dispatchEvent(new CustomEvent(COMPARISON_ADDED_EVENT, { detail: { count: next.length } }));
     flash(isSelected ? `${home.address} removed from comparison.` : `${home.address} added to comparison.`, 'info');
   }
 
@@ -2082,6 +2103,11 @@ export function WorkspaceProvider({ children }) {
     pagination: exposedPagination,
     loadMoreHomes,
     resourceFeatures,
+    mapResourceTypes: mapResourceTypesRef.current,
+    setMapResourceTypes: types => {
+      mapResourceTypesRef.current = [...new Set(types.filter(type => resourceTypes.includes(type)))];
+      return loadResources(viewportBounds);
+    },
     resourceState,
     viewportBounds,
     refreshViewport,

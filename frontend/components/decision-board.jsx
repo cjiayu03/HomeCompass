@@ -39,7 +39,7 @@ function safeErrorMessage(error, fallback) {
   return typeof error?.message === 'string' && error.message.trim() ? error.message : fallback;
 }
 
-function DecisionCard({ home, decision, photos, updateDecision, addPhoto, removePhoto }) {
+function DecisionCard({ home, decision, photos, updateDecision, addPhoto, removePhoto, compact = false }) {
   const [customEntry, setCustomEntry] = useState('');
   const [photoPending, setPhotoPending] = useState(false);
   const [photoError, setPhotoError] = useState('');
@@ -117,6 +117,7 @@ function DecisionCard({ home, decision, photos, updateDecision, addPhoto, remove
   return <Card className="overflow-hidden border-border/80">
     <article aria-label={`Decision notes for ${home.address}`}>
       <CardHeader className="gap-3 pb-4">
+        {!compact && <>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -139,6 +140,7 @@ function DecisionCard({ home, decision, photos, updateDecision, addPhoto, remove
           </label>
         </div>
         <EvidenceContext home={home} />
+        </>}
         <ShareDecision home={home} decision={decision || {}} />
       </CardHeader>
 
@@ -361,4 +363,11 @@ export function DecisionBoard({ homes = [] }) {
       })}
     </div>
   </section>;
+}
+
+// The saved workspace opens one full viewing plan beside the list.
+export function SavedDecisionEditor({ home }) {
+  const { decisions, photos, updateDecision, addPhoto, removePhoto, ready } = usePlanning();
+  if (!ready) return <LoadingScene label="Loading your viewing plan…" />;
+  return <div className="saved-plan-editor"><DecisionCard compact home={home} decision={decisions?.[home.id] || {}} photos={photos?.[home.id] || []} updateDecision={updateDecision} addPhoto={addPhoto} removePhoto={removePhoto} /></div>;
 }

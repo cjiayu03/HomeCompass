@@ -2,10 +2,12 @@
 
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Bookmark, ChartNoAxesCombined, Copy, Expand, ListFilter, MapPinned, PanelsLeftBottom, Search, SlidersHorizontal, X } from 'lucide-react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, ArrowRight, Bookmark, ChartNoAxesCombined, ChevronDown, Copy, Ellipsis, Expand, ListFilter, MapPinned, PanelsLeftBottom, Search, SlidersHorizontal, X } from 'lucide-react';
+import { MapResearchSidebar } from '@/components/map-research-sidebar';
 import { HomeCard } from '@/components/home-card';
 import { CandidateDetails } from '@/components/candidate-details';
+import { ComparisonAction } from '@/components/comparison-action';
 import { ComparisonView } from '@/components/comparison-view';
 import { MapPanel } from '@/components/map-panel';
 import { SearchFilters } from '@/components/search-filters';
@@ -27,6 +29,12 @@ import { homes as fixtureHomes, defaultBrief } from '@/lib/data';
 import { briefValidationError } from '@/lib/planning';
 import { readSearchLocation, searchLocation } from '@/lib/search-location';
 
+const WorkspaceMap = memo(MapPanel);
+function useStableEvent(handler) {
+  const handlerRef = useRef(handler);
+  handlerRef.current = handler;
+  return useCallback((...args) => handlerRef.current(...args), []);
+}
 const MarketExplorer = dynamic(() => import('@/components/market-explorer').then(module => module.MarketExplorer), { loading: () => <LoadingScene label="Opening price history…" /> });
 
 export default function ExplorePage() {
@@ -38,19 +46,16 @@ export default function ExplorePage() {
   const [savedOnly, setSavedOnly] = useState(false);
   const [mobileView, setMobileView] = useState('homes');
   const [layoutMode, setLayoutMode] = useState('split');
-  const [mapResultsOpen, setMapResultsOpen] = useState(false);
+  const [mapResultsOpen, setMapResultsOpen] = useState(true);
   const detailRef = useRef(null);
-  const deskRef = useRef(null);
-  const collectionRef = useRef(null);
-  const controlsRef = useRef(null);
   const stageRef = useRef(null);
-  const [sidebarWidth, setSidebarWidth] = useState(420);
+  const [mapControlsTarget, setMapControlsTarget] = useState(null);
+  const [sidebarWidth, setSidebarWidth] = useState(500);
   const [stageWidth, setStageWidth] = useState(1000);
   const [resizing, setResizing] = useState(false);
   const detailOpener = useRef(null);
   const [sort, setSort] = useState('recent');
   const [groupBlocks, setGroupBlocks] = useState(true);
-  const [removedHome, setRemovedHome] = useState(null);
   const [linkedRecord, setLinkedRecord] = useState(null);
   const [detailId, setDetailId] = useState('');
   const [selectedMapHome, setSelectedMapHome] = useState(null);
@@ -64,7 +69,6 @@ export default function ExplorePage() {
   const [marketOpen, setMarketOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [savingSearch, setSavingSearch] = useState(false);
-  const [feedback, setFeedback] = useState('');
   const [options, setOptions] = useState({ towns: [], flatTypes: [], status: 'loading' });
   const resultsRef = useRef(null);
   const initialized = useRef(false);
@@ -90,9 +94,9 @@ export default function ExplorePage() {
     const grouped = [...groups.values()].map(records => ({ records, count: records.length, home: [...records].sort((a, b) => String(b.observedOn || '').localeCompare(String(a.observedOn || '')))[0] }));
     return grouped.sort((a, b) => sort === 'price' ? (a.home.price ?? Infinity) - (b.home.price ?? Infinity) : sort === 'fit' ? (b.home.score ?? -1) - (a.home.score ?? -1) : String(b.home.observedOn || '').localeCompare(String(a.home.observedOn || '')));
   }, [visibleHomes, groupBlocks, savedOnly, sort]);
-  const navigationHomes = recordGroups.map(group => group.home);
+  const navigationHomes = useMemo(() => recordGroups.map(group => group.home), [recordGroups]);
   const detailIndex = navigationHomes.findIndex(home => String(home.id) === detailId);
-  const mapHomes = selectedMapHome && !navigationHomes.some(home => home.id === selectedMapHome.id) ? [...navigationHomes, selectedMapHome] : navigationHomes;
+  const mapHomes = useMemo(() => selectedMapHome && !navigationHomes.some(home => home.id === selectedMapHome.id) ? [...navigationHomes, selectedMapHome] : navigationHomes, [navigationHomes, selectedMapHome]);
   useEffect(() => {
     if (detail && detail.id !== selectedMapHome?.id) setSelectedMapHome(detail);
   }, [detail?.id]);
@@ -106,25 +110,24 @@ export default function ExplorePage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [Boolean(detailId)]);
+  const resizeFrame = useRef(null);
+  const pendingWidth = useRef(500);
   useEffect(() => {
     const update = () => {
-      if (!deskRef.current || !collectionRef.current || !stageRef.current) return;
-      if (controlsRef.current) deskRef.current.style.setProperty('--map-controls-bottom', `${controlsRef.current.getBoundingClientRect().bottom - deskRef.current.getBoundingClientRect().top}px`);
-      deskRef.current.style.setProperty('--map-results-top', `${collectionRef.current.getBoundingClientRect().bottom - deskRef.current.getBoundingClientRect().top + 8}px`);
-      const width = stageRef.current.clientWidth;
+      const width = stageRef.current?.clientWidth || 1000;
       setStageWidth(width);
-      if (width >= 768) setSidebarWidth(current => Math.max(280, Math.min(width - 280, current)));
+      if (window.innerWidth >= 768) setSidebarWidth(current => Math.max(280, Math.min(width - 280, current)));
     };
-    if (typeof ResizeObserver === 'undefined') { update(); return; }
-    const observer = new ResizeObserver(update);
-    for (const node of [deskRef.current, collectionRef.current, controlsRef.current]) if (node) observer.observe(node);
     update();
-    return () => observer.disconnect();
-  }, [layoutMode]);
+    window.addEventListener('resize', update);
+    return () => { window.removeEventListener('resize', update); cancelAnimationFrame(resizeFrame.current); };
+  }, []);
   function resizeSidebar(width) { setSidebarWidth(Math.round(Math.max(280, Math.min(stageWidth - 280, width)))); }
   function moveDivider(event) {
     if (!event.currentTarget.hasPointerCapture(event.pointerId) || !stageRef.current) return;
-    resizeSidebar(stageRef.current.getBoundingClientRect().right - event.clientX);
+    pendingWidth.current = stageRef.current.getBoundingClientRect().right - event.clientX;
+    if (resizeFrame.current != null) return;
+    resizeFrame.current = requestAnimationFrame(() => { resizeFrame.current = null; resizeSidebar(pendingWidth.current); });
   }
   latest.current = { appliedBrief, savedOnly, mobileView, detailId, applySearch };
 
@@ -176,7 +179,7 @@ export default function ExplorePage() {
   async function runSearch(nextQuery = query, nextBrief = appliedBrief, searchOptions = {}) {
     const error = briefValidationError(nextBrief);
     if (error) { setFilterError(error); return null; }
-    setFeedback(''); setFilterError('');
+    setFilterError('');
     const result = await applySearch(nextQuery, nextBrief, searchOptions);
     if (result != null) { setDetailId(''); updateLocation(nextBrief, { detailId: '', bounds: searchOptions.bounds || null }); }
     return result;
@@ -191,58 +194,98 @@ export default function ExplorePage() {
   }, [appliedBrief, workspace.appliedBounds]);
   function openFilters() { setDraft(structuredClone(appliedBrief)); setFilterError(''); setFiltersOpen(true); }
   async function applyDraft() { const result = await runSearch(query, draft, { interpret: false }); if (result != null) { setFiltersOpen(false); setBudgetOpen(false); } }
-  function inspect(home) { if (!home) return; if (!detailId) detailOpener.current = document.activeElement; setSelectedMapHome(home); setDetailId(String(home.id)); updateLocation(appliedBrief, { detailId: String(home.id) }); }
-  function closeDetail() { setDetailId(''); updateLocation(appliedBrief, { detailId: '' }); requestAnimationFrame(() => { if (detailOpener.current?.isConnected) detailOpener.current.focus({ preventScroll: true }); }); }
+  function inspect(home) { if (!home) return; setMapResultsOpen(true); if (!detailId) detailOpener.current = document.activeElement; setCompareOpen(false); setSelectedMapHome(home); setDetailId(String(home.id)); updateLocation(appliedBrief, { detailId: String(home.id) }); }
+  function closeDetail() { setMapResultsOpen(true); setDetailId(''); updateLocation(appliedBrief, { detailId: '' }); requestAnimationFrame(() => { if (detailOpener.current?.isConnected) detailOpener.current.focus({ preventScroll: true }); }); }
   function changeView(nextSaved) { setSavedOnly(nextSaved); updateLocation(appliedBrief, { saved: nextSaved }); window.dispatchEvent(new Event('homecompass:view-change')); }
   function changeMapView(next) { setMobileView(next); updateLocation(appliedBrief, { view: next }); }
-  function changeLayout() { const next = layoutMode === 'split' ? 'map' : 'split'; setLayoutMode(next); setMobileView('map'); updateLocation(appliedBrief, { layout: next, view: 'map' }); }
+  function changeLayout() { const next = layoutMode === 'split' ? 'map' : 'split'; setLayoutMode(next); setMapResultsOpen(true); setMobileView('map'); updateLocation(appliedBrief, { layout: next, view: 'map' }); }
   function locate(home) { setSelectedMapHome(home); setMobileView('map'); setDetailId(''); updateLocation(appliedBrief, { view: 'map', detailId: '' }); }
   function selectFromMap(home) { setSelectedMapHome(home); inspect(home); }
   async function save(home) {
     const alreadySaved = shortlistIds.includes(home.id);
     const success = workspace.ensureSaved ? await workspace.ensureSaved(home, !alreadySaved) : await workspace.toggleShortlist(home);
-    if (alreadySaved && success !== false) { setRemovedHome(home); setFeedback(`${home.address} removed from Saved.`); }
+    if (alreadySaved && success !== false) workspace.flash(`${home.address} removed from Saved.`, 'info', { label: 'Undo', onClick: async () => { const restored = await workspace.ensureSaved(home, true); if (restored !== false) workspace.flash('Place restored to Saved.', 'success'); } });
   }
   async function copyLink() {
-    try { await navigator.clipboard.writeText(new URL(searchLocation(appliedBrief, { saved: false, view: mobileView, layout: layoutMode, bounds: workspace.appliedBounds }), window.location.origin).href); setFeedback('Search link copied. Personal places, notes and your free-text query are excluded.'); }
-    catch { setFeedback('The search filters are in your browser address. Copy it to share; personal places and notes are excluded.'); }
+    try { await navigator.clipboard.writeText(new URL(searchLocation(appliedBrief, { saved: false, view: mobileView, layout: layoutMode, bounds: workspace.appliedBounds }), window.location.origin).href); workspace.flash('Search link copied. Personal places, notes and your free-text query are excluded.'); }
+    catch { workspace.flash('The search filters are in your browser address. Copy it to share; personal places and notes are excluded.'); }
   }
   async function submitSavedSearch(event) {
     event.preventDefault(); setSavingSearch(true);
-    try { const saved = await saveSearch(saveName); if (saved) { setSaveName(''); setFeedback('Evidence search saved to your account.'); } }
+    try { const saved = await saveSearch(saveName); if (saved) { setSaveName(''); workspace.flash('Evidence search saved to your account.'); } }
     finally { setSavingSearch(false); }
   }
   async function reset() { const result = await resetSearch(); if (result != null) { setDetailId(''); updateLocation(defaultBrief, { detailId: '', bounds: null }); } }
   const canSaveSearch = Boolean(lastSearchSnapshot?.metadata?.dataMode === 'live' && lastSearchSnapshot?.metadata?.scorePolicyVersion && !busy && savedSearchState?.status !== 'signed_out');
   const empty = homeState?.status === 'error' ? 'Housing evidence unavailable' : busy || homeState?.status === 'idle' ? 'Loading transaction records…' : savedOnly ? 'No saved places yet' : 'No records match this search';
 
-  return <div ref={deskRef} className={`explore-desk workspace-canvas ${layoutMode === 'map' ? 'explore-desk--map' : ''}`}>
-    <header className="explore-heading"><div className="flex min-w-0 items-center gap-2"><span className="explore-brand"><MapPinned aria-hidden="true" className="size-5" /></span><div><h1 className="font-display text-lg font-semibold tracking-tight">Find an HDB area that fits.</h1><p className="text-xs text-muted-foreground">Historical resale evidence, not live listings.</p></div></div><div className="flex shrink-0 items-center gap-1"><Button variant="ghost" aria-label="Price history" onClick={() => setMarketOpen(true)}><ChartNoAxesCombined aria-hidden="true" className="size-4" /><span className="hidden xl:inline">Price history</span></Button><Button variant="ghost" aria-label="Search presets" onClick={() => setToolsOpen(true)}><ListFilter aria-hidden="true" className="size-4" /><span className="hidden sm:inline">Search presets</span><span className="sr-only sm:hidden">Search presets</span></Button><Button aria-label={layoutMode === 'map' ? 'Split view' : 'Full map'} variant={layoutMode === 'map' ? 'soft' : 'outline'} aria-pressed={layoutMode === 'map'} onClick={changeLayout}>{layoutMode === 'map' ? <PanelsLeftBottom aria-hidden="true" className="size-4" /> : <Expand aria-hidden="true" className="size-4" />}<span className="hidden sm:inline">{layoutMode === 'map' ? 'Split view' : 'Full map'}</span><span className="sr-only sm:hidden">{layoutMode === 'map' ? 'Split view' : 'Full map'}</span></Button></div></header>
-    <div ref={controlsRef} className="explore-controls search-command-bar">
-      <form className="explore-search-row" role="search" onSubmit={event => { event.preventDefault(); runSearch(); }}><div className="relative min-w-0 flex-1"><Search aria-hidden="true" className="pointer-events-none absolute left-3 top-3.5 size-4 text-muted-foreground" /><label htmlFor="home-search" className="sr-only">Search a town, street or amenity</label><Input id="home-search" name="query" autoComplete="off" value={query} onChange={event => setQuery(event.target.value)} className="h-11 pl-9 pr-12" placeholder="Town, street or amenity" />{query && <Button type="button" size="icon" variant="ghost" className="absolute right-0 top-0 size-11" aria-label="Clear search and show all matching records" onClick={() => { setQuery(''); runSearch('', appliedBrief); document.getElementById('home-search')?.focus(); }}><X className="size-4" /></Button>}</div><Button type="submit" disabled={busy}>{busy ? 'Searching…' : 'Search'}</Button><Button type="button" variant="outline" onClick={openFilters}><SlidersHorizontal aria-hidden="true" className="size-4" /><span>Filters</span></Button></form>
-      <div className="explore-quick-filters"><Button variant="ghost" onClick={() => { setDraft(structuredClone(appliedBrief)); setFilterError(''); setBudgetOpen(true); }}>{appliedBrief.budget != null ? 'Edit price ceiling' : 'Set price ceiling'}</Button><Button variant="ghost" onClick={openFilters}>{appliedBrief.preferredTowns?.length ? `${appliedBrief.preferredTowns.length} towns` : 'All towns'}</Button><Button variant="ghost" onClick={openFilters}>{appliedBrief.preferredFlatType || 'Any flat type'}</Button><Button size="icon" variant="ghost" aria-label="Share filters" onClick={copyLink}><Copy aria-hidden="true" className="size-4" /></Button><Button variant="ghost" disabled={busy} onClick={reset}>Reset search</Button></div>
+  const onInspectRecord = useStableEvent(inspect);
+  const onLocateRecord = useStableEvent(locate);
+  const onSaveRecord = useStableEvent(save);
+  const onCompareRecord = useStableEvent(toggleCompare);
+  const onMapSelect = useStableEvent(selectFromMap);
+  const onSearchMapArea = useStableEvent(() => runSearch(workspace.appliedQuery ?? query, appliedBrief, { bounds: viewportBounds, interpret: false }));
+  const collectionControls = (
+<div className="explore-collection-bar"><div className="flex items-center gap-1" role="group" aria-label="Record collection"><Button variant={!savedOnly ? 'soft' : 'ghost'} aria-pressed={!savedOnly} onClick={() => changeView(false)} aria-label="All results"><span className="collection-label-wide">All results</span><span className="collection-label-compact">All</span></Button><Button variant={savedOnly ? 'soft' : 'ghost'} aria-pressed={savedOnly} onClick={() => changeView(true)}><Bookmark aria-hidden="true" className="size-4" />Saved ({shortlistIds.length})</Button></div><div className="flex items-center gap-2"><ComparisonAction homes={selectedHomes} onRemove={onCompareRecord} onOpen={() => setCompareOpen(true)} /><details className="explore-sort"><summary title="Sort and group">Sort</summary><div className="explore-sort-menu"><label className="grid gap-2 text-sm">Sort loaded records<select className="h-11 rounded-lg border bg-background px-2" value={sort} onChange={event => setSort(event.target.value)}><option value="recent">Most recent</option><option value="price">Recorded price</option><option value="fit">Fit score</option></select></label>{!savedOnly && <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={groupBlocks} onChange={event => setGroupBlocks(event.target.checked)} />Group repeated block records</label>}</div></details><Button className="explore-results-toggle" variant={mapResultsOpen ? 'soft' : 'outline'} aria-pressed={mapResultsOpen || Boolean(detailId)} onClick={() => { if (detailId) closeDetail(); else setMapResultsOpen(current => !current); }}>Results</Button></div></div>
+  );
+  const toolbar = <>
+    <header className="explore-topbar">
+      <Link href="/explore" aria-label="HomeCompass home" className="explore-brand"><span className="explore-logo"><MapPinned aria-hidden="true" className="size-6" /></span><span>HomeCompass</span></Link>
+      <h1 className="sr-only">HomeCompass housing explorer</h1>
+      <form className="explore-search-row" role="search" onSubmit={event => { event.preventDefault(); runSearch(); }}>
+        <div className="explore-query"><Search aria-hidden="true" className="size-4" /><label htmlFor="home-search" className="sr-only">Search a town, street or amenity</label><Input id="home-search" name="query" autoComplete="off" value={query} onChange={event => setQuery(event.target.value)} placeholder="Town, street or amenity" />{query && <Button type="button" size="icon" variant="ghost" aria-label="Clear search and show all matching records" onClick={() => { setQuery(''); runSearch('', appliedBrief); document.getElementById('home-search')?.focus(); }}><X className="size-4" /></Button>}</div>
+        <Button type="submit" disabled={busy}>{busy ? 'Searching…' : 'Search'}</Button>
+        <Button type="button" variant="outline" className="explore-filter-button" onClick={openFilters} aria-label="Filters"><SlidersHorizontal aria-hidden="true" className="size-4" /><span>Filters</span></Button>
+      </form>
+      <div className="explore-actions"><div className="explore-mobile-toggle" role="group" aria-label="Explore view"><Button variant={mobileView === 'homes' ? 'soft' : 'ghost'} aria-pressed={mobileView === 'homes'} onClick={() => changeMapView('homes')}>List</Button><Button variant={mobileView === 'map' ? 'soft' : 'ghost'} aria-pressed={mobileView === 'map'} onClick={() => changeMapView('map')}>Map</Button></div>
+        <details className="explore-tools-menu"><summary aria-label="More search tools"><Ellipsis aria-hidden="true" className="size-5" /><span>More</span></summary><div className="explore-tools-popover">
+          <Button className="explore-menu-layout" variant="ghost" aria-label={layoutMode === 'map' ? 'Split view' : 'Full map'} onClick={event => { event.currentTarget.closest('details').open = false; changeLayout(); }}>{layoutMode === 'map' ? 'Split view' : 'Full map'}</Button>
+          <Button variant="ghost" onClick={event => { event.currentTarget.closest('details').open = false; setMarketOpen(true); }}><ChartNoAxesCombined aria-hidden="true" className="size-4" />Price history</Button>
+          <Button variant="ghost" aria-label="Search presets" onClick={event => { event.currentTarget.closest('details').open = false; setToolsOpen(true); }}><ListFilter aria-hidden="true" className="size-4" />Search presets</Button>
+          <Button variant="ghost" onClick={event => { event.currentTarget.closest('details').open = false; copyLink(); }}><Copy aria-hidden="true" className="size-4" />Share filters</Button>
+          <Button variant="ghost" disabled={busy} onClick={event => { event.currentTarget.closest('details').open = false; reset(); }}>Reset search</Button>
+        </div></details>
+        <Button aria-label={layoutMode === 'map' ? 'Split view' : 'Full map'} variant="ghost" className="explore-layout-button" aria-pressed={layoutMode === 'map'} onClick={changeLayout}>{layoutMode === 'map' ? <PanelsLeftBottom aria-hidden="true" className="size-4" /> : <Expand aria-hidden="true" className="size-4" />}<span>{layoutMode === 'map' ? 'Split view' : 'Full map'}</span></Button>
+      </div>
+    </header>
+    <div className="explore-controls">
+      <div className="explore-quick-filters" aria-label="Quick search filters">
+        <Button variant="ghost" onClick={() => { setDraft(structuredClone(appliedBrief)); setFilterError(''); setBudgetOpen(true); }}><span className="criteria-label">{appliedBrief.budget != null ? 'Edit price ceiling' : 'Set price ceiling'}</span><span className="criteria-short-label">Budget</span><ChevronDown aria-hidden="true" className="size-3.5" /></Button>
+        <Button variant="ghost" onClick={openFilters}><span>{appliedBrief.preferredTowns?.length ? `${appliedBrief.preferredTowns.length} towns` : 'All towns'}</span><ChevronDown aria-hidden="true" className="size-3.5" /></Button>
+        <Button variant="ghost" onClick={openFilters}><span className="criteria-label">{appliedBrief.preferredFlatType || 'Any flat type'}</span><span className="criteria-short-label">{appliedBrief.preferredFlatType || 'Flat type'}</span><ChevronDown aria-hidden="true" className="size-3.5" /></Button>
+      </div>
       <div className="explore-applied">{workspace.appliedBounds && <Button variant="outline" onClick={() => runSearch(workspace.appliedQuery ?? query, appliedBrief, { interpret: false })}>Map area applied · Remove area <X aria-hidden="true" className="size-3" /></Button>}<ActiveRequirements brief={appliedBrief} places={places} disabled={busy} onApply={next => runSearch(query, next, { interpret: false })} /></div>
+      <span className="explore-data-note">HDB resale records · Singapore</span>
     </div>
-    {feedback && <div role="status" className="mt-3 flex items-start justify-between gap-3 rounded-xl border bg-secondary px-4 py-3 text-sm"><span>{feedback}</span>{removedHome && <Button variant="outline" onClick={async () => { await workspace.ensureSaved(removedHome, true); setRemovedHome(null); setFeedback('Place restored to Saved.'); }}>Undo</Button>}<Button size="icon" variant="ghost" aria-label="Dismiss search message" onClick={() => setFeedback('')}><X className="size-4" /></Button></div>}
-    {(homeState?.status !== 'success' || homeState?.dataMode === 'fixture') && <DataStatus state={homeState} hasData={homes.length > 0} onRetry={retryHomes} retryLabel="Retry home data" compact className="mt-3" />}
-    <div ref={collectionRef} className="explore-collection-bar"><div className="flex items-center gap-1" role="group" aria-label="Record collection"><Button variant={!savedOnly ? 'soft' : 'ghost'} aria-pressed={!savedOnly} onClick={() => changeView(false)}>All results</Button><Button variant={savedOnly ? 'soft' : 'ghost'} aria-pressed={savedOnly} onClick={() => changeView(true)}><Bookmark aria-hidden="true" className="size-4" />Saved ({shortlistIds.length})</Button></div><div className="flex items-center gap-2"><details className="explore-sort"><summary>Sort and group</summary><div className="explore-sort-menu"><label className="grid gap-2 text-sm">Sort loaded records<select className="h-11 rounded-lg border bg-background px-2" value={sort} onChange={event => setSort(event.target.value)}><option value="recent">Most recent</option><option value="price">Recorded price</option><option value="fit">Fit score</option></select></label>{!savedOnly && <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={groupBlocks} onChange={event => setGroupBlocks(event.target.checked)} />Group repeated block records</label>}</div></details><div className="explore-mobile-toggle" role="group" aria-label="Explore view"><Button variant={mobileView === 'homes' ? 'soft' : 'ghost'} aria-pressed={mobileView === 'homes'} onClick={() => changeMapView('homes')}>List</Button><Button variant={mobileView === 'map' ? 'soft' : 'ghost'} aria-pressed={mobileView === 'map'} onClick={() => changeMapView('map')}>Map</Button></div>{layoutMode === 'map' && <Button variant={mapResultsOpen ? 'soft' : 'outline'} aria-pressed={mapResultsOpen} onClick={() => setMapResultsOpen(current => !current)}>Results</Button>}</div></div>
-    <div ref={stageRef} style={{ '--sidebar-width': `${sidebarWidth}px` }} className={`explore-stage ${resizing ? 'explore-stage--resizing' : ''} ${detailId ? 'explore-stage--detail' : ''} ${mobileView === 'map' ? 'explore-stage--mobile-map' : ''} ${mapResultsOpen ? 'explore-stage--results-open' : ''}`}>
-      <div className="explore-map"><MapPanel homes={mapHomes} resources={resourceFeatures} resourceState={resourceState} retryResources={retryResources} sourceStatus={sourceStatus} hoveredHome={workspace.hoveredHome} selectedHome={selectedMapHome} onSelect={selectFromMap} refreshViewport={refreshViewport} viewportBounds={viewportBounds} onSearchArea={savedOnly ? undefined : () => runSearch(workspace.appliedQuery ?? query, appliedBrief, { bounds: viewportBounds, interpret: false })} searchBusy={busy} className="explore-map-panel" /></div>
-      {layoutMode === 'split' && <div className="explore-divider" role="separator" tabIndex={0} aria-label="Resize map and sidebar" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={Math.max(280, stageWidth - 280)} aria-valuenow={sidebarWidth} aria-valuetext={`${sidebarWidth} pixels sidebar width`} onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); setResizing(true); }} onPointerMove={moveDivider} onPointerUp={event => { event.currentTarget.releasePointerCapture(event.pointerId); setResizing(false); }} onLostPointerCapture={() => setResizing(false)} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resizeSidebar(sidebarWidth + (event.key === 'ArrowLeft' ? 24 : -24)); } else if (event.key === 'Home') { event.preventDefault(); resizeSidebar(420); } }}><span /></div>}
-      <section className="explore-results" aria-label="Historical transaction results"><div className="explore-results-heading"><h2 className="text-sm font-semibold">{savedOnly ? `${visibleHomes.length} saved records` : `${homes.length.toLocaleString()} / ${(pagination?.total ?? homes.length).toLocaleString()} records loaded`}</h2><span className="text-xs text-muted-foreground">{groupBlocks && !savedOnly ? `${recordGroups.length} groups` : 'No live listings'}</span></div><div ref={resultsRef} className="explore-results-scroll" aria-busy={busy}>
-        {recordGroups.map(({ home, count }) => <div key={home.id} className="space-y-2">{count > 1 && <p className="px-2 text-xs text-muted-foreground">{count} loaded sales at this block / flat type · latest dated observation shown</p>}<HomeCard variant="browse" home={home} saved={shortlistIds.includes(home.id)} selected={selectedHomes.some(item => item.id === home.id)} mapActive={selectedMapHome?.id === home.id} onLocate={locate} onSave={save} onCompare={toggleCompare} onInspect={inspect} /></div>)}
-        {!visibleHomes.length && <div className="grid min-h-64 content-center rounded-xl border border-dashed p-5 text-center"><h3 className="text-lg font-semibold">{empty}</h3><p className="mt-2 text-sm leading-6 text-muted-foreground">{savedOnly ? 'Save a location from All results to keep its evidence here.' : homeState?.status === 'error' ? 'Your search is retained. Retry the same request to continue.' : 'Try fewer requirements or a wider area.'}</p>{savedOnly ? <Button variant="outline" className="mx-auto mt-4" onClick={() => changeView(false)}>Browse all results</Button> : <Button variant="outline" className="mx-auto mt-4" onClick={homeState?.status === 'error' ? retryHomes : reset}> {homeState?.status === 'error' ? 'Retry search' : 'Reset search'}</Button>}</div>}
+    {!['idle', 'loading', 'success'].includes(homeState?.status) || homeState?.dataMode === 'fixture' && !busy ? <DataStatus state={homeState} hasData={homes.length > 0} onRetry={retryHomes} retryLabel="Retry home data" compact className="mt-3" /> : null}
+
+  </>;
+  const resultsPanel = (
+<section className="explore-results" aria-label="Historical transaction results"><div className="explore-results-heading"><div><h2>{savedOnly ? 'Your saved places' : 'Places to explore'}</h2><p>{savedOnly ? `${visibleHomes.length} saved records` : `${homes.length.toLocaleString()} of ${(pagination?.total ?? homes.length).toLocaleString()} records loaded`}</p></div><span className="explore-source-note">Past sales,<br />not live listings</span></div>{collectionControls}<div ref={resultsRef} className="explore-results-scroll" aria-busy={busy}>
+        {recordGroups.map(({ home, count }) => <div key={home.id} className="space-y-2">{count > 1 && <p className="px-2 text-xs text-muted-foreground">{count} loaded sales at this block / flat type · latest dated observation shown</p>}<HomeCard variant="browse" compact home={home} saved={shortlistIds.includes(home.id)} selected={selectedHomes.some(item => item.id === home.id)} mapActive={selectedMapHome?.id === home.id} onLocate={onLocateRecord} onSave={onSaveRecord} onCompare={onCompareRecord} onInspect={onInspectRecord} /></div>)}
+        {!visibleHomes.length && !busy && homeState?.status !== 'idle' && <div className="grid min-h-64 content-center rounded-xl border border-dashed p-5 text-center"><h3 className="text-lg font-semibold">{empty}</h3><p className="mt-2 text-sm leading-6 text-muted-foreground">{savedOnly ? 'Save a location from All results to keep its evidence here.' : homeState?.status === 'error' ? 'Your search is retained. Retry the same request to continue.' : 'Try fewer requirements or a wider area.'}</p>{savedOnly ? <Button variant="outline" className="mx-auto mt-4" onClick={() => changeView(false)}>Browse all results</Button> : <Button variant="outline" className="mx-auto mt-4" onClick={homeState?.status === 'error' ? retryHomes : reset}> {homeState?.status === 'error' ? 'Retry search' : 'Reset search'}</Button>}</div>}
     {!savedOnly && !visibleHomes.length && !busy && ['empty', 'success'].includes(homeState?.status) && <div className="mt-4"><EmptyRecovery brief={appliedBrief} lastSearchSnapshot={lastSearchSnapshot} applySearch={runSearch} fixtureMode={fixtureMode} /></div>}
         {!savedOnly && pagination?.hasMore && <Button variant="outline" className="w-full" disabled={busy} onClick={loadMoreHomes}>{busy ? 'Loading…' : 'Load more transactions'}</Button>}
       </div></section>
-      {detailId && <aside ref={detailRef} tabIndex={-1} className="explore-detail" aria-labelledby="record-detail-title"><header className="explore-detail-heading"><div className="min-w-0"><p className="text-xs text-muted-foreground">Record details</p><h2 id="record-detail-title" aria-live="polite" className="mt-1 break-words font-display text-lg font-semibold">{detail?.address || 'Transaction record'}</h2></div><Button size="icon" variant="ghost" aria-label="Close record details" onClick={closeDetail}><X aria-hidden="true" className="size-4" /></Button></header><div className="explore-detail-scroll">{detail ? <CandidateDetails home={detail} homes={allKnown} brief={appliedBrief} saved={shortlistIds.includes(detail.id)} selected={selectedHomes.some(item => item.id === detail.id)} onSave={home => workspace.ensureSaved ? workspace.ensureSaved(home, true) : !shortlistIds.includes(home.id) && workspace.toggleShortlist(home)} onCompare={toggleCompare} onLocate={locate} /> : <p className="text-sm text-muted-foreground">This record is not in the loaded results. Restore its search, check Saved, or load more records.</p>}</div><footer className="explore-detail-footer"><Button variant="ghost" onClick={closeDetail}><ArrowLeft aria-hidden="true" className="size-4" />Results</Button><div className="flex items-center gap-1"><span className="mr-2 text-xs text-muted-foreground" aria-live="polite">{detailIndex >= 0 ? `${detailIndex + 1} / ${navigationHomes.length}` : 'Linked record'}</span><Button variant="outline" size="icon" aria-label="Previous record" disabled={detailIndex <= 0} onClick={() => inspect(navigationHomes[detailIndex - 1])}><ArrowLeft aria-hidden="true" className="size-4" /></Button><Button variant="outline" size="icon" aria-label="Next record" disabled={detailIndex < 0 || detailIndex >= navigationHomes.length - 1} onClick={() => inspect(navigationHomes[detailIndex + 1])}><ArrowRight aria-hidden="true" className="size-4" /></Button></div></footer></aside>}
+  );
+  const detailsPanel = (
+detailId && <aside ref={detailRef} tabIndex={-1} className="explore-detail" aria-labelledby="record-detail-title"><header className="explore-detail-heading"><div className="min-w-0"><p className="text-xs text-muted-foreground">Record details</p><h2 id="record-detail-title" aria-live="polite" className="mt-1 break-words font-display text-lg font-semibold">{detail?.address || 'Transaction record'}</h2></div><Button size="icon" variant="ghost" aria-label="Close record details" onClick={closeDetail}><X aria-hidden="true" className="size-4" /></Button></header><div className="explore-detail-scroll">{detail ? <CandidateDetails home={detail} homes={allKnown} brief={appliedBrief} saved={shortlistIds.includes(detail.id)} selected={selectedHomes.some(item => item.id === detail.id)} onSave={home => workspace.ensureSaved ? workspace.ensureSaved(home, true) : !shortlistIds.includes(home.id) && workspace.toggleShortlist(home)} onCompare={toggleCompare} onLocate={locate} /> : <p className="text-sm text-muted-foreground">This record is not in the loaded results. Restore its search, check Saved, or load more records.</p>}</div><footer className="explore-detail-footer"><Button variant="ghost" onClick={closeDetail}><ArrowLeft aria-hidden="true" className="size-4" />Results</Button><div className="flex items-center gap-1"><span className="mr-2 text-xs text-muted-foreground" aria-live="polite">{detailIndex >= 0 ? `${detailIndex + 1} / ${navigationHomes.length}` : 'Linked record'}</span><Button variant="outline" size="icon" aria-label="Previous record" disabled={detailIndex <= 0} onClick={() => inspect(navigationHomes[detailIndex - 1])}><ArrowLeft aria-hidden="true" className="size-4" /></Button><Button variant="outline" size="icon" aria-label="Next record" disabled={detailIndex < 0 || detailIndex >= navigationHomes.length - 1} onClick={() => inspect(navigationHomes[detailIndex + 1])}><ArrowRight aria-hidden="true" className="size-4" /></Button></div></footer></aside>
+  );
+  const recordPanels = <>{resultsPanel}{detailsPanel}</>;
+  return <div style={{ '--sidebar-width': `${sidebarWidth}px` }} className={`explore-desk workspace-canvas ${layoutMode === 'map' ? 'explore-desk--map' : ''}`}>
+    {layoutMode === 'map' ? <MapResearchSidebar open={mapResultsOpen} onOpenChange={setMapResultsOpen} toolbar={toolbar}>{resultsPanel}</MapResearchSidebar> : toolbar}
+    {layoutMode === 'map' && detailId && <div className="map-record-details"><div ref={setMapControlsTarget} className="detail-map-tools-host" />{detailsPanel}</div>}
+    <div ref={stageRef} style={{ '--sidebar-width': `${sidebarWidth}px` }} className={`explore-stage ${resizing ? 'explore-stage--resizing' : ''} ${detailId ? 'explore-stage--detail' : ''} ${mobileView === 'map' ? 'explore-stage--mobile-map' : ''} ${mapResultsOpen ? 'explore-stage--results-open' : ''} `}>
+      <div className="explore-map"><WorkspaceMap controlsTarget={mapControlsTarget} homes={mapHomes} resources={resourceFeatures} resourceState={resourceState} retryResources={retryResources} sourceStatus={sourceStatus} hoveredHome={workspace.hoveredHome} selectedHome={selectedMapHome} onSelect={onMapSelect} refreshViewport={refreshViewport} viewportBounds={viewportBounds} onSearchArea={savedOnly ? undefined : onSearchMapArea} searchBusy={busy} className="explore-map-panel" /></div>
+      {layoutMode === 'split' && <div className="explore-divider" role="separator" tabIndex={0} aria-label="Resize map and sidebar" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={Math.max(280, stageWidth - 280)} aria-valuenow={sidebarWidth} aria-valuetext={`${sidebarWidth} pixels sidebar width`} onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); setResizing(true); }} onPointerMove={moveDivider} onPointerUp={event => { event.currentTarget.releasePointerCapture(event.pointerId); setResizing(false); }} onLostPointerCapture={() => setResizing(false)} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resizeSidebar(sidebarWidth + (event.key === 'ArrowLeft' ? 24 : -24)); } else if (event.key === 'Home') { event.preventDefault(); resizeSidebar(500); } }}><span /></div>}
+      {layoutMode === 'split' && recordPanels}
     </div>
 
-    {selectedHomes.length > 0 && <aside className="comparison-tray fixed inset-x-3 bottom-24 z-40 mx-auto flex max-w-3xl flex-wrap items-center justify-between gap-2 rounded-2xl border bg-popover p-3 shadow-xl sm:inset-x-6" aria-label="Comparison selection"><div className="min-w-0"><p className="text-sm font-semibold">{selectedHomes.length} selected <span className="font-normal text-muted-foreground">· up to 3</span></p><div className="mt-1 flex flex-wrap gap-1">{selectedHomes.map(home => <button key={home.id} className="flex min-h-11 max-w-48 items-center gap-2 rounded-lg px-2 text-xs hover:bg-secondary" onClick={() => toggleCompare(home)} aria-label={`Remove ${home.address} from comparison`}><span className="truncate">{home.address}</span><X aria-hidden="true" className="size-3 shrink-0" /></button>)}</div></div><Button disabled={selectedHomes.length < 2} onClick={() => setCompareOpen(true)}>{selectedHomes.length < 2 ? 'Select one more' : `Compare ${selectedHomes.length}`}<ArrowRight aria-hidden="true" className="size-4" /></Button></aside>}
+
     <Dialog open={filtersOpen} onOpenChange={setFiltersOpen}><DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-2xl flex-col gap-0 overflow-hidden p-0"><DialogHeader className="shrink-0 border-b p-5 pr-16"><DialogTitle>Filters</DialogTitle><DialogDescription>Edit your criteria. Changes apply only when you choose Apply filters.</DialogDescription></DialogHeader><div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5"><SearchFilters brief={draft} setBrief={setDraft} options={options} places={places} onAddPlace={() => { setFiltersOpen(false); setPlaceOpen(true); }} />{filterError && <Alert role="alert" tone="warning" className="mt-4">{filterError}</Alert>}</div><DialogFooter className="shrink-0 border-t p-4"><Button variant="outline" onClick={() => setFiltersOpen(false)}>Cancel</Button><Button disabled={busy} onClick={applyDraft}>Apply filters</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={budgetOpen} onOpenChange={setBudgetOpen}><DialogContent><DialogHeader><DialogTitle>Price ceiling</DialogTitle><DialogDescription>Compare recorded prices within your chosen ceiling.</DialogDescription></DialogHeader><BudgetInput value={draft.budget} onChange={value => setDraft(current => ({ ...current, budget: value, requirements: { ...current.requirements, budget: value != null } }))} />{filterError && <Alert role="alert" tone="warning">{filterError}</Alert>}<DialogFooter><Button variant="outline" onClick={() => setBudgetOpen(false)}>Cancel</Button><Button disabled={busy} onClick={applyDraft}>Apply price ceiling</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={placeOpen} onOpenChange={setPlaceOpen}><DialogContent className="max-h-[calc(100dvh-2rem)] max-w-xl overflow-y-auto overscroll-contain"><DialogHeader><DialogTitle>Add a household place</DialogTitle><DialogDescription>Choose an address or mark a temporary location.</DialogDescription></DialogHeader><SearchPlaceEntry onCancel={() => { setPlaceOpen(false); setFiltersOpen(true); }} onAdded={place => { setDraft(current => ({ ...current, placeConstraints: [...(current.placeConstraints || []).filter(item => item.placeId !== place.id), { placeId: place.id, maxDistanceM: place.maximumDistanceM || 5000 }] })); setPlaceOpen(false); setFiltersOpen(true); }} /></DialogContent></Dialog>
-    <Dialog open={compareOpen} onOpenChange={setCompareOpen}><DialogContent className="flex max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-6xl flex-col overflow-hidden p-0"><DialogHeader className="shrink-0 border-b p-5 pr-16"><DialogTitle>Compare your selected places</DialogTitle><DialogDescription>Closing comparison returns to your search.</DialogDescription></DialogHeader><div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4"><ComparisonView homes={selectedHomes} onRemove={toggleCompare} availableHomes={shortlistHomes.filter(home => !selectedHomes.some(selected => selected.id === home.id))} onAdd={toggleCompare} brief={appliedBrief} decisions={decisions} photos={photos} /></div><DialogFooter className="border-t p-3"><Button onClick={() => setCompareOpen(false)}>Back to search</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={compareOpen} onOpenChange={setCompareOpen}><DialogContent className="flex max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-6xl flex-col overflow-hidden p-0"><DialogHeader className="shrink-0 border-b p-5 pr-16"><DialogTitle>Compare your selected places</DialogTitle><DialogDescription>Closing comparison returns to your search.</DialogDescription></DialogHeader><div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4"><ComparisonView homes={selectedHomes} onRemove={onCompareRecord} availableHomes={shortlistHomes.filter(home => !selectedHomes.some(selected => selected.id === home.id))} onAdd={onCompareRecord} brief={appliedBrief} decisions={decisions} photos={photos} /></div><DialogFooter className="border-t p-3"><Button onClick={() => setCompareOpen(false)}>Back to search</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={toolsOpen} onOpenChange={setToolsOpen}><DialogContent className="max-h-[calc(100dvh-2rem)] max-w-4xl overflow-y-auto overscroll-contain"><DialogHeader><DialogTitle>Search presets and history</DialogTitle><DialogDescription>Reuse criteria without leaving your research workspace.</DialogDescription></DialogHeader><SearchWorkbench brief={appliedBrief} applySearch={async (...args) => { const result = await runSearch(...args); if (result != null) setToolsOpen(false); }} /><section className="border-t pt-4"><h3 className="text-sm font-semibold">Save this search with its evidence</h3><p className="mt-1 text-xs leading-5 text-muted-foreground">Account searches retain source dates and score policy so you can see what changed on a later run.</p>{user && !canSaveSearch && <p role="status" className="mt-2 text-xs text-muted-foreground">Run a source search first to save its evidence and scoring policy.</p>}{user ? <form className="mt-3 flex gap-2" onSubmit={submitSavedSearch}><Input aria-label="Saved evidence search name" maxLength={80} value={saveName} onChange={event => setSaveName(event.target.value)} placeholder="Name this evidence search" /><Button disabled={!canSaveSearch || savingSearch || !saveName.trim()}>{savingSearch ? 'Saving…' : 'Save evidence search'}</Button></form> : <Link href="/login" className="mt-2 block min-h-11 content-center text-sm text-primary underline">Sign in to retain evidence searches across devices</Link>}</section><SavedDecisionSections onEdit={edited => { setDraft(structuredClone(edited)); setToolsOpen(false); setFiltersOpen(true); }} onApplied={() => setToolsOpen(false)} /></DialogContent></Dialog>
     <Dialog open={marketOpen} onOpenChange={setMarketOpen}><DialogContent className="max-h-[90dvh] max-w-3xl overflow-y-auto overscroll-contain"><DialogHeader><DialogTitle>Neighbourhood price history</DialogTitle><DialogDescription>Dated resale transactions; not a valuation.</DialogDescription></DialogHeader><MarketExplorer towns={options.towns} flatTypes={options.flatTypes} initialTown={selectedMapHome?.town || appliedBrief.preferredTowns?.[0] || ''} initialFlatType={selectedMapHome?.type || appliedBrief.preferredFlatType || ''} /></DialogContent></Dialog>
   </div>;

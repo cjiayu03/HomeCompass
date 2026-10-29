@@ -20,6 +20,7 @@ export const sourceReviewDays = {
   childcare_fees: 90, childcare_charges: 90,
   chas_clinic: 90, childcare: 90, childcare_registry: 90,
   student_care: 90, kindergarten: 90,
+  community_club: 180, eldercare: 90, park_facility: 180,
   moe_school: 180, school_zone: 180, silver_zone: 180, dementia_gtp: 180,
   hdb_building: 365, hdb_property: 365,
 };

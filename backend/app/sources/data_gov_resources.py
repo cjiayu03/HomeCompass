@@ -55,6 +55,9 @@ SOURCES: tuple[SourceDefinition, ...] = (
     SourceDefinition("d_dc343c021aa470fc71da90d31e552a9a", "silver_zone", "geojson", ("NAME", "SILVER_ZONE", "LOCATION", "DESCRIPTION")),
     SourceDefinition("d_e2d10e591bc8560b8946a0da24790fa5", "dementia_gtp", "geojson", ("NAME", "FACILITY_NAME", "LOCATION", "DESCRIPTION")),
     SourceDefinition("d_548c33ea2d99e29ec63a7cc9edcccedc", "chas_clinic", "geojson", ("HCI_NAME", "NAME", "CLINIC_NAME")),
+    SourceDefinition("d_f706de1427279e61fe41e89e24d440fa", "community_club", "geojson", ("NAME", "CC_NAME"), description="PA community-club location snapshot; does not establish current opening hours or availability."),
+    SourceDefinition("d_f0fd1b3643ed8bd34bd403dedd7c1533", "eldercare", "geojson", ("NAME", "HCI_NAME"), description="MOH Eldercare Services location snapshot only; not a complete directory of hospitals, polyclinics or all health facilities."),
+    SourceDefinition("d_14d807e20158338fd578c2913953516e", "park_facility", "geojson", ("NAME", "CLASS"), description="NParks representative park-facility points; unnamed facilities retain their published facility class."),
     SourceDefinition("d_688b934f82c1059ed0a6993d2a829089", "moe_school", "csv", ("SCHOOL_NAME", "SCHOOL", "NAME"), description="Current MOE school directory; coordinates are not published in this CSV."),
     SourceDefinition("d_5d668e3f544335f8028f546827b773b4", "childcare", "geojson", ("NAME", "CENTRE_NAME", "CHILDCARE_NAME")),
     SourceDefinition("d_77e6e0d58ce4743dab1f26dfcbbeb6f4", "student_care", "geojson", ("NAME", "CENTRE_NAME", "STUDENT_CARE_CENTRE", "NAME_OF_STUDENT_CARE_CENTRE")),
@@ -106,7 +109,9 @@ class _TableText(HTMLParser):
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag.lower() in {"td", "th"}:
-            self._in_cell = True
+            # Export tables begin with a two-column "Attributes" heading.
+            # It is not a key/value cell and would shift every following pair.
+            self._in_cell = not any(key.lower() == "colspan" and value != "1" for key, value in attrs)
             self._parts = []
 
     def handle_data(self, data: str) -> None:

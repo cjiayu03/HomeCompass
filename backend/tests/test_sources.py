@@ -224,9 +224,9 @@ def test_data_gov_sg_rejects_invalid_dataset_id_before_network_request():
 
 
 def test_all_registered_public_layers_have_independent_dataset_sources():
-    assert len(data_gov_resources.SOURCES) == 14
-    assert len({source.dataset_id for source in data_gov_resources.SOURCES}) == 14
-    assert {"moe_school", "student_care", "childcare_fees", "dengue_cluster"}.issubset(
+    assert len(data_gov_resources.SOURCES) == 17
+    assert len({source.dataset_id for source in data_gov_resources.SOURCES}) == 17
+    assert {"moe_school", "student_care", "childcare_fees", "dengue_cluster", "community_club", "eldercare", "park_facility"}.issubset(
         {source.resource_type for source in data_gov_resources.SOURCES}
     )
 
@@ -397,3 +397,36 @@ def test_onemap_search_includes_second_page_for_large_shared_campuses(monkeypatc
 
     assert client.pages == [1, 2]
     assert [item["BUILDING"] for item in results] == ["RAFFLES INSTITUTION (AUDITORIUM)", "RAFFLES INSTITUTION"]
+
+
+@pytest.mark.parametrize(("resource_type", "published_name"), [
+    ("community_club", "ACE The Place CC"),
+    ("eldercare", "Yuhua Senior Activity Centre"),
+])
+def test_legacy_amenity_table_heading_does_not_shift_name_fields(resource_type, published_name):
+    source = next(source for source in data_gov_resources.SOURCES if source.resource_type == resource_type)
+    description = ("<table><tr><th colspan='2'>Attributes</th></tr>"
+                   "<tr><th>ADDRESSBUILDINGNAME</th><td></td></tr>"
+                   f"<tr><th>NAME</th><td>{published_name}</td></tr>"
+                   "<tr><th>FMEL_UPD_D</th><td>20211109134550</td></tr></table>")
+    payload = json.dumps({"type": "FeatureCollection", "features": [{
+        "type": "Feature", "properties": {"Name": "kml_1", "Description": description},
+        "geometry": {"type": "Point", "coordinates": [103.8, 1.3, 0]},
+    }]}).encode()
+    rows, rejected = data_gov_resources.parse_resource_payload(source, payload)
+    assert rejected == 0
+    assert rows[0][2]["_source_name"] == published_name
+    assert data_gov_resources.source_update_time(rows).isoformat() == "2021-11-09T13:45:50+00:00"
+
+
+def test_unnamed_park_facilities_keep_the_published_class_and_location():
+    source = next(source for source in data_gov_resources.SOURCES if source.resource_type == "park_facility")
+    geometry = {"type": "Point", "coordinates": [103.8, 1.3]}
+    payload = json.dumps({"type": "FeatureCollection", "features": [{
+        "type": "Feature", "geometry": geometry,
+        "properties": {"OBJECTID": 1, "NAME": None, "CLASS": "FITNESS AREA"},
+    }]}).encode()
+    rows, rejected = data_gov_resources.parse_resource_payload(source, payload)
+    assert rejected == 0
+    assert rows[0][2]["_source_name"] == "FITNESS AREA"
+    assert json.loads(rows[0][1]) == geometry

@@ -148,3 +148,15 @@ describe('clusterPointFeatures', () => {
     expect(feature).toEqual(before);
   });
 });
+
+
+it('keeps community, park and health clusters separate at the same location', () => {
+  const features = ['community_club', 'park_facility', 'eldercare'].flatMap(type => [
+    point(`${type}-1`, [103.8, 1.3], { resourceType: type }),
+    point(`${type}-2`, [103.801, 1.301], { resourceType: type }),
+  ]);
+  const clusters = clusterPointFeatures(features);
+  expect(clusters).toHaveLength(3);
+  expect(clusters.map(feature => feature.properties.resourceType)).toEqual(['community_club', 'park_facility', 'eldercare']);
+  expect(clusters.every(feature => feature.properties.count === 2)).toBe(true);
+});

@@ -112,7 +112,7 @@ export function clusterPointFeatures(features, { cellSize = 0.02 } = {}) {
     const coordinates = geometry.coordinates;
     const gridX = Math.floor(coordinates[0] / size);
     const gridY = Math.floor(coordinates[1] / size);
-    const key = `${gridX}:${gridY}`;
+    const key = JSON.stringify([feature.properties?.resourceType || '', gridX, gridY]);
     let bucket = buckets.get(key);
     if (!bucket) {
       bucket = { key, firstIndex: index, members: [] };

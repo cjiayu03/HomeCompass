@@ -219,7 +219,8 @@ function HouseholdStep({ brief, setBrief }) {
 }
 
 function BudgetStep({ brief, setBrief }) {
-  return <BudgetInput value={brief.budget} onChange={value => setBrief(current => ({ ...current, budget: value, requirements: { ...current.requirements, budget: value != null } }))} />;
+  const updateBudget = value => setBrief(current => ({ ...current, budget: value, requirements: { ...current.requirements, budget: value != null } }));
+  return <div className="space-y-4"><BudgetInput value={brief.budget} onChange={updateBudget} /><div className="flex flex-wrap gap-2" role="group" aria-label="Budget quick picks">{[450000, 600000, 800000, 1000000].map(amount => <button key={amount} type="button" aria-pressed={brief.budget === amount} onClick={() => updateBudget(amount)} className={`min-h-11 rounded-lg border px-3 text-xs font-medium ${brief.budget === amount ? 'border-primary/45 bg-primary/10 text-foreground' : 'bg-background/70 text-muted-foreground hover:text-foreground'}`}>{money(amount)}</button>)}</div></div>;
 }
 
 function PriorityStep({ brief, setBrief }) {

@@ -53,6 +53,8 @@ function WorkspaceProbe() {
     <button onClick={() => workspace.refreshViewport({ west: 103.7, south: 1.2, east: 103.9, north: 1.4 })}>Refresh first viewport</button>
     <button onClick={() => workspace.refreshViewport({ west: 103.8, south: 1.25, east: 104, north: 1.45 })}>Refresh second viewport</button>
     <button onClick={() => workspace.refreshViewport({ west: 104, south: 1.2, east: 103, north: 1.4 })}>Refresh invalid viewport</button>
+    <button onClick={() => workspace.setMapResourceTypes(['community_club', 'park_facility', 'eldercare'])}>Enable amenity layers</button>
+    <button onClick={() => workspace.setMapResourceTypes([])}>Clear amenity layers</button>
     <button onClick={() => workspace.loadMoreHomes()}>Load more homes</button>
     <button onClick={() => workspace.applySearch('')}>Search homes</button>
   </>;
@@ -274,4 +276,27 @@ describe('workspace viewport and pagination requests', () => {
     expect(pageRequest.credentials).toBe('include');
     expect(pageRequest.headers.Authorization).toBeUndefined();
   });
+});
+
+
+it('loads enabled amenity layers independently and keeps availability after clearing', async () => {
+  const counts = ['community_club', 'park_facility', 'eldercare'].map(resourceType => ({ resourceType, total: 600, unlocated: 0 }));
+  const fetchMock = vi.fn(path => {
+    if (!path.startsWith('/api/v1/resources')) return standardFetch(path);
+    const type = new URL(path, 'http://homecompass.test').searchParams.get('resource_type');
+    return Promise.resolve(json({ ...metadata, features: [{ type: 'Feature', id: type, properties: { resourceType: type } }], counts, hasMore: type === 'park_facility' }));
+  });
+  const { state } = renderWorkspace(fetchMock);
+  await waitFor(() => expect(state().resourceState.status).toBe('success'));
+  fetchMock.mockClear();
+  fireEvent.click(screen.getByRole('button', { name: 'Enable amenity layers' }));
+  await waitFor(() => expect(state().resourceFeatures.map(feature => feature.id)).toEqual(['community_club', 'park_facility', 'eldercare']));
+  const calls = fetchMock.mock.calls.filter(([path]) => path.startsWith('/api/v1/resources'));
+  expect(calls).toHaveLength(3);
+  calls.forEach(([path]) => expect(new URL(path, 'http://homecompass.test').searchParams.getAll('resource_type')).toHaveLength(1));
+  expect(state().resourceState.hasMore).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Clear amenity layers' }));
+  await waitFor(() => expect(state().resourceFeatures).toEqual([]));
+  expect(state().resourceState.counts).toEqual(counts);
+  expect(fetchMock.mock.calls.filter(([path]) => path.startsWith('/api/v1/resources'))).toHaveLength(3);
 });

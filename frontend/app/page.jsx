@@ -2,8 +2,8 @@ import { LandingPage } from '@/components/landing-page';
 import { APP_NAME } from '@/lib/data';
 
 export const metadata = {
-  title: { absolute: `${APP_NAME} · Find a place that fits everyone` },
-  description: 'Explore Singapore homes with school, childcare, care access and source-dated price observations in one place.',
+  title: { absolute: `${APP_NAME} · Find an HDB. Know the neighbourhood.` },
+  description: 'Research HDB neighbourhoods with past resale prices, nearby amenities and side-by-side comparisons. Browse without an account.',
 };
 
 export default function Page() {

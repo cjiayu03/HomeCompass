@@ -14,6 +14,7 @@ const labels = {
   silver_zone: 'LTA Silver Zones', dementia_gtp: 'Dementia-friendly points', chas_clinic: 'CHAS clinics', moe_school: 'MOE school directory',
   school_zone: 'LTA school zones', childcare: 'Child Care Services', kindergarten: 'Kindergartens', childcare_registry: 'ECDA centre directory',
   childcare_fees: 'ECDA centre services and fees', childcare_charges: 'ECDA incidental charges', student_care: 'Student Care Services',
+  community_club: 'PA community clubs', eldercare: 'MOH eldercare services (partial health-facility coverage)', park_facility: 'NParks park facilities',
   dengue_cluster: 'NEA active dengue clusters', geocoding_and_routing: 'OneMap geocoding and routing',
 };
 

@@ -1,0 +1,11 @@
+holland-hdb.jpg
+Block 21 HDB Holland, Singapore, by CHUTTERSNAP (9 May 2017).
+https://commons.wikimedia.org/wiki/File:Block_21_HDB_Holland,_Singapore_(Unsplash).jpg
+Original: https://unsplash.com/photos/th19OsUf3mE
+CC0 1.0 Universal: https://creativecommons.org/publicdomain/zero/1.0/
+The photograph is displayed cropped to fit the layout. It is neighbourhood photography, not a property listing.
+
+explore-map.webp, explore-details.webp, explore-compare.webp
+Screenshots of the HomeCompass preview application with real historical resale records.
+Map data: OpenStreetMap contributors (attribution visible in screenshots), https://www.openstreetmap.org/copyright
+These are product previews, not current listings or availability claims.

@@ -225,10 +225,10 @@ test('guest researches dated homes, shortlists and compares them, then retries a
   await page.route('https://*.tile.openstreetmap.org/**', (route) => route.abort());
 
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: /find a place that fits/i })).toBeVisible();
-  await page.getByRole('link', { name: /explore homes/i }).click();
+  await expect(page.getByRole('heading', { name: /Find an HDB.*Know the neighbourhood/i })).toBeVisible();
+  await page.getByRole('link', { name: 'Explore HDBs', exact: true }).click();
 
-  await expect(page.getByRole('heading', { name: 'Find an HDB area that fits.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'HomeCompass housing explorer' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'No records match this search' })).toBeVisible();
   const candidates = page.getByRole('region', { name: 'Historical transaction results' });
   await expect(candidates).not.toContainText('Illustrative sample · not verified source data');
@@ -273,7 +273,7 @@ test('guest researches dated homes, shortlists and compares them, then retries a
   await expect(savedFirst).toContainText('Historical transaction · not a current listing');
   await savedFirst.getByRole('button', { name: 'Compare' }).click();
   await savedSecond.getByRole('button', { name: 'Compare' }).click();
-  await page.getByRole('button', { name: 'Compare 2', exact: true }).click();
+  await page.getByRole('button', { name: 'Compare 2 selected records', exact: true }).click();
 
   const comparison = page.getByRole('table', { name: 'Candidate evidence comparison' });
   await expect(comparison).toBeVisible();

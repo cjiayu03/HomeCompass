@@ -151,11 +151,11 @@ describe('decision surfaces', () => {
 
     render(<ShortlistPage />);
 
-    expect(screen.getByText('Historical transaction · not a current listing')).toBeInTheDocument();
+    expect(screen.getByText('Historical transactions, not live listings.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Details' }));
 
-    expect(screen.getByRole('dialog')).toHaveTextContent('Historical transaction · not a current listing');
-    const dialog = within(screen.getByRole('dialog'));
+    expect(screen.getByRole('region', { name: historicalHome.address })).toHaveTextContent('Historical transaction · not a current listing');
+    const dialog = within(screen.getByRole('region', { name: historicalHome.address }));
     expect(dialog.getByText('Transaction date').nextElementSibling).toHaveTextContent('2024-06-03');
     expect(dialog.getByText('Geocoding pending')).toBeInTheDocument();
   });

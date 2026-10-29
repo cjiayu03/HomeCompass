@@ -1,5 +1,7 @@
 'use client';
 
+import { resourceColors as RESOURCE_COLORS, resourceLabel } from '@/lib/map-layers';
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LngLatBounds, Map as MapLibreMap, Popup, setWorkerUrl } from 'maplibre-gl';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
@@ -12,11 +14,7 @@ const BUILDING_TILES = 'https://tiles.openfreemap.org/planet';
 
 setWorkerUrl(new URL('maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url).toString());
 
-const RESOURCE_COLORS = {
-  silver_zone: '#68886c', dementia_gtp: '#697d91', chas_clinic: '#7887a2', childcare: '#8a7898',
-  student_care: '#6e8b7c', kindergarten: '#627f90', moe_school: '#596f88', school_zone: '#8291a6',
-  dengue_cluster: '#b65360',
-};
+
 
 function hasCoordinates(item) {
   return item?.lat !== null && item?.lat !== undefined
@@ -204,12 +202,10 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
       for (const layerId of ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points']) {
         map.on('click', layerId, (event) => {
           const properties = event.features?.[0]?.properties || {};
-          const sourceDate = properties.retrievedAt
-            ? `Source snapshot: ${new Date(properties.retrievedAt).toLocaleDateString()}`
-            : 'Source date unavailable';
+          const sourceDate = `Source date: ${properties.sourceVersion || 'not reported'}`;
           new Popup({ closeButton: true, maxWidth: '260px' })
             .setLngLat(event.lngLat)
-            .setDOMContent(popupContent(properties.name, properties.resourceType, sourceDate, properties.sourceUrl))
+            .setDOMContent(popupContent(properties.name, resourceLabel(properties.resourceType), sourceDate, properties.sourceUrl))
             .addTo(map);
         });
       }

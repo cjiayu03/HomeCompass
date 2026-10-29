@@ -1,19 +1,39 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { resourceColors, resourceLabel } from '@/lib/map-layers';
+
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { Circle, CircleMarker, GeoJSON, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { clusterPointFeatures } from '@/lib/geo-cluster';
 import { MapViewportListener } from '@/components/map-viewport-listener';
 import { money } from '@/lib/utils';
 
+const markerIconCache = new Map();
 function makeMarkerIcon(selected, hovered) {
-  return L.divIcon({ className: '', html: `<span class="map-marker ${selected ? 'selected' : ''} ${hovered ? 'hovered' : ''}"><span>${selected ? '★' : '•'}</span></span>`, iconSize: selected ? [39, 39] : [34, 34], iconAnchor: selected ? [7, 34] : [6, 30], popupAnchor: [10, -28] });
+  const key = `${Boolean(selected)}:${Boolean(hovered)}`;
+  if (markerIconCache.has(key)) return markerIconCache.get(key);
+  const icon = L.divIcon({ className: '', html: `<span class="map-marker ${selected ? 'selected' : ''} ${hovered ? 'hovered' : ''}"><span>${selected ? '★' : '•'}</span></span>`, iconSize: selected ? [39, 39] : [34, 34], iconAnchor: selected ? [7, 34] : [6, 30], popupAnchor: [10, -28] });
+  markerIconCache.set(key, icon);
+  return icon;
 }
 
 function FlyToSelected({ home }) {
   const map = useMap();
-  useEffect(() => { map.closePopup(); if (hasCoordinates(home)) map.flyTo([home.lat, home.lng], Math.max(map.getZoom(), 13), { duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 0.65 }); }, [home?.id, home?.lat, home?.lng, map]);
+  useEffect(() => {
+    map.closePopup();
+    if (!hasCoordinates(home)) return;
+    const sidebar = map.getContainer().closest('.explore-desk')?.querySelector('.map-research-sidebar[data-state="open"]');
+    const leftInset = sidebar?.getBoundingClientRect().width || 0;
+    const rightInset = map.getContainer().closest('.explore-desk')?.querySelector('.map-record-details')?.getBoundingClientRect().width || 0;
+    const size = map.getSize();
+    // A narrow phone panel must be collapsed before there is room to inspect the map.
+    if (size.x - leftInset - rightInset < 160) return;
+    const point = map.latLngToContainerPoint([home.lat, home.lng]);
+    if (point.x < leftInset + 40 || point.x > size.x - rightInset - 40 || point.y < 40 || point.y > size.y - 40) {
+      map.panInside([home.lat, home.lng], { paddingTopLeft: [leftInset + 40, 40], paddingBottomRight: [rightInset + 40, 40], animate: !window.matchMedia('(prefers-reduced-motion: reduce)').matches, duration: .25 });
+    }
+  }, [home?.id, home?.lat, home?.lng, map]);
   return null;
 }
 
@@ -44,7 +64,7 @@ function FitHomes({ homes }) {
   return null;
 }
 
-function ResizeMap(){const map=useMap();useEffect(()=>{const observer=new ResizeObserver(()=>map.invalidateSize({pan:false}));observer.observe(map.getContainer());return()=>observer.disconnect();},[map]);return null;}
+function ResizeMap(){const map=useMap();useEffect(()=>{const observer=new ResizeObserver(()=>map.invalidateSize({pan:false,debounceMoveend:true}));observer.observe(map.getContainer());return()=>observer.disconnect();},[map]);return null;}
 
 function ResetSingapore({ request }) {
   const map = useMap();
@@ -56,15 +76,6 @@ function hasCoordinates(home) {
   return home?.lat !== null && home?.lat !== undefined && home?.lng !== null && home?.lng !== undefined && Number.isFinite(Number(home.lat)) && Number.isFinite(Number(home.lng));
 }
 
-const resourceColors = {
-  silver_zone: '#68886c', dementia_gtp: '#697d91', chas_clinic: '#7887a2', childcare: '#8a7898',
-  student_care: '#6e8b7c', kindergarten: '#627f90', moe_school: '#596f88', school_zone: '#8291a6',
-  dengue_cluster: '#b65360',
-};
-
-function resourceLabel(type) {
-  return ({ silver_zone: 'Silver Zone', dementia_gtp: 'Dementia-friendly point', chas_clinic: 'CHAS clinic', childcare: 'Child care', student_care: 'Student care', kindergarten: 'Kindergarten', moe_school: 'MOE school', school_zone: 'School zone', dengue_cluster: 'Active dengue cluster' })[type] || type;
-}
 
 function readViewport(map) {
   const bounds = map.getBounds();
@@ -119,7 +130,7 @@ function ResourceFeatures({ features, visibleTypes }) {
     type.textContent = resourceLabel(properties.resourceType);
     popup.appendChild(type);
     const date = document.createElement('small');
-    date.textContent = `Source snapshot: ${properties.retrievedAt ? new Date(properties.retrievedAt).toLocaleDateString() : 'date unavailable'}`;
+    date.textContent = `Source date: ${properties.sourceVersion || 'not reported'}`;
     popup.appendChild(date);
     try {
       const source = new URL(properties.sourceUrl);
@@ -139,7 +150,7 @@ function ResourceFeatures({ features, visibleTypes }) {
       const count = Number.isInteger(feature.properties.count) ? feature.properties.count : 0;
       const icon = L.divIcon({
         className: '',
-        html: `<span style="display:grid;place-items:center;width:36px;height:36px;border:2px solid #fff;border-radius:999px;background:#42624f;color:#fff;font-size:12px;font-weight:800;box-shadow:0 4px 12px rgba(15,23,42,.32)">${count}</span>`,
+        html: `<span style="display:grid;place-items:center;width:36px;height:36px;border:2px solid #fff;border-radius:999px;background:${resourceColors[feature.properties.resourceType] || '#42624f'};color:#fff;font-size:12px;font-weight:800;box-shadow:0 4px 12px rgba(15,23,42,.32)">${count}</span>`,
         iconSize: [36, 36],
         iconAnchor: [18, 18],
       });
@@ -150,14 +161,19 @@ function ResourceFeatures({ features, visibleTypes }) {
   return <GeoJSON key={renderKey} data={collection} style={style} pointToLayer={pointToLayer} onEachFeature={onEachFeature} />;
 }
 
-export default function MapView({ homes, resources = [], visibleResourceTypes = [], selectedHome, hoveredHome, anchors=[], onSelect, centerRequest, onViewportChange }) {
+const MemoResourceFeatures = memo(ResourceFeatures);
+const HomeMarker = memo(function HomeMarker({ home, selected, hovered, onSelect }) {
+  const events = useMemo(() => ({ click: () => onSelect(home) }), [onSelect, home]);
+  return <Marker title={home.address} alt={`Map marker for ${home.address}`} position={[home.lat, home.lng]} icon={makeMarkerIcon(selected, hovered)} zIndexOffset={hovered ? 1000 : 0} eventHandlers={events} />;
+});
+
+export default memo(function MapView({ homes, resources = [], visibleResourceTypes = [], selectedHome, hoveredHome, anchors=[], onSelect, centerRequest, onViewportChange }) {
   const mappedHomes = useMemo(() => homes.filter(hasCoordinates), [homes]);
-  const icons = useMemo(() => Object.fromEntries(mappedHomes.map((home) => [home.id, makeMarkerIcon(home.id === selectedHome?.id,home.id===hoveredHome?.id)])), [mappedHomes, selectedHome?.id,hoveredHome?.id]);
   const tileUrl = process.env.NEXT_PUBLIC_MAP_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
   return <MapContainer center={[1.3521, 103.8198]} zoom={11} scrollWheelZoom zoomControl className="h-full min-h-0 w-full">
     <TileLayer attribution="&copy; OpenStreetMap contributors" url={tileUrl} />
-    <ResizeMap/><MapViewportListener onBoundsChange={onViewportChange} /><FitHomes homes={mappedHomes} /><FlyToSelected home={selectedHome} /><ResetSingapore request={centerRequest} /><ResourceFeatures features={resources} visibleTypes={visibleResourceTypes} /><HoverPreview home={hoveredHome} />
+    <ResizeMap/><MapViewportListener onBoundsChange={onViewportChange} /><FitHomes homes={mappedHomes} /><FlyToSelected home={selectedHome} /><ResetSingapore request={centerRequest} /><MemoResourceFeatures features={resources} visibleTypes={visibleResourceTypes} /><HoverPreview home={hoveredHome} />
     {anchors.map((anchor,i)=><Circle key={anchor.id} center={[anchor.lat,anchor.lng]} radius={anchor.radius} pathOptions={{color:['#42624f','#627f90','#8a7898'][i%3],fillOpacity:0.08,weight:2,dashArray:'5 5'}}><Popup>{anchor.label}: {anchor.radius.toLocaleString()} m straight-line reach</Popup></Circle>)}
-    {mappedHomes.map((home) => <Marker key={home.id} title={home.address} alt={`Map marker for ${home.address}`} position={[home.lat, home.lng]} icon={icons[home.id]} zIndexOffset={home.id===hoveredHome?.id?1000:0} eventHandlers={{ click: () => onSelect(home) }} />)}
+    {mappedHomes.map(home => <HomeMarker key={home.id} home={home} selected={home.id === selectedHome?.id} hovered={home.id === hoveredHome?.id} onSelect={onSelect} />)}
   </MapContainer>;
-}
+});
