@@ -56,7 +56,7 @@ export default function ExplorePage() {
   const [resizing, setResizing] = useState(false);
   const detailOpener = useRef(null);
   const previousDetailId = useRef('');
-  const [sort, setSort] = useState('fit');
+  const [sort, setSort] = useState('recent');
   const [groupBlocks, setGroupBlocks] = useState(true);
   const [linkedRecord, setLinkedRecord] = useState(null);
   const [detailId, setDetailId] = useState('');
@@ -83,12 +83,11 @@ export default function ExplorePage() {
   const detail = allKnown.find(home => String(home.id) === detailId);
   const visibleHomes = useMemo(() => {
     const records = [...(savedOnly ? shortlistHomes : homes)];
-    if (sort === 'fit' && !savedOnly && !fixtureMode) return records;
     if (sort === 'price') records.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
     else if (sort === 'fit') records.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
     else records.sort((a, b) => String(b.observedOn || '').localeCompare(String(a.observedOn || '')) || String(a.id).localeCompare(String(b.id)));
     return records;
-  }, [savedOnly, shortlistHomes, homes, sort, fixtureMode]);
+  }, [savedOnly, shortlistHomes, homes, sort]);
   const recordGroups = useMemo(() => {
     if (!groupBlocks || savedOnly) return visibleHomes.map(home => ({ home, count: 1, records: [home] }));
     const groups = new Map();
@@ -98,9 +97,8 @@ export default function ExplorePage() {
       groups.get(key).push(home);
     }
     const grouped = [...groups.values()].map(records => ({ records, count: records.length, home: [...records].sort((a, b) => String(b.observedOn || '').localeCompare(String(a.observedOn || '')))[0] }));
-    if (sort === 'fit' && !fixtureMode) return grouped;
     return grouped.sort((a, b) => sort === 'price' ? (a.home.price ?? Infinity) - (b.home.price ?? Infinity) : sort === 'fit' ? (b.home.score ?? -1) - (a.home.score ?? -1) : String(b.home.observedOn || '').localeCompare(String(a.home.observedOn || '')));
-  }, [visibleHomes, groupBlocks, savedOnly, sort, fixtureMode]);
+  }, [visibleHomes, groupBlocks, savedOnly, sort]);
   const navigationHomes = useMemo(() => recordGroups.map(group => group.home), [recordGroups]);
   const detailIndex = navigationHomes.findIndex(home => String(home.id) === detailId);
   const mapHomes = useMemo(() => selectedMapHome && !navigationHomes.some(home => home.id === selectedMapHome.id) ? [...navigationHomes, selectedMapHome] : navigationHomes, [navigationHomes, selectedMapHome]);
@@ -293,7 +291,7 @@ export default function ExplorePage() {
   const onMapSelect = useStableEvent(selectFromMap);
   const onSearchMapArea = useStableEvent(() => runSearch(workspace.appliedQuery ?? query, appliedBrief, { bounds: viewportBounds, interpret: false }));
   const collectionControls = (
-<div className="explore-collection-bar"><div className="flex items-center gap-1" role="group" aria-label="Record collection"><Button variant={!savedOnly ? 'soft' : 'ghost'} aria-pressed={!savedOnly} onClick={() => changeView(false)} aria-label="All results"><span className="collection-label-wide">All results</span><span className="collection-label-compact">All</span></Button><Button variant={savedOnly ? 'soft' : 'ghost'} aria-pressed={savedOnly} onClick={() => changeView(true)}><Bookmark aria-hidden="true" className="size-4" />Saved ({shortlistIds.length})</Button></div><div className="flex items-center gap-2"><ComparisonAction homes={selectedHomes} onRemove={onCompareRecord} onOpen={() => setCompareOpen(true)} /><details className="explore-sort"><summary title="Sort and group">Sort</summary><div className="explore-sort-menu"><label className="grid gap-2 text-sm">Sort results<select className="h-11 rounded-lg border bg-background px-2" value={sort} onChange={event => setSort(event.target.value)}><option value="fit">Fit score · all results</option><option value="recent">Most recent loaded</option><option value="price">Recorded price · loaded</option></select></label>{!savedOnly && <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={groupBlocks} onChange={event => setGroupBlocks(event.target.checked)} />Group repeated block records</label>}</div></details><Button className="explore-results-toggle" variant={mapResultsOpen ? 'soft' : 'outline'} aria-pressed={mapResultsOpen || Boolean(detailId)} onClick={() => { if (detailId) closeDetail(); else setMapResultsOpen(current => !current); }}>Results</Button></div></div>
+<div className="explore-collection-bar"><div className="flex items-center gap-1" role="group" aria-label="Record collection"><Button variant={!savedOnly ? 'soft' : 'ghost'} aria-pressed={!savedOnly} onClick={() => changeView(false)} aria-label="All results"><span className="collection-label-wide">All results</span><span className="collection-label-compact">All</span></Button><Button variant={savedOnly ? 'soft' : 'ghost'} aria-pressed={savedOnly} onClick={() => changeView(true)}><Bookmark aria-hidden="true" className="size-4" />Saved ({shortlistIds.length})</Button></div><div className="flex items-center gap-2"><ComparisonAction homes={selectedHomes} onRemove={onCompareRecord} onOpen={() => setCompareOpen(true)} /><details className="explore-sort"><summary title="Sort and group">Sort</summary><div className="explore-sort-menu"><label className="grid gap-2 text-sm">Sort loaded records<select className="h-11 rounded-lg border bg-background px-2" value={sort} onChange={event => setSort(event.target.value)}><option value="recent">Most recent</option><option value="price">Recorded price</option><option value="fit">Fit score</option></select></label>{!savedOnly && <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={groupBlocks} onChange={event => setGroupBlocks(event.target.checked)} />Group repeated block records</label>}</div></details><Button className="explore-results-toggle" variant={mapResultsOpen ? 'soft' : 'outline'} aria-pressed={mapResultsOpen || Boolean(detailId)} onClick={() => { if (detailId) closeDetail(); else setMapResultsOpen(current => !current); }}>Results</Button></div></div>
   );
   const toolbar = <>
     <header className="explore-topbar">
