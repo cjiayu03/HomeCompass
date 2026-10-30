@@ -25,7 +25,7 @@ startup and checks; CONTRIBUTING.md records the backlog/review workflow; SECURIT
 | Area | Files | Next action |
 |---|---|---|
 | Shared browser state | frontend/components/workspace-provider.jsx | Fix same-origin save path, separate record cache from search results, isolate private state per account |
-| Search/ranking | backend/app/main.py, domain.py, schemas.py | Current score is null; search sorts by observed_on. Agree scoring policy before implementing ranking |
+| Search/ranking | backend/app/main.py, scoring.py, schemas.py | Search pages use the versioned fit score across all matching records; unscored rows sort last, with observed date and stable ID ties |
 | API ownership | backend/app/security.py, main.py, database.py | Verify real two-account isolation, persistence, and local account deletion |
 | Saved UI | frontend/app/(workspace)/shortlist/page.jsx, compare/page.jsx | Verify reorder/sort and 2–3 record comparisons across searches/reloads |
 | Map | frontend/components/map-panel.jsx, map-view.jsx | Add interactive geocoding and owner pins; batch geocoding is separate |
