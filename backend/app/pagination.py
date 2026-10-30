@@ -12,6 +12,7 @@ import re
 MAX_CURSOR_LENGTH = 512
 _INVALID_CURSOR = "Invalid pagination cursor."
 _HOME_CURSOR_KEYS = frozenset({"score", "observed_on", "id"})
+_LEGACY_HOME_CURSOR_KEYS = frozenset({"observed_on", "id"})
 _RESOURCE_CURSOR_KEYS = frozenset({"resource_type", "name", "id"})
 _URLSAFE_BASE64 = re.compile(r"[A-Za-z0-9_-]+\Z")
 
@@ -22,6 +23,21 @@ def _validate_values(values: object) -> dict[str, str | None]:
 
     payload = dict(values)
     keys = frozenset(payload)
+    if keys == _LEGACY_HOME_CURSOR_KEYS:
+        observed_on = payload["observed_on"]
+        identifier = payload["id"]
+        if not isinstance(identifier, str) or not identifier:
+            raise ValueError(_INVALID_CURSOR)
+        if observed_on is not None:
+            if not isinstance(observed_on, str):
+                raise ValueError(_INVALID_CURSOR)
+            try:
+                parsed_date = date.fromisoformat(observed_on)
+            except ValueError:
+                raise ValueError(_INVALID_CURSOR) from None
+            if parsed_date.isoformat() != observed_on:
+                raise ValueError(_INVALID_CURSOR)
+        return {"observed_on": observed_on, "id": identifier}
     if keys == _HOME_CURSOR_KEYS:
         score = payload["score"]
         observed_on = payload["observed_on"]

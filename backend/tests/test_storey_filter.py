@@ -105,9 +105,10 @@ def test_get_and_post_share_storey_predicates_before_count_and_page(monkeypatch)
     parts = main._storey_overlap_predicates(SearchRequest(min_storey=5, max_storey=8), [])
     for (count_sql, count_values), (page_sql, page_values) in zip(probe.counts, probe.pages):
         assert count_values == (5, 8)
-        assert page_values == (5, 8, 3)
+        assert page_values[:2] == (5, 8)
+        assert page_values[-1] == 3
         assert all(part in count_sql and part in page_sql for part in parts)
-        assert page_sql.index(parts[0]) < page_sql.index("ORDER BY h.observed_on DESC NULLS LAST, h.id LIMIT")
+        assert page_sql.index(parts[0]) < page_sql.index("ORDER BY ranking_score DESC NULLS LAST")
 
 
 # Set this only to an isolated PostgreSQL test database; no schema or table is changed.

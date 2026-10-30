@@ -637,7 +637,7 @@ LEFT JOIN LATERAL (
     cursor_filter = ""
     if request.cursor is not None:
         cursor = decode_cursor(request.cursor)
-        score = cursor["score"]
+        score = cursor.get("score")
         observed_on = date.fromisoformat(cursor["observed_on"]) if cursor["observed_on"] else None
         if score is not None:
             values.append(score)
@@ -711,12 +711,18 @@ LEFT JOIN LATERAL (
         observed_on = rows[-1]["observed_on"]
         if isinstance(observed_on, datetime):
             observed_on = observed_on.date()
-        next_cursor = encode_cursor({
-            "score": f"{float(rows[-1]['ranking_score']):.1f}" if rows[-1]["ranking_score"] is not None else None,
+        cursor_values = {
             "observed_on": observed_on.isoformat() if observed_on is not None else None,
             "id": str(rows[-1]["id"]),
-        })
-    weights = scoring_weights if active_generation is not None else {key: 0 for key in DEFAULT_WEIGHTS}
+        }
+        ranking_score = _optional_record_value(rows[-1], "ranking_score")
+        if active_generation is not None:
+            cursor_values = {
+                "score": f"{float(ranking_score):.1f}" if ranking_score is not None else None,
+                **cursor_values,
+            }
+        next_cursor = encode_cursor(cursor_values)
+    weights = scoring_weights
     distance_targets = targets
     budget_cents = request.budget * 100 if request.budget is not None else None
     homes = []

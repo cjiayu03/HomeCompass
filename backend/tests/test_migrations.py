@@ -25,6 +25,7 @@ EXPECTED_MIGRATIONS = [
     (10, "010_planning_workspace.sql"),
     (11, "011_password_recovery.sql"),
     (12, "012_town_preferences.sql"),
+    (13, "013_home_scoring_evidence.sql"),
 ]
 
 
