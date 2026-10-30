@@ -6,7 +6,7 @@ import pytest
 from app.pagination import MAX_CURSOR_LENGTH, decode_cursor, encode_cursor
 
 
-HOME_CURSOR = {"observed_on": "2026-09-01", "id": "home-1"}
+HOME_CURSOR = {"score": "80.0", "observed_on": "2026-09-01", "id": "home-1"}
 RESOURCE_CURSOR = {
     "resource_type": "moe_school",
     "name": "Example School",
@@ -58,7 +58,7 @@ def test_encode_cursor_rejects_payload_that_exceeds_encoded_size_limit():
     "payload",
     [
         {"id": "home-1"},
-        {"observed_on": "2026-09-01", "id": "home-1", "extra": "value"},
+        {"score": "80.0", "observed_on": "2026-09-01", "id": "home-1", "extra": "value"},
         {"id": "school-1", "resource_type": "moe_school"},
         {
             "resource_type": "moe_school",
@@ -78,8 +78,9 @@ def test_cursor_requires_one_exact_supported_key_set(payload):
 @pytest.mark.parametrize(
     "payload",
     [
-        {"observed_on": "not-a-date", "id": "home-1"},
-        {"observed_on": None, "id": ""},
+        {"score": "80.0", "observed_on": "not-a-date", "id": "home-1"},
+        {"score": None, "observed_on": None, "id": ""},
+        {"score": "101.0", "observed_on": None, "id": "home-1"},
         {"resource_type": "moe_school", "name": "School", "id": 1},
     ],
 )
