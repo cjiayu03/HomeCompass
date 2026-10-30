@@ -1742,7 +1742,14 @@ export function WorkspaceProvider({ children }) {
         if (localPlaceConstraints.length) flash('Browser-only place checks apply to each loaded page using straight-line distance. Places stay in this browser; missing coordinates are excluded and totals describe the source search before local checks.', 'info');
         else if (payload.unappliedCriteria?.length) flash(`Location-based filters were not applied because transaction coordinates and verified proximity matching are not ready (${payload.unappliedCriteria.join(', ')}). ${results.length} historical records remain; these are not live listings.`, 'warning');
         else if (interpretationNotice) flash(interpretationNotice, 'warning');
-        else flash(results.length ? `${results.length} dated resale records found. They are not current listings.` : 'No source records match these applied filters.', results.length ? 'info' : 'warning');
+        else if (results.length) {
+          const total = Number.isSafeInteger(payload?.total) ? payload.total : null;
+          const pageCount = results.length.toLocaleString();
+          const resultNotice = total !== null && total > results.length
+            ? `Showing ${pageCount} of ${total.toLocaleString()} matching historical resale records. Load more for additional results; these are not current listings.`
+            : `Showing ${pageCount} historical resale records. These are not current listings.`;
+          flash(resultNotice, 'info');
+        } else flash('No source records match these applied filters.', 'warning');
     };
     const reportSearchFailure = error => !options.background && flash(isAuthenticationFailure(error)
       ? (userId ? 'Your session expired. Please sign in again.' : 'Sign in to search using saved places.')

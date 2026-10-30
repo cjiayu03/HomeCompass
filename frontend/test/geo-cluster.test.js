@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clusterPointFeatures } from '../lib/geo-cluster.js';
+import { clusterPointFeatures, dedupePointFeatures } from '../lib/geo-cluster.js';
 
 function point(id, coordinates, properties = {}) {
   return {
@@ -11,6 +11,21 @@ function point(id, coordinates, properties = {}) {
 }
 
 describe('clusterPointFeatures', () => {
+  it('shows a same-name facility at the same point only once', () => {
+    const first = point('facility-1', [103.8, 1.3], { name: 'Zulfa Kindergarten @ Sembawang Mart PTE LTD' });
+    const duplicate = point('facility-2', [103.800001, 1.300001], { name: '  zulfa   kindergarten @ sembawang mart pte ltd ' });
+    const otherLocation = point('facility-3', [103.8002, 1.3], { name: 'Zulfa Kindergarten @ Sembawang Mart PTE LTD' });
+    const anotherLayer = point('facility-4', [103.8, 1.3], { name: 'Zulfa Kindergarten @ Sembawang Mart PTE LTD', resourceType: 'childcare' });
+
+    expect(dedupePointFeatures([first, duplicate, otherLocation, anotherLayer])).toEqual([
+      first,
+      otherLocation,
+      anotherLayer,
+    ]);
+    expect(clusterPointFeatures([first, duplicate], { cellSize: 0.02 })).toHaveLength(1);
+    expect(clusterPointFeatures([first, duplicate], { cellSize: 0.02 })[0]).toBe(first);
+  });
+
   it('clusters nearby points with their IDs, centroid, and representative source metadata', () => {
     const first = point('resource-a', [103.8, 1.3], {
       name: 'Central Clinic',
@@ -29,6 +44,10 @@ describe('clusterPointFeatures', () => {
         cluster: true,
         count: 2,
         memberIds: ['resource-a', 'resource-b'],
+        members: [
+          { id: 'resource-a', name: 'Central Clinic', coordinates: [103.8, 1.3] },
+          { id: 'resource-b', name: 'Nearby Clinic', coordinates: [103.804, 1.304] },
+        ],
         name: 'Central Clinic',
         resourceType: 'chas_clinic',
         sourceId: 'clinic-snapshot',

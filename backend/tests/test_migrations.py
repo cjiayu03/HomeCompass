@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 import pytest
 
 from app.migrations import (
@@ -30,6 +33,12 @@ def test_checked_in_migrations_are_ordered_and_contiguous():
     latest_version = EXPECTED_MIGRATIONS[-1][0]
     assert LATEST_MIGRATION_VERSION == latest_version
     assert SCHEMA_VERIFIED_MIGRATION_VERSION == latest_version
+
+
+def test_compose_applies_every_checked_in_migration_in_order():
+    compose = (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text()
+    filenames = re.findall(r"-f /migrations/([^\s\"]+\.sql)", compose)
+    assert validate_migration_set(filenames) == checked_in_migrations()
 
 
 def test_validate_migration_set_rejects_duplicate_versions():

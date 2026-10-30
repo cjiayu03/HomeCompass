@@ -3,29 +3,33 @@
 import { resourceColors as RESOURCE_COLORS, resourceLabel } from '@/lib/map-layers';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { LngLatBounds, Map as MapLibreMap, Popup, setWorkerUrl } from 'maplibre-gl';
+import { LngLatBounds, Map as MapLibreMap, Marker as MapLibreMarker, Popup, setWorkerUrl } from 'maplibre-gl';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { money, scoreLabel } from '@/lib/utils';
 import { LoadingScene } from '@/components/loading-scene';
+import { isMapAddressCandidate } from '@/lib/map-address-search';
+import { hasMapCoordinates } from '@/lib/map-coordinates';
+import { selectedHomeZoom } from '@/lib/map-zoom';
+import { mapLayerMarkerSvg } from '@/lib/map-layer-icons';
+import { dedupePointFeatures, facilityLocationLabel } from '@/lib/geo-cluster';
 
 const MAP_STYLE = 'https://tiles.openfreemap.org/styles/bright';
 const BUILDING_TILES = 'https://tiles.openfreemap.org/planet';
+const INITIAL_CAMERA_INTENT = Object.freeze({ type: 'initial', request: 0 });
 
 setWorkerUrl(new URL('maplibre-gl/dist/maplibre-gl-worker.mjs', import.meta.url).toString());
 
 
 
-function hasCoordinates(item) {
-  return item?.lat !== null && item?.lat !== undefined
-    && item?.lng !== null && item?.lng !== undefined
-    && Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng));
-}
-
 function makeHomeCollection(homes, selectedHome, hoveredHome) {
+  const locatedHomes = new Map(homes.filter(hasMapCoordinates).map((home) => [String(home.id), home]));
+  for (const home of [selectedHome, hoveredHome]) {
+    if (hasMapCoordinates(home)) locatedHomes.set(String(home.id), home);
+  }
   return {
     type: 'FeatureCollection',
-    features: homes.filter(hasCoordinates).map((home) => ({
+    features: [...locatedHomes.values()].map((home) => ({
       type: 'Feature',
       id: String(home.id),
       geometry: { type: 'Point', coordinates: [Number(home.lng), Number(home.lat)] },
@@ -37,9 +41,9 @@ function makeHomeCollection(homes, selectedHome, hoveredHome) {
 function makeResourceCollection(resources, visibleTypes) {
   return {
     type: 'FeatureCollection',
-    features: resources.filter((feature) => (
+    features: dedupePointFeatures(resources.filter((feature) => (
       feature?.geometry && visibleTypes.includes(feature.properties?.resourceType)
-    )),
+    ))),
   };
 }
 
@@ -73,23 +77,94 @@ function popupContent(title, detail, meta, sourceUrl) {
   return root;
 }
 
+function visibleResourceFilter(types) {
+  return types.length
+    ? ['in', ['get', 'resourceType'], ['literal', types]]
+    : ['==', 1, 0];
+}
+
+function loadResourceIconImages(map, isCurrent) {
+  return Promise.all(Object.keys(RESOURCE_COLORS).map((type) => new Promise((resolve) => {
+    const imageId = `hc-resource-icon-${type}`;
+    if (map.hasImage?.(imageId)) {
+      resolve(type);
+      return;
+    }
+    const image = new window.Image();
+    image.onload = () => {
+      if (!isCurrent()) {
+        resolve(null);
+        return;
+      }
+      try {
+        map.addImage(imageId, image, { pixelRatio: 2 });
+        resolve(type);
+      } catch {
+        resolve(null);
+      }
+    };
+    image.onerror = () => resolve(null);
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(mapLayerMarkerSvg(type))}`;
+  })));
+}
+
+function bindResourceInteractions(map, layerIds, activePopupRef) {
+  for (const layerId of layerIds) {
+    map.on('click', layerId, (event) => {
+      const properties = event.features?.[0]?.properties || {};
+      const sourceDate = `Source date: ${properties.sourceVersion || 'not reported'}`;
+      const location = facilityLocationLabel({ properties });
+      activePopupRef.current?.remove();
+      activePopupRef.current = new Popup({ closeButton: true, maxWidth: '260px' })
+        .setLngLat(event.lngLat)
+        .setDOMContent(popupContent(properties.name, [resourceLabel(properties.resourceType), location].filter(Boolean).join(' · '), sourceDate, properties.sourceUrl))
+        .addTo(map);
+    });
+    map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
+  }
+}
+
 function reachCollection(anchors){return {type:'FeatureCollection',features:anchors.filter(a=>a.radius>0).map(a=>({type:'Feature',properties:{name:a.label},geometry:{type:'Polygon',coordinates:[Array.from({length:65},(_,i)=>{const angle=i/64*2*Math.PI;return [a.lng+Math.cos(angle)*a.radius/(111320*Math.cos(a.lat*Math.PI/180)),a.lat+Math.sin(angle)*a.radius/110574];})]}}))};}
 
-export default function Map3DView({ homes, resources, visibleResourceTypes, selectedHome, hoveredHome, anchors=[], onUnavailable, onSelect, centerRequest, onViewportChange }) {
+function visibleMapOffset(map) {
+  const container = map.getContainer();
+  const width = container.clientWidth || container.getBoundingClientRect().width;
+  const desk = container.closest('.explore-desk');
+  const sidebar = desk?.querySelector('.map-research-sidebar[data-state="open"]');
+  const details = desk?.querySelector('.map-record-details');
+  const leftInset = sidebar?.getBoundingClientRect().width || 0;
+  const rightInset = details?.getBoundingClientRect().width || 0;
+  if (!width || width - leftInset - rightInset < 160) return [0, 0];
+  const visibleCenterX = (leftInset + width - rightInset) / 2;
+  return [visibleCenterX - width / 2, 0];
+}
+
+export default function Map3DView({ homes, resources, visibleResourceTypes, selectedHome, hoveredHome, anchors=[], onUnavailable, onSelect, cameraIntent = INITIAL_CAMERA_INTENT, homeFocusRequest = 0, facilityFocus, centerRequest, addressTarget, addressRequest, addressFocused = false, onViewportChange }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
+  const activePopupRef = useRef(null);
   const onSelectRef = useRef(onSelect);
   const onViewportChangeRef = useRef(onViewportChange);
   const homesRef = useRef(homes);
+  const addressFocusedRef = useRef(addressFocused);
+  const addressTargetRef = useRef(addressTarget);
+  const cameraIntentRef = useRef(cameraIntent);
+  const visibleResourceTypesRef = useRef(visibleResourceTypes);
   const [mapReady, setMapReady] = useState(false);
   const [mapIssue, setMapIssue] = useState('');
+  const [mapLayoutRevision, setMapLayoutRevision] = useState(0);
 
-  const homeData = useMemo(() => makeHomeCollection(homes, selectedHome,hoveredHome), [homes, selectedHome?.id,hoveredHome?.id]);
+  const homeData = useMemo(() => makeHomeCollection(homes, selectedHome, hoveredHome), [homes, selectedHome?.id, selectedHome?.lat, selectedHome?.lng, hoveredHome?.id, hoveredHome?.lat, hoveredHome?.lng]);
   const resourceData = useMemo(() => makeResourceCollection(resources, visibleResourceTypes), [resources, visibleResourceTypes]);
 
   useEffect(() => { onSelectRef.current = onSelect; }, [onSelect]);
   useEffect(() => { onViewportChangeRef.current = onViewportChange; }, [onViewportChange]);
   useEffect(() => { homesRef.current = homes; }, [homes]);
+  addressFocusedRef.current = addressFocused;
+  addressTargetRef.current = addressTarget;
+  cameraIntentRef.current = cameraIntent;
+  visibleResourceTypesRef.current = visibleResourceTypes;
   useEffect(()=>{if(mapIssue)onUnavailable?.(mapIssue);},[mapIssue,onUnavailable]);
 
   useEffect(() => {
@@ -111,6 +186,7 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
       attributionControl: true,
     }); } catch { window.clearTimeout(loadTimer);setMapIssue('3D is unavailable in this browser. Switched to the 2D map.');return undefined; }
     mapRef.current = map;
+    map.on('resize', () => setMapLayoutRevision((revision) => revision + 1));
 
     const reportViewport = () => {
       const bounds = map.getBounds();
@@ -157,18 +233,16 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
         type: 'circle',
         source: 'hc-homes',
         paint: {
-          'circle-radius': ['case', ['boolean', ['get', 'selected'], false], 10, ['boolean',['get','hovered'],false],12, 7],
-          'circle-color': ['case', ['boolean', ['get', 'selected'], false], '#355d42', '#f9f7ef'],
-          'circle-stroke-color': '#355d42',
-          'circle-stroke-width': 2,
+          'circle-radius': ['case', ['boolean', ['get', 'selected'], false], 12, ['boolean',['get','hovered'],false],12, 7],
+          'circle-color': ['case', ['boolean', ['get', 'selected'], false], '#c56b28', '#f9f7ef'],
+          'circle-stroke-color': ['case', ['boolean', ['get', 'selected'], false], '#ffffff', '#355d42'],
+          'circle-stroke-width': ['case', ['boolean', ['get', 'selected'], false], 3, 2],
         },
       });
 
       map.addSource('hc-resources', { type: 'geojson', data: resourceData });
       const resourceColor = ['match', ['get', 'resourceType'], ...Object.entries(RESOURCE_COLORS).flat(), '#718096'];
-      const isVisible = visibleResourceTypes.length
-        ? ['in', ['get', 'resourceType'], ['literal', visibleResourceTypes]]
-        : ['==', 1, 0];
+      const isVisible = visibleResourceFilter(visibleResourceTypesRef.current);
       map.addLayer({
         id: 'hc-resource-polygons', type: 'fill', source: 'hc-resources',
         filter: ['all', ['==', ['geometry-type'], 'Polygon'], isVisible],
@@ -185,6 +259,26 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
         paint: { 'circle-radius': 5, 'circle-color': resourceColor, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 },
       });
 
+      void loadResourceIconImages(map, () => mapRef.current === map).then((loadedTypes) => {
+        if (mapRef.current !== map || !loadedTypes.some(Boolean) || map.getLayer?.('hc-resource-point-icons')) return;
+        const availableTypes = loadedTypes.filter(Boolean);
+        const visibleTypes = visibleResourceTypesRef.current.filter((type) => availableTypes.includes(type));
+        map.addLayer({
+          id: 'hc-resource-point-icons',
+          type: 'symbol',
+          source: 'hc-resources',
+          filter: ['all', ['==', ['geometry-type'], 'Point'], visibleResourceFilter(visibleTypes)],
+          layout: {
+            'icon-image': ['concat', 'hc-resource-icon-', ['get', 'resourceType']],
+            'icon-size': 0.85,
+            'icon-allow-overlap': true,
+            'icon-ignore-placement': true,
+          },
+        });
+        map.setLayoutProperty?.('hc-resource-points', 'visibility', 'none');
+        bindResourceInteractions(map, ['hc-resource-point-icons'], activePopupRef);
+      });
+
       map.on('click', 'hc-home-points', (event) => {
         const feature = event.features?.[0];
         const home = homesRef.current.find((item) => String(item.id) === String(feature?.properties?.homeId));
@@ -193,30 +287,27 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
         const score = home.score !== null && home.score !== undefined && Number.isFinite(Number(home.score))
           ? `${home.score}/100 · ${scoreLabel(home.score)}`
           : '';
-        new Popup({ closeButton: true, maxWidth: '260px' })
+        activePopupRef.current?.remove();
+        activePopupRef.current = new Popup({ closeButton: true, maxWidth: '260px' })
           .setLngLat(event.lngLat)
           .setDOMContent(popupContent(home.address, `${home.town} · ${money(home.price)}`, score))
           .addTo(map);
       });
 
-      for (const layerId of ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points']) {
-        map.on('click', layerId, (event) => {
-          const properties = event.features?.[0]?.properties || {};
-          const sourceDate = `Source date: ${properties.sourceVersion || 'not reported'}`;
-          new Popup({ closeButton: true, maxWidth: '260px' })
-            .setLngLat(event.lngLat)
-            .setDOMContent(popupContent(properties.name, resourceLabel(properties.resourceType), sourceDate, properties.sourceUrl))
-            .addTo(map);
-        });
-      }
-      for (const layerId of ['hc-home-points', 'hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points']) {
+      bindResourceInteractions(map, ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points'], activePopupRef);
+      for (const layerId of ['hc-home-points']) {
         map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
         map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
       }
 
       setMapReady(true);
-      const locatedHomes = homesRef.current.filter(hasCoordinates);
-      if (locatedHomes.length > 1) {
+      const locatedHomes = homesRef.current.filter(hasMapCoordinates);
+      if (addressFocusedRef.current && isMapAddressCandidate(addressTargetRef.current)) {
+        const target = addressTargetRef.current;
+        map.jumpTo({ center: [target.longitude, target.latitude], zoom: 15, offset: visibleMapOffset(map) });
+      } else if (cameraIntentRef.current.type === 'reset') {
+        map.jumpTo({ center: [103.8198, 1.3521], zoom: 11, pitch: 48, bearing: -18 });
+      } else if (locatedHomes.length > 1) {
         const bounds = new LngLatBounds();
         locatedHomes.forEach((home) => bounds.extend([Number(home.lng), Number(home.lat)]));
         const sameBlock = bounds.getEast() - bounds.getWest() < 0.0001
@@ -231,6 +322,8 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
 
     return () => {
       window.clearTimeout(loadTimer);
+      activePopupRef.current?.remove();
+      activePopupRef.current = null;
       map.remove();
       mapRef.current = null;
       setMapReady(false);
@@ -249,10 +342,9 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
     const map = mapRef.current;
     if (!mapReady || !map?.getSource('hc-resources')) return;
     setSourceData(map, 'hc-resources', resourceData);
-    const isVisible = visibleResourceTypes.length
-      ? ['in', ['get', 'resourceType'], ['literal', visibleResourceTypes]]
-      : ['==', 1, 0];
-    for (const layerId of ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points']) {
+    const isVisible = visibleResourceFilter(visibleResourceTypes);
+    for (const layerId of ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points', 'hc-resource-point-icons']) {
+      if (map.getLayer && !map.getLayer(layerId)) continue;
       const geometryFilter = layerId === 'hc-resource-polygons'
         ? ['==', ['geometry-type'], 'Polygon']
         : layerId === 'hc-resource-lines'
@@ -263,32 +355,108 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
   }, [mapReady, resourceData, visibleResourceTypes]);
 
   useEffect(() => {
-    if (!mapReady || !selectedHome || !hasCoordinates(selectedHome)) return;
-    mapRef.current?.flyTo({ center: [Number(selectedHome.lng), Number(selectedHome.lat)], zoom: Math.max(mapRef.current.getZoom(), 14), duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650 });
-  }, [mapReady, selectedHome?.id]);
+    const map = mapRef.current;
+    if (!mapReady || !map || !selectedHome || !hasMapCoordinates(selectedHome) || addressFocused) return;
+    map.flyTo({
+      center: [Number(selectedHome.lng), Number(selectedHome.lat)],
+      zoom: selectedHomeZoom(map.getZoom()),
+      offset: visibleMapOffset(map),
+      duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650,
+    });
+  }, [mapReady, selectedHome?.id, selectedHome?.lat, selectedHome?.lng, homeFocusRequest, addressFocused, mapLayoutRevision]);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!mapReady || !map || !hasCoordinates(hoveredHome)) return;
+    const feature = facilityFocus?.feature;
+    if (!mapReady || !map || feature?.geometry?.type !== 'Point' || !Array.isArray(feature.geometry.coordinates)) return;
+    const [longitude, latitude] = feature.geometry.coordinates;
+    if (![longitude, latitude].every(Number.isFinite)) return;
+    const properties = feature.properties || {};
+    const sourceDate = `Source date: ${properties.sourceVersion || 'not reported'}`;
+    const location = facilityLocationLabel(feature);
+    activePopupRef.current?.remove();
+    const popup = new Popup({ closeButton: true, maxWidth: '280px', offset: 18 })
+      .setLngLat([longitude, latitude])
+      .setDOMContent(popupContent(properties.name || 'Unnamed facility', [resourceLabel(properties.resourceType), location].filter(Boolean).join(' · '), sourceDate, properties.sourceUrl))
+      .addTo(map);
+    activePopupRef.current = popup;
+    map.flyTo({
+      center: [longitude, latitude],
+      zoom: Math.min(Math.max(map.getZoom() + 2, 17), 19),
+      offset: visibleMapOffset(map),
+      duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 550,
+    });
+    return () => {
+      if (activePopupRef.current === popup) activePopupRef.current = null;
+      popup.remove();
+    };
+  }, [mapReady, facilityFocus?.request, facilityFocus?.feature, mapLayoutRevision]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map || !addressFocused || !isMapAddressCandidate(addressTarget)) return;
+    map.flyTo({
+      center: [addressTarget.longitude, addressTarget.latitude],
+      zoom: Math.max(map.getZoom(), 15),
+      offset: visibleMapOffset(map),
+      duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650,
+    });
+  }, [mapReady, addressTarget?.latitude, addressTarget?.longitude, addressRequest, addressFocused, mapLayoutRevision]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map || !isMapAddressCandidate(addressTarget)) return;
+
+    const element = document.createElement('div');
+    element.className = 'map-address-marker maplibre-address-marker';
+    element.setAttribute('role', 'img');
+    element.setAttribute('aria-label', `Selected map location: ${addressTarget.address}`);
+    const pin = document.createElement('span');
+    pin.className = 'map-address-marker-pin';
+    pin.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span');
+    label.className = 'map-address-label';
+    label.textContent = addressTarget.address;
+    element.append(pin, label);
+
+    const marker = new MapLibreMarker({ element, anchor: 'bottom' })
+      .setLngLat([addressTarget.longitude, addressTarget.latitude])
+      .addTo(map);
+    return () => marker.remove();
+  }, [mapReady, addressTarget?.address, addressTarget?.latitude, addressTarget?.longitude]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map || !hasMapCoordinates(hoveredHome) || hoveredHome?.id === selectedHome?.id || addressTarget) return;
     let preview;
     const timer = window.setTimeout(() => {
       const location = [Number(hoveredHome.lng), Number(hoveredHome.lat)];
-      const point = map.project(location);
-      const { clientWidth, clientHeight } = map.getContainer();
-      if (point.x < 44 || point.x > clientWidth - 44 || point.y < 240 || point.y > clientHeight - 90) {
-        map.easeTo({ center: location, offset: [0, 45], duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 300 });
-      }
+      map.flyTo({
+        center: location,
+        zoom: selectedHomeZoom(map.getZoom()),
+        offset: visibleMapOffset(map),
+        duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 500,
+      });
+      const locationPrecision = hoveredHome.mapLocationPrecision === 'block' ? ' · Approximate block location · OneMap' : '';
       preview = new Popup({ closeButton: false, closeOnClick: false, focusAfterOpen: false, offset: 20, maxWidth: '230px' })
         .setLngLat(location)
-        .setDOMContent(popupContent(hoveredHome.address, `${money(hoveredHome.price)} · ${hoveredHome.type}`, 'Historical record, not a current listing'))
+        .setDOMContent(popupContent(hoveredHome.address, `${money(hoveredHome.price)} · ${hoveredHome.type}`, `Historical record, not a current listing${locationPrecision}`))
         .addTo(map);
-    }, 140);
+    }, 300);
     return () => { window.clearTimeout(timer); preview?.remove(); };
-  }, [mapReady, hoveredHome?.id, hoveredHome?.lat, hoveredHome?.lng]);
+  }, [mapReady, hoveredHome?.id, hoveredHome?.lat, hoveredHome?.lng, selectedHome?.id, addressTarget]);
 
   useEffect(() => {
-    if (centerRequest) mapRef.current?.flyTo({ center: [103.8198, 1.3521], zoom: 11, pitch: 48, bearing: -18, duration: 650 });
-  }, [centerRequest]);
+    if (!mapReady || !centerRequest || cameraIntent.type !== 'reset') return;
+    mapRef.current?.flyTo({
+      center: [103.8198, 1.3521],
+      zoom: 11,
+      pitch: 48,
+      bearing: -18,
+      offset: visibleMapOffset(mapRef.current),
+      duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650,
+    });
+  }, [mapReady, centerRequest, cameraIntent.type, cameraIntent.request, mapLayoutRevision]);
 
   return <div className="relative h-full w-full">
     <div ref={containerRef} className="absolute inset-0 h-full w-full" />

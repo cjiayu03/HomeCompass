@@ -7,6 +7,10 @@ export const mapLayers = [
   ['kindergarten', 'Kindergartens', '#627f90'], ['school_zone', 'School zones', '#8291a6'],
   ['dengue_cluster', 'Dengue source snapshot', '#b65360'],
 ];
+export const nearbyFacilityTypes = [
+  'chas_clinic', 'eldercare', 'community_club', 'park_facility',
+  'childcare', 'student_care', 'kindergarten', 'dementia_gtp',
+];
 export const resourceTypes = mapLayers.map(([type]) => type);
 export const resourceColors = { ...Object.fromEntries(mapLayers.map(([type, , color]) => [type, color])), moe_school: '#596f88' };
 export function resourceLabel(type) {

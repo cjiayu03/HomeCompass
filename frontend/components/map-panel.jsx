@@ -2,15 +2,25 @@
 
 import dynamic from 'next/dynamic';
 import { createPortal } from 'react-dom';
-import { LocateFixed, Layers3, UsersRound } from 'lucide-react';
-import { Component, useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  Layers3,
+  LocateFixed,
+  UsersRound,
+} from 'lucide-react';
+import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useWorkspace } from '@/components/workspace-provider';
 import { distanceM } from '@/lib/planning';
 import { LoadingScene } from '@/components/loading-scene';
-import { mapLayers } from '@/lib/map-layers';
+import { mapLayers, resourceColors, resourceLabel } from '@/lib/map-layers';
 import { sourceFreshness } from '@/components/evidence-helpers';
+import { MapAddressSearch } from '@/components/map-address-search';
+import { hasMapCoordinates } from '@/lib/map-coordinates';
+import { mapLayerIcons } from '@/lib/map-layer-icons';
+import { dedupePointFeatures, facilityLocationLabel } from '@/lib/geo-cluster';
+import { requestJson } from '@/lib/api-client';
+import { matchHomeMapCandidate, normalizeMapAddressCandidates } from '@/lib/map-address-search';
 
 class MapBoundary extends Component {
   state={failed:false};
@@ -27,36 +37,114 @@ function viewportLabel(bounds) {
   return `${bounds.west.toFixed(3)}, ${bounds.south.toFixed(3)} to ${bounds.east.toFixed(3)}, ${bounds.north.toFixed(3)}`;
 }
 
-export function MapPanel({ controlsTarget, homes, resources = [], resourceState, retryResources, sourceStatus, selectedHome, hoveredHome, onSelect, refreshViewport, viewportBounds, onSearchArea, searchBusy = false, className }) {
+export function MapPanel({ controlsTarget, cameraIntent, onCameraIntent, onAddressSelected, homes, resources = [], resourceState, retryResources, sourceStatus, selectedHome, hoveredHome, onSelect, facilityFocus, visibleResourceTypes: controlledResourceTypes, onVisibleResourceTypesChange, refreshViewport, viewportBounds, onSearchArea, searchBusy = false, className }) {
   const {places,brief: currentBrief,appliedBrief,mapResourceTypes,setMapResourceTypes}=useWorkspace();
   const brief = appliedBrief || currentBrief;
   const [reach,setReach]=useState(false);
   const [mapNotice,setMapNotice]=useState('');
   const [centerRequest, setCenterRequest] = useState(0);
   const [mapMode, setMapMode] = useState('2d');
+  const [mapOptionsOpen, setMapOptionsOpen] = useState(false);
+  const [addressTarget, setAddressTarget] = useState(null);
+  const [addressRequest, setAddressRequest] = useState(0);
+  const [resolvedHomeLocation, setResolvedHomeLocation] = useState(null);
+  const [homeLocationStatus, setHomeLocationStatus] = useState(null);
+  const homeLocationCache = useRef(new Map());
+  const [localCameraIntent, setLocalCameraIntent] = useState({ type: 'initial', request: 0 });
+  const activeCameraIntent = cameraIntent || localCameraIntent;
+  const addressFocused = Boolean(addressTarget) && activeCameraIntent.type === 'address';
+  const locationTarget = hoveredHome || selectedHome;
+  useEffect(() => {
+    setResolvedHomeLocation(null);
+    setHomeLocationStatus(null);
+    if (!locationTarget || hasMapCoordinates(locationTarget) || addressTarget) return undefined;
+
+    const address = String(locationTarget.address || '').trim();
+    if (!address) return undefined;
+    const cacheKey = address.toLocaleUpperCase('en-SG');
+    let active = true;
+    let controller;
+    const timer = window.setTimeout(async () => {
+      setHomeLocationStatus({ id: locationTarget.id, state: 'loading' });
+      try {
+        let candidate = homeLocationCache.current.get(cacheKey);
+        if (!homeLocationCache.current.has(cacheKey)) {
+          controller = new AbortController();
+          const response = await requestJson('/api/v1/map/address-search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: address }),
+            signal: controller.signal,
+          });
+          const candidates = normalizeMapAddressCandidates(response?.items);
+          candidate = matchHomeMapCandidate(locationTarget, candidates);
+          homeLocationCache.current.set(cacheKey, candidate || null);
+        }
+        if (!active) return;
+        if (!candidate) {
+          setHomeLocationStatus({ id: locationTarget.id, state: 'unavailable' });
+          return;
+        }
+        setResolvedHomeLocation({
+          id: locationTarget.id,
+          lat: candidate.latitude,
+          lng: candidate.longitude,
+          mapLocationPrecision: 'block',
+        });
+        setHomeLocationStatus({ id: locationTarget.id, state: 'resolved' });
+      } catch (error) {
+        if (!active || error?.name === 'AbortError') return;
+        setHomeLocationStatus({ id: locationTarget.id, state: 'unavailable' });
+      }
+    }, 350);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      controller?.abort();
+    };
+  }, [locationTarget?.id, locationTarget?.address, locationTarget?.lat, locationTarget?.lng, addressTarget]);
+  const resolvedTarget = resolvedHomeLocation?.id === locationTarget?.id ? resolvedHomeLocation : null;
+  const mapSelectedHome = selectedHome && resolvedTarget?.id === selectedHome.id
+    ? { ...selectedHome, ...resolvedTarget }
+    : selectedHome;
+  const mapHoveredHome = hoveredHome && resolvedTarget?.id === hoveredHome.id
+    ? { ...hoveredHome, ...resolvedTarget }
+    : hoveredHome;
+  const visibleHomeLocationStatus = homeLocationStatus?.id === locationTarget?.id ? homeLocationStatus : null;
   const fallback=useCallback(message=>{setMapNotice(message);setMapMode('2d');},[]);
+  function registerCameraIntent(type) {
+    if (onCameraIntent) onCameraIntent(type);
+    else setLocalCameraIntent((current) => ({ type, request: current.request + 1 }));
+  }
+  function selectAddress(candidate) {
+    setAddressTarget(candidate);
+    registerCameraIntent('address');
+    setAddressRequest((value) => value + 1);
+    onAddressSelected?.();
+  }
   const anchors=useMemo(()=>reach?(brief.placeConstraints||[]).map(c=>{const place=places.find(p=>p.id===c.placeId);return place&&place.latitude!=null&&place.longitude!=null?{id:place.id,label:place.label,lat:Number(place.latitude),lng:Number(place.longitude),radius:Number(c.maxDistanceM)}:null;}).filter(a=>a&&Number.isFinite(a.lat)&&Number.isFinite(a.lng)&&Number.isFinite(a.radius)&&a.radius>=0):[],[reach,brief.placeConstraints,places]);
   const inReach=anchors.length?homes.filter(home=>anchors.every(a=>{const d=distanceM(a,home);return d!=null&&d<=a.radius;})).length:0;
-  const nearest=useMemo(()=>!selectedHome?[]:resources.filter(f=>f.geometry?.type==='Point').map(f=>({name:f.properties?.name||f.properties?.resourceType,distance:distanceM(selectedHome,{lng:f.geometry.coordinates[0],lat:f.geometry.coordinates[1]})})).filter(f=>f.distance!=null).sort((a,b)=>a.distance-b.distance).slice(0,3),[selectedHome,resources]);
-  const [visibleResourceTypes, setVisibleResourceTypes] = useState(() => mapResourceTypes || ['silver_zone']);
+  const [localVisibleResourceTypes, setLocalVisibleResourceTypes] = useState(() => mapResourceTypes || ['silver_zone']);
+  const visibleResourceTypes = controlledResourceTypes ?? localVisibleResourceTypes;
+  const nearest=useMemo(()=>!mapSelectedHome?[]:dedupePointFeatures(resources).filter(f=>f.geometry?.type==='Point'&&visibleResourceTypes.includes(f.properties?.resourceType)).map(feature=>({feature,name:feature.properties?.name||resourceLabel(feature.properties?.resourceType),distance:distanceM(mapSelectedHome,{lng:feature.geometry.coordinates[0],lat:feature.geometry.coordinates[1]})})).filter(f=>f.distance!=null).sort((a,b)=>a.distance-b.distance).slice(0,3),[mapSelectedHome,resources,visibleResourceTypes]);
   const dengueSource = sourceStatus?.items?.find(source => source.resourceType === 'dengue_cluster');
   const dengueReview = sourceFreshness(dengueSource);
-  const mappedCount = homes.filter((home) => home.lat !== null && home.lat !== undefined && home.lng !== null && home.lng !== undefined && Number.isFinite(Number(home.lat)) && Number.isFinite(Number(home.lng))).length;
+  const mappedCount = homes.filter(hasMapCoordinates).length;
+  const unlocatedCount = Math.max(0, homes.length - mappedCount);
   const counts = resources.reduce((result, feature) => { const type = feature.properties?.resourceType; result[type] = (result[type] || 0) + 1; return result; }, {});
   const availableCounts = resourceState?.counts?.length ? Object.fromEntries(resourceState.counts.map(item => [item.resourceType, Math.max(0, item.total - (item.unlocated || 0))])) : counts;
-  function selectLayers(types) { setVisibleResourceTypes(types); setMapResourceTypes?.(types); }
+  function selectLayers(types) {
+    if (onVisibleResourceTypesChange) onVisibleResourceTypesChange(types);
+    else {
+      setLocalVisibleResourceTypes(types);
+      setMapResourceTypes?.(types);
+    }
+  }
   function toggleLayer(type, checked) { selectLayers(checked ? [...new Set([...visibleResourceTypes, type])] : visibleResourceTypes.filter(item => item !== type)); }
-  const [compactViewport, setCompactViewport] = useState(false);
-  useEffect(() => {
-    const media = window.matchMedia('(max-width: 767px)');
-    const update = () => setCompactViewport(media.matches);
-    update();
-    media.addEventListener('change', update);
-    return () => media.removeEventListener('change', update);
-  }, []);
   const mapControls = (
 <div className="map-tools pointer-events-none absolute right-0 top-0 z-10 flex items-start gap-2 p-3">
-        <details className="pointer-events-auto">
+        <details className="pointer-events-auto" open={mapOptionsOpen} onToggle={(event) => setMapOptionsOpen(event.currentTarget.open)}>
           <summary aria-label={`Map options${reach ? ', family reach on' : ''}${resourceState?.status === 'error' ? ', nearby data unavailable' : ''}${mapNotice ? ', map warning' : ''}`} className="glass-card flex h-11 cursor-pointer list-none items-center gap-2 rounded-xl px-3 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
             <Layers3 aria-hidden="true" className="size-4 text-primary" />
             <span className="map-options-label">Map options</span>
@@ -72,7 +160,7 @@ export function MapPanel({ controlsTarget, homes, resources = [], resourceState,
               </div>
               {mapMode === '3d' && <p className="mt-1 text-xs leading-4 text-muted-foreground">Building shapes and heights are approximate.</p>}
               {mapNotice && <div className="mt-2 rounded-lg border border-destructive/25 bg-destructive/5 p-2 text-xs leading-4" role="status"><span>{mapNotice}</span><Button variant="link" size="sm" className="ml-2 h-8 px-1 text-xs" onClick={() => setMapNotice('')}>Dismiss</Button></div>}
-              {mappedCount < homes.length && <p className="mt-2 text-xs leading-4 text-muted-foreground" role="status">{mappedCount} of {homes.length} homes have map locations.</p>}
+              {unlocatedCount > 0 && <p className="mt-2 text-xs leading-4 text-muted-foreground">{mappedCount} of {homes.length} loaded records have map locations; {unlocatedCount} are omitted until verified coordinates are available.</p>}
             </section>
 
             <section className="mt-3 border-t pt-3" aria-labelledby="family-reach-heading">
@@ -98,12 +186,13 @@ export function MapPanel({ controlsTarget, homes, resources = [], resourceState,
               </div>
               <div className="space-y-0.5">
                 {mapLayers.map(([type, label, color]) => {
+                  const LayerIcon = mapLayerIcons[type] || LocateFixed;
                   const source = sourceStatus?.items?.find(item => item.resourceType === type);
                   const review = sourceFreshness(source);
                   return (
                   <label key={type} className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg px-2 hover:bg-secondary/70">
                     <input type="checkbox" className="size-4 accent-primary" checked={visibleResourceTypes.includes(type)} disabled={!availableCounts[type]} onChange={(event) => toggleLayer(type, event.target.checked)} />
-                    <span aria-hidden="true" className="size-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+                    <LayerIcon aria-hidden="true" className="size-4 shrink-0" style={{ color }} strokeWidth={1.8} />
                     <span className="min-w-0 flex-1 text-xs">{label}{['community_club', 'eldercare', 'park_facility'].includes(type) && <span className="mt-1 block text-xs text-muted-foreground">{review.label}{source?.sourceUpdatedAt && <> · <time className="whitespace-nowrap" dateTime={source.sourceUpdatedAt}>{source.sourceUpdatedAt.slice(0, 10)}</time></>}</span>}{type === 'eldercare' && <span className="mt-1 block text-xs text-muted-foreground">Eldercare only; other health facilities are not included.</span>}{type === 'dengue_cluster' && <span className="mt-1 block text-xs text-muted-foreground">{dengueReview.label} · updated {dengueSource?.sourceUpdatedAt || dengueSource?.version || 'unknown'}. Snapshot does not establish current risk.</span>}</span>
                     <span className="text-xs text-muted-foreground">{(availableCounts[type] || 0).toLocaleString()}</span>
                   </label>
@@ -117,23 +206,44 @@ export function MapPanel({ controlsTarget, homes, resources = [], resourceState,
             {resourceState?.status === 'error' && <div className="mt-3 flex items-center justify-between gap-3 border-t pt-3 text-xs" role="alert"><span>{resources.length ? "Update failed; showing previous results. " : "Nearby map data could not load. "}{resourceState.error?.message}</span><Button variant="outline" className="h-9 rounded-lg px-3 text-xs" aria-label="Retry resource data" onClick={retryResources}>Retry</Button></div>}
           </div>
         </details>
-        <Button size="icon" variant="outline" className="h-11 w-11" aria-label="Center map on Singapore" onClick={() => setCenterRequest((value) => value + 1)}><LocateFixed className="size-4" /></Button>
+        <Button size="icon" variant="outline" className="pointer-events-auto h-11 w-11" aria-label="Center map on Singapore" onClick={() => { setAddressTarget(null); registerCameraIntent('reset'); setCenterRequest((value) => value + 1); }}><LocateFixed className="size-4" /></Button>
       </div>
   );
   return (
     <section className={cn('relative isolate z-0 h-[clamp(360px,50dvh,440px)] min-h-0 overflow-hidden rounded-xl border bg-secondary shadow-soft lg:h-full', className)} aria-label={mapMode === '3d' ? 'Movable 3D neighborhood map' : 'Movable OpenStreetMap view'}>
       <div className="absolute inset-0 z-0">{mapMode === '3d'
-        ? <MapBoundary onUnavailable={fallback}><Map3DView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onUnavailable={fallback} onSelect={onSelect} centerRequest={centerRequest} onViewportChange={refreshViewport} /></MapBoundary>
-        : <MapView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={selectedHome} hoveredHome={hoveredHome} anchors={anchors} onSelect={onSelect} centerRequest={centerRequest} onViewportChange={refreshViewport} />}</div>
-      {onSearchArea && <div className="absolute left-3 top-3 z-10"><Button variant="outline" disabled={searchBusy || !viewportBounds} onClick={onSearchArea}>{searchBusy ? 'Searching…' : 'Search this area'}</Button></div>}
-      {compactViewport && controlsTarget ? createPortal(mapControls, controlsTarget) : mapControls}
+        ? <MapBoundary onUnavailable={fallback}><Map3DView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={mapSelectedHome} hoveredHome={mapHoveredHome} anchors={anchors} onUnavailable={fallback} onSelect={onSelect} cameraIntent={activeCameraIntent} homeFocusRequest={activeCameraIntent.type === 'home' ? activeCameraIntent.request : 0} facilityFocus={facilityFocus} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} /></MapBoundary>
+        : <MapView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={mapSelectedHome} hoveredHome={mapHoveredHome} anchors={anchors} onSelect={onSelect} cameraIntent={activeCameraIntent} homeFocusRequest={activeCameraIntent.type === 'home' ? activeCameraIntent.request : 0} facilityFocus={facilityFocus} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} />}</div>
+      {unlocatedCount > 0 && <div className="pointer-events-none absolute bottom-14 left-3 z-10 max-w-[min(24rem,calc(100%-1.5rem))]">
+        <p role="status" aria-label="Map location coverage" className="glass-card rounded-lg px-3 py-2 text-xs leading-4 text-foreground shadow-soft">{mappedCount} of {homes.length} loaded records have map locations. {unlocatedCount} lack verified coordinates, so they cannot appear as pins yet.</p>
+      </div>}
+      {visibleHomeLocationStatus && <div className="pointer-events-none absolute bottom-24 left-3 z-10 max-w-[min(24rem,calc(100%-1.5rem))]">
+        <p role="status" className="glass-card rounded-lg px-3 py-2 text-xs leading-4 text-foreground shadow-soft">
+          {visibleHomeLocationStatus.state === 'loading' && `Finding ${locationTarget.address} on the map…`}
+          {visibleHomeLocationStatus.state === 'resolved' && `Approximate block location shown for ${locationTarget.address}.`}
+          {visibleHomeLocationStatus.state === 'unavailable' && `No verified block location found for ${locationTarget.address}.`}
+        </p>
+      </div>}
+      {onSearchArea && <div className="map-search-area-control absolute left-3 top-3 z-10"><Button variant="outline" disabled={searchBusy || !viewportBounds} onClick={onSearchArea}>{searchBusy ? 'Searching…' : 'Search this area'}</Button></div>}
+      {controlsTarget
+        ? createPortal(<MapAddressSearch selectedAddress={addressTarget} onSelect={selectAddress} onClear={() => setAddressTarget(null)} optionsOpen={mapOptionsOpen} onSearchStart={() => setMapOptionsOpen(false)} />, controlsTarget)
+        : <MapAddressSearch selectedAddress={addressTarget} onSelect={selectAddress} onClear={() => setAddressTarget(null)} optionsOpen={mapOptionsOpen} onSearchStart={() => setMapOptionsOpen(false)} />}
+      {controlsTarget ? createPortal(mapControls, controlsTarget) : mapControls}
 
-      {selectedHome && <div className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[min(24rem,calc(100%-1.5rem))]">
+      {mapSelectedHome && !addressTarget && <div className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[min(24rem,calc(100%-1.5rem))]">
         <details className="glass-card pointer-events-auto rounded-lg px-3 py-2 text-xs">
-          <summary className="cursor-pointer font-semibold text-foreground">{selectedHome.address}</summary>
-          <p className="mt-1">Nearest points in the loaded source features:</p>
-          {nearest.length ? nearest.map((resource, index) => <p key={index}>{resource.name}: {Math.round(resource.distance)} m</p>) : <p>No nearby point evidence loaded.</p>}
-          <p className="mt-1">Straight-line estimates; viewport data may be incomplete.</p>
+          <summary className="cursor-pointer font-semibold text-foreground">{mapSelectedHome.address}</summary>
+          <p className="mt-1">Nearest places in enabled layers:</p>
+          {nearest.length ? nearest.map(({ feature, name, distance }, index) => {
+            const type = feature.properties?.resourceType;
+            const LayerIcon = mapLayerIcons[type] || LocateFixed;
+            const location = facilityLocationLabel(feature);
+            return <div key={feature.id ?? index} className="mt-1 flex items-start gap-1.5">
+              <LayerIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" style={{ color: resourceColors[type] }} />
+              <span>{name} · {resourceLabel(type)} · {Math.round(distance)} m{location ? ` · ${location}` : ''}</span>
+            </div>;
+          }) : <p>{visibleResourceTypes.some(type => !['silver_zone', 'school_zone', 'dengue_cluster'].includes(type)) ? 'No nearby point evidence in the loaded area.' : 'Turn on facility layers in Map options to see places near this home.'}</p>}
+          <p className="mt-1">Straight-line estimates; loaded map data may be incomplete.</p>
         </details>
       </div>}
     </section>

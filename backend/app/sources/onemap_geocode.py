@@ -44,6 +44,7 @@ _CHECKPOINT_SIZE = 50
 _HOME_QUEUE_QUERY = """SELECT DISTINCT address FROM candidate_home
    WHERE geometry IS NULL
      AND (geocode_status='pending' OR ($2::boolean AND geocode_status='failed'))
+     AND ($3::text[] IS NULL OR address=ANY($3::text[]))
    ORDER BY address LIMIT $1"""
 _SCHOOL_QUEUE_QUERY = """WITH latest AS (
      SELECT DISTINCT ON (source_id) id FROM source_snapshot
@@ -85,6 +86,20 @@ _SCHOOL_GEOCODE_UPDATE_QUERY = """UPDATE neighbourhood_resource
 def _address_parts(address: str) -> tuple[str, str] | None:
     parts = address.strip().split(maxsplit=1)
     return (parts[0].lstrip("0") or "0", parts[1]) if len(parts) == 2 else None
+
+
+def _normalize_home_addresses(addresses: list[str] | None, limit: int) -> list[str] | None:
+    if addresses is None:
+        return None
+    normalized = []
+    for address in addresses:
+        if not isinstance(address, str) or not address.strip() or len(address.strip()) > 255:
+            raise ValueError("Target home addresses must be non-empty and 255 characters or fewer.")
+        normalized.append(address.strip())
+    normalized = list(dict.fromkeys(normalized))
+    if len(normalized) > limit:
+        raise ValueError("The number of target home addresses cannot exceed --home-limit.")
+    return normalized
 
 
 def _normalize_road(value: str) -> str:
@@ -346,7 +361,14 @@ async def _mark_interrupted(pool: asyncpg.Pool, snapshot_id: Any, error: BaseExc
         )
 
 
-async def run(home_limit: int, school_limit: int, pause_seconds: float, retry_failed: bool = False) -> dict[str, Any]:
+async def run(
+    home_limit: int,
+    school_limit: int,
+    pause_seconds: float,
+    retry_failed: bool = False,
+    home_addresses: list[str] | None = None,
+) -> dict[str, Any]:
+    home_addresses = _normalize_home_addresses(home_addresses, home_limit)
     load_local_project_env()
     token = os.getenv("ONEMAP_ACCESS_TOKEN", "").strip()
     if not token:
@@ -359,7 +381,7 @@ async def run(home_limit: int, school_limit: int, pause_seconds: float, retry_fa
     try:
         async with pool.acquire() as connection:
             home_rows = await connection.fetch(
-                _HOME_QUEUE_QUERY, home_limit, retry_failed,
+                _HOME_QUEUE_QUERY, home_limit, retry_failed, home_addresses,
             ) if home_limit else []
             school_rows = await connection.fetch(
                 _SCHOOL_QUEUE_QUERY, "d_688b934f82c1059ed0a6993d2a829089", school_limit, retry_failed,
@@ -530,13 +552,16 @@ async def run(home_limit: int, school_limit: int, pause_seconds: float, retry_fa
 def main() -> None:
     parser = argparse.ArgumentParser(description="Geocode missing HDB and MOE locations through OneMap.")
     parser.add_argument("--home-limit", type=int, default=100, help="Maximum unique HDB addresses for this sequential batch (default: 100).")
+    parser.add_argument("--home-address", action="append", default=[], help="Geocode this exact HDB address (repeatable; use with --home-limit).")
     parser.add_argument("--school-limit", type=int, default=400, help="Maximum unlocated current MOE records (default: 400).")
     parser.add_argument("--pause-seconds", type=float, default=1.1, help="Delay between OneMap requests, at least 0.5 seconds (default: 1.1).")
     parser.add_argument("--retry-failed", action="store_true", help="Retry previously ambiguous/unmatched addresses as well as pending records.")
     args = parser.parse_args()
     if args.home_limit < 0 or args.school_limit < 0 or args.pause_seconds < 0.5:
         parser.error("limits must be non-negative and pause-seconds must be at least 0.5")
-    print(json.dumps(asyncio.run(run(args.home_limit, args.school_limit, args.pause_seconds, args.retry_failed)), indent=2))
+    if len(args.home_address) > args.home_limit:
+        parser.error("the number of --home-address values cannot exceed --home-limit")
+    print(json.dumps(asyncio.run(run(args.home_limit, args.school_limit, args.pause_seconds, args.retry_failed, args.home_address or None)), indent=2))
 
 
 if __name__ == "__main__":

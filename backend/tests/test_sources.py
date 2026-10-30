@@ -336,11 +336,26 @@ def test_onemap_queue_queries_bind_retry_flag_without_unexpanded_placeholders():
     assert "{" not in onemap_geocode._HOME_QUEUE_QUERY
     assert "{" not in onemap_geocode._SCHOOL_QUEUE_QUERY
     assert "$2::boolean" in onemap_geocode._HOME_QUEUE_QUERY
+    assert "$3::text[]" in onemap_geocode._HOME_QUEUE_QUERY
+    assert "address=ANY($3::text[])" in onemap_geocode._HOME_QUEUE_QUERY
     assert "$3::boolean" in onemap_geocode._SCHOOL_QUEUE_QUERY
     assert "geocode_status='pending'" in onemap_geocode._HOME_QUEUE_QUERY
     assert "geocode_status='failed'" in onemap_geocode._HOME_QUEUE_QUERY
     assert "geocodeStatus','pending')='pending'" in onemap_geocode._SCHOOL_QUEUE_QUERY
     assert "geocodeStatus','pending')='failed'" in onemap_geocode._SCHOOL_QUEUE_QUERY
+
+
+def test_onemap_geocoder_normalizes_and_bounds_target_addresses():
+    assert onemap_geocode._normalize_home_addresses(
+        [" 109A CANBERRA WALK ", "109A CANBERRA WALK", "270B PUNGGOL FIELD"], 2,
+    ) == ["109A CANBERRA WALK", "270B PUNGGOL FIELD"]
+    assert onemap_geocode._normalize_home_addresses(None, 0) is None
+    with pytest.raises(ValueError, match="non-empty"):
+        onemap_geocode._normalize_home_addresses(["  "], 1)
+    with pytest.raises(ValueError, match="255 characters"):
+        onemap_geocode._normalize_home_addresses(["A" * 256], 1)
+    with pytest.raises(ValueError, match="cannot exceed"):
+        onemap_geocode._normalize_home_addresses(["123 SOME ROAD", "456 OTHER ROAD"], 1)
 
 
 def test_onemap_school_update_uses_uuid_consistently_for_snapshot_id():

@@ -139,6 +139,20 @@ describe('WorkspaceProvider data state', () => {
     expect(state().homeState.status).toBe('success');
   });
 
+  it('describes a paginated historical search as a loaded page, not as the total found', async () => {
+    vi.stubEnv('NEXT_PUBLIC_HOME_DATA_MODE', 'live');
+    vi.stubGlobal('fetch', vi.fn((path) => path === '/api/v1/search'
+      ? Promise.resolve(json({ items: [home], total: 243500, hasMore: true, nextCursor: 'page-2', ...liveMetadata }))
+      : defaultFetch(path)));
+    const state = renderProvider();
+    await waitFor(() => expect(state().homeState.status).toBe('success'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+
+    await waitFor(() => expect(state().notice.text).toBe('Showing 1 of 243,500 matching historical resale records. Load more for additional results; these are not current listings.'));
+    expect(state().notice.tone).toBe('info');
+  });
+
   it('rejects successful responses without result arrays and retains existing data', async () => {
     vi.stubEnv('NEXT_PUBLIC_HOME_DATA_MODE', 'live');
     let invalidHomes = false;

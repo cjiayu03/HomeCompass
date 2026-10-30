@@ -81,6 +81,7 @@ load_local_project_env()
 APP_NAME = os.getenv("APP_NAME", "HomeCompass")
 _DEFAULT_DISTANCE_TARGETS = {"school": 1_500, "childcare": 2_000, "care": 2_000}
 ai_interpret_limiter: RateLimiter | None = None
+address_search_limiter: RateLimiter | None = None
 auth_rate_limiter: RateLimiter | None = None
 SESSION_LIFETIME = timedelta(days=30)
 SESSION_MAX_AGE_SECONDS = int(SESSION_LIFETIME.total_seconds())
@@ -151,6 +152,13 @@ def _get_ai_interpret_limiter() -> RateLimiter:
     return ai_interpret_limiter
 
 
+def _get_address_search_limiter() -> RateLimiter:
+    global address_search_limiter
+    if address_search_limiter is None:
+        address_search_limiter = RateLimiter(max_requests=20, window_seconds=60)
+    return address_search_limiter
+
+
 def _get_auth_rate_limiter() -> RateLimiter:
     global auth_rate_limiter
     if auth_rate_limiter is None:
@@ -200,11 +208,12 @@ def _storage_unavailable() -> HTTPException:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global APP_NAME, ai_interpret_limiter, auth_rate_limiter
+    global APP_NAME, ai_interpret_limiter, address_search_limiter, auth_rate_limiter
     load_local_project_env()
     APP_NAME = os.getenv("APP_NAME", APP_NAME)
     _app.title = APP_NAME
     ai_interpret_limiter = RateLimiter()
+    address_search_limiter = RateLimiter(max_requests=20, window_seconds=60)
     auth_rate_limiter = RateLimiter(max_requests=10, window_seconds=60)
     await open_pool()
     try:
@@ -1611,6 +1620,86 @@ def _candidate_selection_token(candidate: dict, provider_token: str) -> str:
     }
     payload = json.dumps(signed_fields, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hmac.new(provider_token.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _public_map_address_items(candidates, provider_token: str) -> list[dict[str, str | float]]:
+    if not isinstance(candidates, list):
+        raise OneMapProviderError("OneMap returned a malformed search response.")
+
+    items: list[dict[str, str | float]] = []
+    seen: set[tuple[str, float, float]] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        address = candidate.get("address")
+        if not isinstance(address, str):
+            continue
+        address = " ".join(address.split())
+        if not address or provider_token.casefold() in address.casefold():
+            continue
+        latitude = candidate.get("latitude")
+        longitude = candidate.get("longitude")
+        if isinstance(latitude, bool) or isinstance(longitude, bool):
+            continue
+        try:
+            place = PersonalPlaceRequest.model_validate({
+                "label": "Map address",
+                "address": address,
+                "latitude": latitude,
+                "longitude": longitude,
+            })
+        except (ValidationError, TypeError, ValueError, OverflowError):
+            continue
+
+        key = (address.casefold(), float(place.latitude), float(place.longitude))
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append({
+            "address": address,
+            "latitude": float(place.latitude),
+            "longitude": float(place.longitude),
+            "provider": "OneMap",
+        })
+        if len(items) == 10:
+            break
+    return items
+
+
+@app.post("/api/v1/map/address-search")
+async def search_map_address(
+    payload: PlaceSuggestionRequest, request: Request, response: Response,
+) -> dict:
+    """Return a bounded public address list for moving the map camera."""
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        _get_address_search_limiter().check(f"map-address:{rate_limit_key(None, request)}")
+    except HTTPException as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            headers={**(exc.headers or {}), "Cache-Control": "no-store"},
+        ) from None
+    provider_token = os.getenv("ONEMAP_ACCESS_TOKEN", "").strip()
+    if not is_configured_value(provider_token):
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "ONEMAP_UNCONFIGURED", "message": "Address search is not configured."},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            candidates = await search_address_candidates(payload.query, provider_token, client)
+        items = _public_map_address_items(candidates, provider_token)
+    except Exception:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "ONEMAP_UNAVAILABLE", "message": "Address search is temporarily unavailable. Please try again."},
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+    return {"items": items}
 
 
 @app.get("/api/v1/places/suggest")
