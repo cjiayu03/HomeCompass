@@ -31,7 +31,7 @@ services:
     volumes:
       - ./database/migrations:/migrations:ro
     entrypoint: ["/bin/sh", "-ec"]
-    command: ["psql -v ON_ERROR_STOP=1 -f /migrations/001_initial.sql -f /migrations/002_persistence_sources.sql -f /migrations/003_spatial_source_layers.sql -f /migrations/004_location_provenance.sql -f /migrations/005_family_places.sql -f /migrations/006_account_sync.sql -f /migrations/007_saved_searches.sql -f /migrations/008_local_auth.sql -f /migrations/009_onboarding_profile.sql -f /migrations/010_planning_workspace.sql -f /migrations/011_password_recovery.sql -f /migrations/012_town_preferences.sql"]
+    command: ["psql -v ON_ERROR_STOP=1 -f /migrations/001_initial.sql -f /migrations/002_persistence_sources.sql -f /migrations/003_spatial_source_layers.sql -f /migrations/004_location_provenance.sql -f /migrations/005_family_places.sql -f /migrations/006_account_sync.sql -f /migrations/007_saved_searches.sql -f /migrations/008_local_auth.sql -f /migrations/009_onboarding_profile.sql -f /migrations/010_planning_workspace.sql -f /migrations/011_password_recovery.sql -f /migrations/012_town_preferences.sql -f /migrations/013_home_scoring_evidence.sql"]
     restart: "no"
 
   api:

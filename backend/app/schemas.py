@@ -283,7 +283,7 @@ class SearchRequest(BaseModel):
     @field_validator("cursor")
     @classmethod
     def validate_home_cursor(cls, value):
-        return _validate_request_cursor(value, frozenset({"observed_on", "id"}))
+        return _validate_request_cursor(value, frozenset({"score", "observed_on", "id"}))
 
     @field_validator("towns", mode="before")
     @classmethod

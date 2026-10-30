@@ -10,9 +10,11 @@ The new decision tools require migration `010_planning_workspace.sql`, including
 
 Ctrl-C stops the app processes; the private database remains running. Use the installed `pg_ctl -D .local/postgres stop` to stop it. Preserve `.local/postgres` or take a database backup before clearing temporary worktrees. Never commit `.env`, `.local` data or viewing photos.
 
-The repository root [`docker-compose.yml`](../docker-compose.yml) builds the Next.js frontend and FastAPI backend, starts PostgreSQL/PostGIS, applies migrations `001` through `012` in order, and runs local health checks. Migrations `006`–`008` provide account sync, saved searches, and local auth; `009` adds onboarding preferences, `010` adds planning storage and search indexes, `011` adds password recovery, and `012` updates town preferences. `/ready` stays pending until the full schema is present. It binds published ports to `127.0.0.1` by default. This is a local/self-hosted starting point, not a public deployment. On ARM hosts, select a compatible PostGIS image via `POSTGIS_IMAGE` or use native PostGIS.
+The repository root [`docker-compose.yml`](../docker-compose.yml) builds the Next.js frontend and FastAPI backend, starts PostgreSQL/PostGIS, applies migrations `001` through `013` in order, and runs local health checks. Migrations `006`–`008` provide account sync, saved searches, and local auth; `009` adds onboarding preferences, `010` adds planning storage and search indexes, `011` adds password recovery, `012` updates town preferences, and `013` adds the global ranking evidence cache. `/ready` stays pending until the full schema is present. It binds published ports to `127.0.0.1` by default. This is a local/self-hosted starting point, not a public deployment. On ARM hosts, select a compatible PostGIS image via `POSTGIS_IMAGE` or use native PostGIS.
 
 After pulling new code, run `npm install` from the repository root. If the API runs in Docker, run `docker compose up -d --build api` to rebuild it and apply the checked-in migrations, then restart the frontend dev server. Check `/ready` before testing signup or account sync; an old running API can otherwise serve a different contract from the frontend.
+
+After the first deployment of migration `013`, refresh the home scoring cache once with `python -m app.scoring_evidence` in the backend environment. HDB, amenity-resource and OneMap geocoding import jobs refresh it after successful imports. Search remains available while the cache is missing or stale, with fit ranking marked unavailable.
 
 ## First run
 
