@@ -6,7 +6,7 @@ Updated 20 October 2026.
 
 HomeCompass imports the Next.js/React, FastAPI and PostGIS prototype from
 `aryashmullick/sc2006-private` at `ce64d471e2f351d2648e1704a697553e04be37c8`
-(Git author `AR9157`). Branding, setup, CI and import preparation used Codex assistance.
+(Git author `AR9157`).
 Existing Lab1/Lab2 artifacts are retained. Confirm individual course credits with the team.
 
 The working import branch is `chore/import-prototype-baseline`, based on local `dev` and
