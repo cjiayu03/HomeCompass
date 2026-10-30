@@ -86,7 +86,7 @@ def test_resource_request_defaults_to_a_bounded_page_and_no_cursor():
 
 
 def test_search_and_resource_requests_validate_their_cursor_shapes():
-    home_cursor = encode_cursor({"score": "80.0", "observed_on": "2026-09-01", "id": "home-1"})
+    home_cursor = encode_cursor({"observed_on": "2026-09-01", "id": "home-1"})
     resource_cursor = encode_cursor(
         {"resource_type": "moe_school", "name": "Example School", "id": "school-1"}
     )
@@ -312,7 +312,7 @@ def test_saved_search_criteria_reuses_search_request_query_bounds():
 
 def test_saved_search_criteria_discards_pagination_cursor():
     model = _saved_search_create_model()
-    cursor = encode_cursor({"score": "80.0", "observed_on": "2026-09-01", "id": "home-1"})
+    cursor = encode_cursor({"observed_on": "2026-09-01", "id": "home-1"})
 
     request = model.model_validate(
         _saved_search_payload(criteria={"query": "Bishan", "cursor": cursor})

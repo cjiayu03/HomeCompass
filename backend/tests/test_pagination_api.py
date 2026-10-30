@@ -35,8 +35,6 @@ class _PaginationConnection:
             self.home_queries.append((sql, values))
             rows = [row for row in self.homes if _inside(row, _bounds_from_query(sql, values, "h.geometry"))]
             rows.sort(key=lambda row: (
-                row.get("ranking_score") is None,
-                -(row.get("ranking_score") or 0),
                 row["observed_on"] is None,
                 -row["observed_on"].toordinal() if row["observed_on"] is not None else 0,
                 str(row["id"]),
@@ -113,41 +111,24 @@ def _limit_from_query(sql, values):
 
 
 def _after_home_cursor(rows, sql, values):
-    score_match = re.search(r"ranking_score < \$(\d+)::double precision", sql)
-    match = re.search(r"observed_on < \$(\d+).*?id::text > \$(\d+)", sql, re.DOTALL)
-    null_date = False
-    if match is None:
-        match = re.search(r"observed_on IS NULL AND id::text > \$(\d+)", sql)
-        null_date = match is not None
+    match = re.search(
+        r"h\.observed_on < \$(\d+).*?h\.id::text > \$(\d+)", sql, re.DOTALL
+    )
     if match is not None:
-        if null_date:
-            observed_on = None
-            identifier = str(values[int(match.group(1)) - 1])
-        else:
-            observed_on = values[int(match.group(1)) - 1]
-            identifier = str(values[int(match.group(2)) - 1])
-            if isinstance(observed_on, str):
-                observed_on = date.fromisoformat(observed_on)
-    else:
-        return rows
-
-    cursor_score = float(values[int(score_match.group(1)) - 1]) if score_match else None
-    return [row for row in rows if (
-        (row.get("ranking_score") is None and cursor_score is not None)
-        or (cursor_score is None and row.get("ranking_score") is None and (
-            row["observed_on"] is None and str(row["id"]) > identifier if null_date else
-            row["observed_on"] is None or row["observed_on"] < observed_on
+        observed_on = values[int(match.group(1)) - 1]
+        identifier = str(values[int(match.group(2)) - 1])
+        if isinstance(observed_on, str):
+            observed_on = date.fromisoformat(observed_on)
+        return [row for row in rows if (
+            row["observed_on"] is None
+            or row["observed_on"] < observed_on
             or (row["observed_on"] == observed_on and str(row["id"]) > identifier)
-        ))
-        or (cursor_score is not None and row.get("ranking_score") is not None and (
-            row["ranking_score"] < cursor_score
-            or (row["ranking_score"] == cursor_score and (
-                row["observed_on"] is None and str(row["id"]) > identifier if null_date else
-                row["observed_on"] is None or row["observed_on"] < observed_on
-                or (row["observed_on"] == observed_on and str(row["id"]) > identifier)
-            ))
-        ))
-    )]
+        )]
+    match = re.search(r"h\.observed_on IS NULL AND h\.id::text > \$(\d+)", sql)
+    if match is not None:
+        identifier = str(values[int(match.group(1)) - 1])
+        return [row for row in rows if row["observed_on"] is None and str(row["id"]) > identifier]
+    return rows
 
 
 def _after_resource_cursor(rows, sql, values):
@@ -164,7 +145,6 @@ def _after_resource_cursor(rows, sql, values):
 def _home_row(identifier, observed_on, *, longitude=103.8, latitude=1.3):
     return {
         "id": identifier,
-        "ranking_score": None,
         "address": f"{identifier} Street",
         "town": "BISHAN",
         "flat_type": "4 ROOM",
@@ -221,10 +201,10 @@ def _response(monkeypatch, connection, method, path, *, params=None, json=None):
 
 def test_home_pages_continue_in_observed_date_id_order_and_keep_total(monkeypatch):
     rows = [
-        {**_home_row("home-c", date(2026, 4, 1)), "ranking_score": 75.0},
-        {**_home_row("home-b", date(2026, 4, 3)), "ranking_score": 90.0},
+        _home_row("home-c", date(2026, 4, 1)),
+        _home_row("home-b", date(2026, 4, 3)),
         _home_row("home-null", None),
-        {**_home_row("home-a", date(2026, 4, 3)), "ranking_score": 90.0},
+        _home_row("home-a", date(2026, 4, 3)),
     ]
     connection = _PaginationConnection(homes=rows)
 
@@ -237,10 +217,10 @@ def test_home_pages_continue_in_observed_date_id_order_and_keep_total(monkeypatc
     assert first_payload["total"] == 4
     assert first_payload["hasMore"] is True
     assert decode_cursor(first_payload["nextCursor"]) == {
-        "score": "90.0", "observed_on": "2026-04-03", "id": "home-b"
+        "observed_on": "2026-04-03", "id": "home-b"
     }
     first_sql, first_values = connection.home_queries[0]
-    assert "ORDER BY ranking_score DESC NULLS LAST, observed_on DESC NULLS LAST, id" in first_sql
+    assert "ORDER BY h.observed_on DESC NULLS LAST, h.id" in first_sql
     assert _limit_from_query(first_sql, first_values) == 3
 
     second = _response(
@@ -250,8 +230,7 @@ def test_home_pages_continue_in_observed_date_id_order_and_keep_total(monkeypatc
     second_payload = second.json()
     assert [item["id"] for item in second_payload["items"]] == ["home-c", "home-null"]
     second_sql, _ = connection.home_queries[1]
-    assert "ranking_score < $" in second_sql
-    assert "OR ranking_score IS NULL" in second_sql
+    assert "WHERE (h.observed_on < $" in second_sql
     assert second_payload["count"] == 2
     assert second_payload["total"] == 4
     assert second_payload["hasMore"] is False
@@ -259,10 +238,10 @@ def test_home_pages_continue_in_observed_date_id_order_and_keep_total(monkeypatc
 
     empty = _response(
         monkeypatch, connection, "GET", "/api/v1/homes",
-        params={"limit": 2, "cursor": encode_cursor({"score": None, "observed_on": None, "id": "home-null"})},
+        params={"limit": 2, "cursor": encode_cursor({"observed_on": None, "id": "home-null"})},
     ).json()
     empty_sql, _ = connection.home_queries[2]
-    assert "WHERE ranking_score IS NULL AND (observed_on IS NULL AND id::text > $" in empty_sql
+    assert "WHERE h.observed_on IS NULL AND h.id::text > $" in empty_sql
     assert empty["items"] == []
     assert empty["count"] == 0
     assert empty["total"] == 4
@@ -401,7 +380,7 @@ def test_invalid_bounds_and_page_limits_fail_with_422(monkeypatch, method, path,
 
 def test_cursor_values_are_bound_parameters_not_sql_text(monkeypatch):
     marker = "x'); DROP TABLE candidate_home; --"
-    cursor = encode_cursor({"score": "80.0", "observed_on": "2026-04-03", "id": marker})
+    cursor = encode_cursor({"observed_on": "2026-04-03", "id": marker})
     connection = _PaginationConnection(homes=[_home_row("home-a", date(2026, 4, 2))])
 
     response = _response(
