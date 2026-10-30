@@ -377,7 +377,7 @@ async def run(
     if not database_url:
         raise RuntimeError("DATABASE_URL is required for OneMap geocoding.")
     dsn = database_url.replace("postgresql+asyncpg://", "postgresql://", 1).replace("postgresql+psycopg://", "postgresql://", 1)
-    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2, command_timeout=120)
+    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2, command_timeout=900)
     try:
         async with pool.acquire() as connection:
             home_rows = await connection.fetch(
@@ -520,10 +520,15 @@ async def run(
                         await asyncio.sleep(pause_seconds)
 
             status = await checkpoint(complete=True)
+            from ..scoring_evidence import refresh_home_scoring_evidence
+
+            async with pool.acquire() as connection:
+                scoring_evidence = await refresh_home_scoring_evidence(connection)
             return {
                 "snapshotId": str(snapshot_id),
                 "state": status,
                 "runState": "complete",
+                "scoringEvidence": scoring_evidence,
                 "requests": totals["requests"],
                 "homeAddressesResolved": totals["homeAddressesResolved"],
                 "homeAddressesUnmatched": totals["homeAddressesUnmatched"],

@@ -576,54 +576,132 @@ LEFT JOIN LATERAL (
 
     where = f"WHERE {' AND '.join(predicates)}" if predicates else ""
     count_values = list(values)
-    count_sql = _LATEST_RESOURCE_CTE + location_cte + place_cte + f""" SELECT count(*) AS total
+    count_sql = _LATEST_RESOURCE_CTE + location_cte + place_cte + f""", active_cache AS (
+             SELECT state.generation_id
+             FROM home_scoring_evidence_state state
+             WHERE state.singleton IS TRUE
+               AND state.home_snapshot_ids = COALESCE((
+                 SELECT array_agg(snapshot_id ORDER BY snapshot_id)
+                 FROM (SELECT DISTINCT source_snapshot_id AS snapshot_id FROM candidate_home) homes
+               ), '{{}}'::uuid[])
+               AND state.resource_snapshot_ids = COALESCE((
+                 SELECT array_agg(id ORDER BY id) FROM latest_resource_sources
+               ), '{{}}'::uuid[])
+         ) SELECT count(*) AS total, (SELECT generation_id FROM active_cache) AS generation_id
              FROM candidate_home h
              {place_joins}
              {where}"""
 
+    scoring_weights = priority_weights if priority_weights is not None else request.priority_weights
+    scoring_weights = scoring_weights or DEFAULT_WEIGHTS
+    targets = {
+        "school": request.max_school_distance_m if request.max_school_distance_m is not None else _DEFAULT_DISTANCE_TARGETS["school"],
+        "childcare": request.max_childcare_distance_m if request.max_childcare_distance_m is not None else _DEFAULT_DISTANCE_TARGETS["childcare"],
+        "care": request.max_care_distance_m if request.max_care_distance_m is not None else _DEFAULT_DISTANCE_TARGETS["care"],
+    }
+
+    values.append(None)
+    cache_generation_param = len(values)
+
+    # Ranking uses only the cached nearest distances, so evaluating every match
+    # is cheap enough to do before pagination. Geometry-heavy detail queries
+    # remain below the page limit.
+    ranking_weights = scoring_weights
+    values.extend([ranking_weights[name] for name in ("school", "childcare", "care", "affordability")])
+    weight_params = list(range(len(values) - 3, len(values) + 1))
+    values.extend([targets["school"], targets["childcare"], targets["care"], request.budget * 100 if request.budget else None])
+    target_params = list(range(len(values) - 3, len(values) + 1))
+    weight_sql = [f"${param}::double precision" for param in weight_params]
+    target_sql = [f"${param}::double precision" for param in target_params]
+    normalized = [
+        f"CASE WHEN school_distance_m >= 0 AND {target_sql[0]} > 0 THEN ROUND(GREATEST(0.0, 100.0 * (1.0 - school_distance_m / {target_sql[0]}))::numeric, 1)::double precision END",
+        f"CASE WHEN childcare_distance_m >= 0 AND {target_sql[1]} > 0 THEN ROUND(GREATEST(0.0, 100.0 * (1.0 - childcare_distance_m / {target_sql[1]}))::numeric, 1)::double precision END",
+        f"CASE WHEN care_distance_m >= 0 AND {target_sql[2]} > 0 THEN ROUND(GREATEST(0.0, 100.0 * (1.0 - care_distance_m / {target_sql[2]}))::numeric, 1)::double precision END",
+        f"CASE WHEN {target_sql[3]} > 0 AND price_observation_cents >= 0 THEN ROUND(LEAST(100.0, GREATEST(0.0, 50.0 + 50.0 * (({target_sql[3]} - price_observation_cents) / {target_sql[3]})))::numeric, 1)::double precision END",
+    ]
+    weight_total = " + ".join(weight_sql)
+    available_weight = " + ".join(
+        f"CASE WHEN component_{name} IS NOT NULL THEN {weight_sql[index]} ELSE 0.0 END"
+        for index, name in enumerate(("school", "childcare", "care", "affordability"))
+    )
+    weighted_score = " + ".join(
+        f"COALESCE(component_{name} * {weight_sql[index]}, 0.0)"
+        for index, name in enumerate(("school", "childcare", "care", "affordability"))
+    )
+    score_expression = (
+        f"CASE WHEN ${cache_generation_param}::uuid IS NOT NULL AND ({weight_total}) > 0 AND ({available_weight}) > 0 "
+        f"AND ({available_weight}) / ({weight_total}) >= 0.5 "
+        f"THEN ROUND((({weighted_score}) / ({available_weight}))::numeric, 1)::double precision END"
+    )
+
     cursor_filter = ""
     if request.cursor is not None:
         cursor = decode_cursor(request.cursor)
+        score = cursor["score"]
         observed_on = date.fromisoformat(cursor["observed_on"]) if cursor["observed_on"] else None
-        if observed_on is None:
-            values.append(cursor["id"])
-            cursor_filter = f"h.observed_on IS NULL AND h.id::text > ${len(values)}"
-        else:
-            values.extend([observed_on, cursor["id"]])
-            observed_on_param = len(values) - 1
-            id_param = len(values)
-            cursor_filter = (
-                f"(h.observed_on < ${observed_on_param} OR h.observed_on IS NULL"
-                f" OR (h.observed_on = ${observed_on_param} AND h.id::text > ${id_param}))"
-            )
-    page_where = where
-    if cursor_filter:
-        page_where = f"{where} AND {cursor_filter}" if where else f"WHERE {cursor_filter}"
+        if score is not None:
+            values.append(score)
+            score_param = len(values)
+        values.extend([observed_on, cursor["id"]])
+        observed_on_param = len(values) - 1
+        id_param = len(values)
+        tie_filter = (
+            f"(observed_on < ${observed_on_param} OR observed_on IS NULL OR "
+            f"(observed_on = ${observed_on_param} AND id::text > ${id_param}))"
+            if observed_on is not None
+            else f"(observed_on IS NULL AND id::text > ${id_param})"
+        )
+        cursor_filter = (
+            f"WHERE (ranking_score < ${score_param}::double precision "
+            f"OR ranking_score IS NULL OR (ranking_score = ${score_param}::double precision AND {tie_filter}))"
+            if score is not None
+            else f"WHERE ranking_score IS NULL AND {tie_filter}"
+        )
     values.append(request.limit + 1)
     limit_placeholder = len(values)
-    sql = _LATEST_RESOURCE_CTE + location_cte + place_cte + f""", page_homes AS MATERIALIZED (
-             SELECT h.* FROM candidate_home h {place_joins}
-             {page_where} ORDER BY h.observed_on DESC NULLS LAST, h.id LIMIT ${limit_placeholder}
+    sql = _LATEST_RESOURCE_CTE + location_cte + place_cte + f""", evidence_homes AS MATERIALIZED (
+             SELECT h.*, evidence.school_name, evidence.school_distance_m,
+                    evidence.childcare_name, evidence.childcare_distance_m,
+                    evidence.care_name, evidence.care_distance_m,
+                    {place_distances_select}
+             FROM candidate_home h {place_joins}
+             LEFT JOIN home_scoring_evidence evidence
+               ON evidence.generation_id = ${cache_generation_param}::uuid
+              AND evidence.home_id = h.id
+             {where}
+         ), normalized_homes AS MATERIALIZED (
+             SELECT evidence_homes.*, {normalized[0]} AS component_school,
+                    {normalized[1]} AS component_childcare, {normalized[2]} AS component_care,
+                    {normalized[3]} AS component_affordability
+             FROM evidence_homes
+         ), ranked_homes AS MATERIALIZED (
+             SELECT normalized_homes.*, {score_expression} AS ranking_score FROM normalized_homes
+         ), page_homes AS MATERIALIZED (
+             SELECT * FROM ranked_homes {cursor_filter}
+             ORDER BY ranking_score DESC NULLS LAST, observed_on DESC NULLS LAST, id LIMIT ${limit_placeholder}
          ) SELECT h.id, h.address, h.town, h.flat_type, h.price_observation_cents, h.observed_on,
                     h.source_semantics, h.floor_area_sqm, h.storey_range, h.lease_commence_year,
                     h.geocode_status, h.geometry_source, h.geocoded_at,
                     CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_Y(h.geometry) END AS latitude,
                     CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
-                    {place_distances_select},
-                    school_access.name AS school_name, school_access.distance_m AS school_distance_m,
-                    childcare_access.name AS childcare_name, childcare_access.distance_m AS childcare_distance_m,
-                    care_access.name AS care_name, care_access.distance_m AS care_distance_m,
+                    h.place_distances, h.school_name, h.school_distance_m,
+                    h.childcare_name, h.childcare_distance_m, h.care_name, h.care_distance_m,
                     CASE WHEN h.geometry IS NULL THEN FALSE ELSE EXISTS (
                       SELECT 1 FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
                       WHERE r.resource_type='dengue_cluster' AND r.geometry IS NOT NULL AND ST_Intersects(h.geometry,r.geometry)
                     ) END AS in_dengue_cluster,
+                    h.ranking_score,
                     s.id AS source_snapshot_id, s.source_id, s.source_version, s.retrieved_at
              FROM page_homes h JOIN source_snapshot s ON s.id = h.source_snapshot_id
-             {_HOME_EVIDENCE_JOINS}
              {place_joins}
-             ORDER BY h.observed_on DESC NULLS LAST, h.id"""
+             ORDER BY h.ranking_score DESC NULLS LAST, h.observed_on DESC NULLS LAST, h.id"""
     async with pool.acquire() as connection:
         total_row = await connection.fetchrow(count_sql, *count_values)
+        try:
+            active_generation = total_row["generation_id"]
+        except (KeyError, IndexError, TypeError):
+            active_generation = None
+        values[cache_generation_param - 1] = active_generation
         rows = await connection.fetch(sql, *values)
     total = int(total_row["total"] or 0)
     has_more = len(rows) > request.limit
@@ -634,21 +712,12 @@ LEFT JOIN LATERAL (
         if isinstance(observed_on, datetime):
             observed_on = observed_on.date()
         next_cursor = encode_cursor({
+            "score": f"{float(rows[-1]['ranking_score']):.1f}" if rows[-1]["ranking_score"] is not None else None,
             "observed_on": observed_on.isoformat() if observed_on is not None else None,
             "id": str(rows[-1]["id"]),
         })
-    weights = request.priority_weights if priority_weights is None else priority_weights
-    distance_targets = {
-        "school": request.max_school_distance_m
-        if request.max_school_distance_m is not None
-        else _DEFAULT_DISTANCE_TARGETS["school"],
-        "childcare": request.max_childcare_distance_m
-        if request.max_childcare_distance_m is not None
-        else _DEFAULT_DISTANCE_TARGETS["childcare"],
-        "care": request.max_care_distance_m
-        if request.max_care_distance_m is not None
-        else _DEFAULT_DISTANCE_TARGETS["care"],
-    }
+    weights = scoring_weights if active_generation is not None else {key: 0 for key in DEFAULT_WEIGHTS}
+    distance_targets = targets
     budget_cents = request.budget * 100 if request.budget is not None else None
     homes = []
     for row in rows:
@@ -677,6 +746,7 @@ LEFT JOIN LATERAL (
         next_cursor,
         has_more,
         _result_source_snapshot_ids(rows),
+        active_generation is not None,
     )
 
 
@@ -1057,16 +1127,14 @@ async def homes(
         limit=limit,
         cursor=cursor,
     )
-    (
-        results,
-        source_summary,
-        total,
-        next_cursor,
-        has_more,
-        _snapshot_ids,
-    ) = await _query_homes(request)
+    home_result = await _query_homes(request)
+    results, source_summary, total, next_cursor, has_more, _snapshot_ids = home_result[:6]
+    score_ranking_available = home_result[6] if len(home_result) > 6 else False
     limitations = ["Records are historical resale transactions, not current listings.", "Some rows may not be geocoded or have linked amenity evidence."]
+    if not score_ranking_available:
+        limitations.append("Fit ranking is temporarily unavailable until the scoring evidence cache is refreshed.")
     return {"items": results, "count": len(results), "total": total, "nextCursor": next_cursor, "hasMore": has_more,
+            "scoreRankingAvailable": score_ranking_available,
             "sourceStatus": {"hdb": {"state": "database-snapshot", "datasetId": HDB_RESALE_DATASET_ID}},
             "limitations": limitations, **live_result_metadata(source_summary, limitations)}
 
@@ -1113,25 +1181,22 @@ async def search(
             updates[key] = None
             unsupported.append(key)
     effective_request = request.model_copy(update=updates) if updates else request
-    (
-        results,
-        source_summary,
-        total,
-        next_cursor,
-        has_more,
-        source_snapshot_ids,
-    ) = await _query_homes(
+    home_result = await _query_homes(
         effective_request,
         effective_request.priority_weights,
         user_id=user["id"] if request.place_constraints else None,
         include_place_distances=True,
     )
+    results, source_summary, total, next_cursor, has_more, source_snapshot_ids = home_result[:6]
+    score_ranking_available = home_result[6] if len(home_result) > 6 else False
     partial_geocode_coverage = 0 < home_coverage["geocoded"] < home_coverage["total"]
     coverage_note = (f"Only the geocoded subset is eligible for proximity filtering ({home_coverage['geocoded']:,} of {home_coverage['total']:,} transaction records have locations)." if partial_geocode_coverage and not unsupported else None)
     limitations = (["Amenity-distance filters were not applied because transaction locations and the requested source layer are not both available."] if unsupported else []) + \
                   ([coverage_note] if coverage_note else []) + \
                   ["HDB resale prices are historical transaction observations, not current asking prices, available homes, or valuations.",
                    "Remaining lease years are estimated as 99 minus elapsed whole calendar years from the year-only lease commencement value; the historical remaining-lease field is not used."]
+    if not score_ranking_available:
+        limitations.append("Fit ranking is temporarily unavailable until the scoring evidence cache is refreshed.")
     return {
         "items": results,
         "count": len(results),
@@ -1143,6 +1208,7 @@ async def search(
         "sourceSnapshotIds": source_snapshot_ids,
         "unappliedCriteria": unsupported,
         "scorePolicyVersion": POLICY_VERSION,
+        "scoreRankingAvailable": score_ranking_available,
         "limitations": limitations,
         **live_result_metadata(source_summary, limitations),
     }

@@ -191,9 +191,14 @@ async def run_import() -> dict:
     dataset_id = os.getenv("HDB_RESALE_DATASET_ID", HDB_RESALE_DATASET_ID)
     async with httpx.AsyncClient(timeout=httpx.Timeout(45, connect=8), follow_redirects=True) as client:
         payload = await download_hdb_csv(client, api_key=os.getenv("DATA_GOV_SG_API_KEY"), dataset_id=dataset_id)
-    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3, command_timeout=120)
+    pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3, command_timeout=900)
     try:
-        return await import_hdb_resale(pool, payload, dataset_id=dataset_id)
+        outcome = await import_hdb_resale(pool, payload, dataset_id=dataset_id)
+        from ..scoring_evidence import refresh_home_scoring_evidence
+
+        async with pool.acquire() as connection:
+            outcome["scoringEvidence"] = await refresh_home_scoring_evidence(connection)
+        return outcome
     finally:
         await pool.close()
 

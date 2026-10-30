@@ -1,10 +1,10 @@
 # FastAPI service
 
-The API uses Python 3.12, FastAPI and asyncpg. Email/password identities and hashed opaque sessions are stored in the local Postgres database. Private routes require the schema from migrations `001` through `010`, including `005_family_places.sql`, `006_account_sync.sql`, `007_saved_searches.sql`, `008_local_auth.sql`, `009_onboarding_profile.sql`, and `010_planning_workspace.sql`.
+The API uses Python 3.12, FastAPI and asyncpg. Email/password identities and hashed opaque sessions are stored in the local Postgres database. Private routes require the current database schema through migration `013_home_scoring_evidence.sql`, including the account, search, planning and cached scoring evidence tables.
 
 ## Local setup
 
-Install `backend/requirements.txt` in the project's Python environment and apply all ten SQL migrations in order, from `001_initial.sql` through `010_planning_workspace.sql`. `/ready` reports migration readiness only after the full schema is present, including the account-owned sync, saved-search, and planning-workspace tables, local identity/session tables, and onboarding profile columns. For a native local run, the backend loads the repository-root `.env` when `DATABASE_URL` has not already been exported, and maps the Compose-only `db`/`database` hostname to `127.0.0.1`. Explicit environment variables are left untouched. Start the local PostgreSQL service first, then run:
+Install `backend/requirements.txt` in the project's Python environment and apply SQL migrations `001` through `013` in order. `/ready` reports migration readiness only after the full schema is present, including the cached scoring evidence tables. For a native local run, the backend loads the repository-root `.env` when `DATABASE_URL` has not already been exported, and maps the Compose-only `db`/`database` hostname to `127.0.0.1`. Explicit environment variables are left untouched. Start the local PostgreSQL service first, then run:
 
 ```bash
 cd backend
@@ -35,7 +35,9 @@ python -m app.sources.data_gov_sg
 python -m app.sources.data_gov_resources
 ```
 
-The resource command imports the registered HDB footprint/property layers, LTA Silver Zones and school zones, Dementia Friendly Go-To-Points, CHAS clinics, the current MOE school directory, ECDA childcare/kindergarten/centre/fee/charge sources, MSF Student Care Services and NEA active dengue clusters. Check import counts and source timestamps at `/api/v1/sources`; spatial layers are returned by `/api/v1/resources` and shown on the map. Address/fee CSV rows without a source geometry are preserved as unlocated records rather than given invented map pins.
+The resource command imports the registered HDB footprint/property layers, LTA Silver Zones and school zones, Dementia Friendly Go-To-Points, CHAS clinics, the current MOE school directory, ECDA childcare/kindergarten/centre/fee/charge sources, MSF Student Care Services and NEA active dengue clusters. After imports, it refreshes the cached nearest school, childcare and care evidence used for global fit ranking. Check import counts and source timestamps at `/api/v1/sources`; spatial layers are returned by `/api/v1/resources` and shown on the map. Address/fee CSV rows without a source geometry are preserved as unlocated records rather than given invented map pins.
+
+Global fit ranking uses precomputed amenity distances so the search endpoint does not recalculate spatial nearest-neighbour evidence for every home on each request. After the first deployment of migration `013`, run `python -m app.scoring_evidence` once with the API database environment configured. The HDB, resource and OneMap geocoding import commands refresh this cache after successful imports. Until a complete cache matches the current home and resource snapshots, search remains available with ranking marked unavailable.
 
 The importer calls data.gov.sg's initiate-download and poll-download endpoints, checks the returned HTTPS host against `DATA_GOV_SG_DOWNLOAD_HOSTS`, caps response and record sizes, validates expected columns/values, hashes the response, counts rejected rows and transactionally promotes the normalized snapshot. For this local import only, `.env` currently sets `DATA_GOV_SG_DOWNLOAD_HOSTS="*"` because the export endpoint returned a regional Amazon S3 URL. This wildcard still requires HTTPS and does not follow redirects. Before deploying the importer, replace it with the exact verified download host(s). Imported records are historical resale transactions. The dataset has no coordinates; geometry stays `NULL` and geocoding status stays pending until the team chooses and configures a provider. The importer does not represent rows as available homes.
 

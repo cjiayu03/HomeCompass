@@ -355,7 +355,7 @@ async def run_import(source_ids: list[str] | None = None) -> list[dict[str, Any]
     selected = [_BY_ID[source_id] for source_id in source_ids] if source_ids else list(SOURCES)
     api_key = os.getenv("DATA_GOV_SG_API_KEY") or None
     async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10), follow_redirects=True) as client:
-        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3, command_timeout=180)
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3, command_timeout=900)
         try:
             outcomes = []
             for source in selected:
@@ -366,6 +366,12 @@ async def run_import(source_ids: list[str] | None = None) -> list[dict[str, Any]
                 print(f"Imported {source.dataset_id}: {outcome['rows']:,} rows ({outcome['state']})", file=sys.stderr, flush=True)
                 # Free anonymous catalogue quota is deliberately used serially.
                 await asyncio.sleep(2)
+            from ..scoring_evidence import refresh_home_scoring_evidence
+
+            async with pool.acquire() as connection:
+                scoring_evidence = await refresh_home_scoring_evidence(connection)
+            if outcomes:
+                outcomes[-1]["scoringEvidence"] = scoring_evidence
             return outcomes
         finally:
             await pool.close()

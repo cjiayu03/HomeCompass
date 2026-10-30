@@ -9,8 +9,8 @@ MIGRATIONS_DIRECTORY = Path(__file__).resolve().parents[2] / "database" / "migra
 
 # The backend image does not copy database/migrations. Keep its schema probe
 # version explicit and checked against the discovered files in the source tree.
-SCHEMA_VERIFIED_MIGRATION_VERSION = 12
-LATEST_MIGRATION_VERSION = 12
+SCHEMA_VERIFIED_MIGRATION_VERSION = 13
+LATEST_MIGRATION_VERSION = 13
 
 # The backend image does not contain database/migrations and the migrations do
 # not maintain a version table. These signatures inspect the effects of the
@@ -23,6 +23,8 @@ WITH required_tables(table_name) AS (
         ('household_member'),
         ('source_snapshot'),
         ('candidate_home'),
+        ('home_scoring_evidence'),
+        ('home_scoring_evidence_state'),
         ('neighbourhood_resource'),
         ('personal_place'),
         ('search_history'),
@@ -49,6 +51,15 @@ WITH required_tables(table_name) AS (
         ('candidate_home', 'geometry_source'),
         ('candidate_home', 'geometry_source_snapshot_id'),
         ('candidate_home', 'geocoded_at'),
+        ('home_scoring_evidence', 'generation_id'),
+        ('home_scoring_evidence', 'home_id'),
+        ('home_scoring_evidence', 'school_distance_m'),
+        ('home_scoring_evidence', 'childcare_distance_m'),
+        ('home_scoring_evidence', 'care_distance_m'),
+        ('home_scoring_evidence_state', 'generation_id'),
+        ('home_scoring_evidence_state', 'home_snapshot_ids'),
+        ('home_scoring_evidence_state', 'resource_snapshot_ids'),
+        ('home_scoring_evidence_state', 'row_count'),
         ('neighbourhood_resource', 'geometry'),
         ('neighbourhood_resource', 'location_source_snapshot_id'),
         ('personal_place', 'kind'),
