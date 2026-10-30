@@ -6,7 +6,7 @@ import pytest
 from app.pagination import MAX_CURSOR_LENGTH, decode_cursor, encode_cursor
 
 
-HOME_CURSOR = {"observed_on": "2026-09-01", "id": "home-1"}
+HOME_CURSOR = {"score": "72.5", "observed_on": "2026-09-01", "id": "home-1"}
 RESOURCE_CURSOR = {
     "resource_type": "moe_school",
     "name": "Example School",

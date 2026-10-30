@@ -253,7 +253,8 @@ def _validate_request_cursor(value: str | None, expected_keys: frozenset[str]):
     if value is None:
         return None
     payload = decode_cursor(value)
-    if frozenset(payload) != expected_keys:
+    accepted_key_sets = (expected_keys, frozenset({"observed_on", "id"})) if "score" in expected_keys else (expected_keys,)
+    if frozenset(payload) not in accepted_key_sets:
         raise ValueError("Invalid pagination cursor.")
     return value
 

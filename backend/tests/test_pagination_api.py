@@ -112,7 +112,7 @@ def _limit_from_query(sql, values):
 
 def _after_home_cursor(rows, sql, values):
     match = re.search(
-        r"h\.observed_on < \$(\d+).*?h\.id::text > \$(\d+)", sql, re.DOTALL
+        r"observed_on < \$(\d+).*?observed_on = \$\d+ AND id::text > \$(\d+)", sql, re.DOTALL
     )
     if match is not None:
         observed_on = values[int(match.group(1)) - 1]
@@ -124,7 +124,7 @@ def _after_home_cursor(rows, sql, values):
             or row["observed_on"] < observed_on
             or (row["observed_on"] == observed_on and str(row["id"]) > identifier)
         )]
-    match = re.search(r"h\.observed_on IS NULL AND h\.id::text > \$(\d+)", sql)
+    match = re.search(r"observed_on IS NULL AND id::text > \$(\d+)", sql)
     if match is not None:
         identifier = str(values[int(match.group(1)) - 1])
         return [row for row in rows if row["observed_on"] is None and str(row["id"]) > identifier]
@@ -220,7 +220,7 @@ def test_home_pages_continue_in_observed_date_id_order_and_keep_total(monkeypatc
         "observed_on": "2026-04-03", "id": "home-b"
     }
     first_sql, first_values = connection.home_queries[0]
-    assert "ORDER BY h.observed_on DESC NULLS LAST, h.id" in first_sql
+    assert "ORDER BY ranking_score DESC NULLS LAST, observed_on DESC NULLS LAST, id" in first_sql
     assert _limit_from_query(first_sql, first_values) == 3
 
     second = _response(
@@ -230,7 +230,7 @@ def test_home_pages_continue_in_observed_date_id_order_and_keep_total(monkeypatc
     second_payload = second.json()
     assert [item["id"] for item in second_payload["items"]] == ["home-c", "home-null"]
     second_sql, _ = connection.home_queries[1]
-    assert "WHERE (h.observed_on < $" in second_sql
+    assert "WHERE ranking_score IS NULL AND (observed_on < $" in second_sql
     assert second_payload["count"] == 2
     assert second_payload["total"] == 4
     assert second_payload["hasMore"] is False
@@ -241,7 +241,7 @@ def test_home_pages_continue_in_observed_date_id_order_and_keep_total(monkeypatc
         params={"limit": 2, "cursor": encode_cursor({"observed_on": None, "id": "home-null"})},
     ).json()
     empty_sql, _ = connection.home_queries[2]
-    assert "WHERE h.observed_on IS NULL AND h.id::text > $" in empty_sql
+    assert "ranking_score IS NULL AND (observed_on IS NULL AND id::text > $" in empty_sql
     assert empty["items"] == []
     assert empty["count"] == 0
     assert empty["total"] == 4
