@@ -28,6 +28,7 @@ import { requestJson } from '@/lib/api-client';
 import { homes as fixtureHomes, defaultBrief } from '@/lib/data';
 import { briefValidationError } from '@/lib/planning';
 import { readSearchLocation, searchLocation } from '@/lib/search-location';
+import { nearbyFacilityTypes } from '@/lib/map-layers';
 
 const WorkspaceMap = memo(MapPanel);
 function useStableEvent(handler) {
@@ -60,6 +61,9 @@ export default function ExplorePage() {
   const [linkedRecord, setLinkedRecord] = useState(null);
   const [detailId, setDetailId] = useState('');
   const [selectedMapHome, setSelectedMapHome] = useState(null);
+  const [visibleResourceTypes, setVisibleResourceTypes] = useState(() => workspace.mapResourceTypes || ['silver_zone']);
+  const [facilityFocus, setFacilityFocus] = useState(null);
+  const [mapCameraIntent, setMapCameraIntent] = useState({ type: 'initial', request: 0 });
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [draft, setDraft] = useState(appliedBrief);
   const [filterError, setFilterError] = useState('');
@@ -212,13 +216,55 @@ export default function ExplorePage() {
   }, [appliedBrief, workspace.appliedBounds]);
   function openFilters() { setDraft(structuredClone(appliedBrief)); setFilterError(''); setFiltersOpen(true); }
   async function applyDraft() { const result = await runSearch(query, draft, { interpret: false }); if (result != null) { setFiltersOpen(false); setBudgetOpen(false); } }
-  function inspect(home) { if (!home) return; setMapResultsOpen(true); if (!detailId) detailOpener.current = document.activeElement; setCompareOpen(false); setSelectedMapHome(home); setDetailId(String(home.id)); updateLocation(appliedBrief, { detailId: String(home.id) }); }
+  function recordMapCameraIntent(type) { setMapCameraIntent(current => ({ type, request: current.request + 1 })); }
+  function updateVisibleResourceTypes(types) {
+    const next = [...new Set(types)];
+    setVisibleResourceTypes(next);
+    if (facilityFocus && !next.includes(facilityFocus.feature?.properties?.resourceType)) setFacilityFocus(null);
+    workspace.setMapResourceTypes?.(next);
+  }
+  function toggleNearbyLayer(type, enabled) {
+    updateVisibleResourceTypes(enabled
+      ? [...visibleResourceTypes, type]
+      : visibleResourceTypes.filter(item => item !== type));
+  }
+  function enableNearbyLayers() {
+    const hasCounts = Array.isArray(resourceState?.counts) && resourceState.counts.length > 0;
+    const availableTypes = hasCounts
+      ? nearbyFacilityTypes.filter(type => {
+        const count = resourceState.counts.find(item => item.resourceType === type);
+        return count && count.total > (count.unlocated || 0);
+      })
+      : nearbyFacilityTypes;
+    updateVisibleResourceTypes([...visibleResourceTypes, ...availableTypes]);
+  }
+  function focusFacilityOnMap(feature) {
+    if (feature?.geometry?.type !== 'Point' || !Array.isArray(feature.geometry.coordinates)) return;
+    setFacilityFocus(current => ({ feature, request: (current?.request || 0) + 1 }));
+  }
+  function focusDetailHome(home) {
+    if (!home) return;
+    setMapResultsOpen(true);
+    setSelectedMapHome(home);
+    setFacilityFocus(null);
+    recordMapCameraIntent('home');
+    setMobileView('map');
+    updateLocation(appliedBrief, { view: 'map', detailId: String(home.id) });
+  }
+  function inspect(home) { if (!home) return; setMapResultsOpen(true); if (!detailId) detailOpener.current = document.activeElement; setCompareOpen(false); setSelectedMapHome(home); setFacilityFocus(null); recordMapCameraIntent('home'); setDetailId(String(home.id)); updateLocation(appliedBrief, { detailId: String(home.id) }); }
   function closeDetail() { setMapResultsOpen(true); setDetailId(''); updateLocation(appliedBrief, { detailId: '' }); requestAnimationFrame(() => { if (detailOpener.current?.isConnected) detailOpener.current.focus({ preventScroll: true }); }); }
   function changeView(nextSaved) { setSavedOnly(nextSaved); updateLocation(appliedBrief, { saved: nextSaved }); window.dispatchEvent(new Event('homecompass:view-change')); }
   function changeMapView(next) { setMobileView(next); updateLocation(appliedBrief, { view: next }); }
   function changeLayout() { const next = layoutMode === 'split' ? 'map' : 'split'; setLayoutMode(next); setMapResultsOpen(true); setMobileView('map'); updateLocation(appliedBrief, { layout: next, view: 'map' }); }
-  function locate(home) { setSelectedMapHome(home); setMobileView('map'); setDetailId(''); updateLocation(appliedBrief, { view: 'map', detailId: '' }); }
-  function selectFromMap(home) { setSelectedMapHome(home); inspect(home); }
+  function locate(home) { setSelectedMapHome(home); setFacilityFocus(null); recordMapCameraIntent('home'); setMobileView('map'); setDetailId(''); updateLocation(appliedBrief, { view: 'map', detailId: '' }); }
+  function selectFromMap(home) { inspect(home); }
+  function revealAddressOnMap() {
+    const sidebar = document.querySelector('.map-research-sidebar[data-state="open"]');
+    const details = document.querySelector('.map-record-details');
+    if (!sidebar || !details) return;
+    const remainingMapWidth = window.innerWidth - sidebar.getBoundingClientRect().width - details.getBoundingClientRect().width;
+    if (remainingMapWidth < 300) setMapResultsOpen(false);
+  }
   async function save(home) {
     const alreadySaved = shortlistIds.includes(home.id);
     const success = workspace.ensureSaved ? await workspace.ensureSaved(home, !alreadySaved) : await workspace.toggleShortlist(home);
@@ -239,6 +285,7 @@ export default function ExplorePage() {
 
   const onInspectRecord = useStableEvent(inspect);
   const onLocateRecord = useStableEvent(locate);
+  const onMapCameraIntent = useStableEvent(recordMapCameraIntent);
   const onSaveRecord = useStableEvent(save);
   const onCompareRecord = useStableEvent(toggleCompare);
   const onMapSelect = useStableEvent(selectFromMap);
@@ -287,14 +334,14 @@ export default function ExplorePage() {
       </div></section>
   );
   const detailsPanel = (
-detailId && <aside ref={detailRef} tabIndex={-1} className="explore-detail" aria-labelledby="record-detail-title"><header className="explore-detail-heading"><div className="min-w-0"><p className="explore-detail-label"><ArrowRight aria-hidden="true" className="size-4" />Record details</p><h2 id="record-detail-title" aria-live="polite" className="mt-1 break-words font-display text-lg font-semibold">{detail?.address || 'Transaction record'}</h2></div><Button size="icon" variant="ghost" aria-label="Close record details" onClick={closeDetail}><X aria-hidden="true" className="size-4" /></Button></header><div className="explore-detail-scroll">{detail ? <CandidateDetails home={detail} homes={allKnown} brief={appliedBrief} saved={shortlistIds.includes(detail.id)} selected={selectedHomes.some(item => item.id === detail.id)} onSave={home => workspace.ensureSaved ? workspace.ensureSaved(home, true) : !shortlistIds.includes(home.id) && workspace.toggleShortlist(home)} onCompare={toggleCompare} onLocate={locate} /> : <p className="text-sm text-muted-foreground">This record is not in the loaded results. Restore its search, check Saved, or load more records.</p>}</div><footer className="explore-detail-footer"><Button variant="ghost" onClick={closeDetail}><ArrowLeft aria-hidden="true" className="size-4" />Results</Button><div className="flex items-center gap-1"><span className="mr-2 text-xs text-muted-foreground" aria-live="polite">{detailIndex >= 0 ? `${detailIndex + 1} / ${navigationHomes.length}` : 'Linked record'}</span><Button variant="outline" size="icon" aria-label="Previous record" disabled={detailIndex <= 0} onClick={() => inspect(navigationHomes[detailIndex - 1])}><ArrowLeft aria-hidden="true" className="size-4" /></Button><Button variant="outline" size="icon" aria-label="Next record" disabled={detailIndex < 0 || detailIndex >= navigationHomes.length - 1} onClick={() => inspect(navigationHomes[detailIndex + 1])}><ArrowRight aria-hidden="true" className="size-4" /></Button></div></footer></aside>
+    detailId && <aside ref={detailRef} tabIndex={-1} className="explore-detail" aria-labelledby="record-detail-title"><header className="explore-detail-heading"><div className="min-w-0"><p className="explore-detail-label"><ArrowRight aria-hidden="true" className="size-4" />Record details</p><h2 id="record-detail-title" aria-live="polite" className="mt-1 break-words font-display text-lg font-semibold">{detail?.address || 'Transaction record'}</h2></div><Button size="icon" variant="ghost" aria-label="Close record details" onClick={closeDetail}><X aria-hidden="true" className="size-4" /></Button></header><div className="explore-detail-scroll">{detail ? <CandidateDetails home={detail} homes={allKnown} brief={appliedBrief} saved={shortlistIds.includes(detail.id)} selected={selectedHomes.some(item => item.id === detail.id)} resources={resourceFeatures} resourceState={resourceState} visibleResourceTypes={visibleResourceTypes} onToggleNearbyLayer={toggleNearbyLayer} onEnableNearbyLayers={enableNearbyLayers} onShowFacilityOnMap={focusFacilityOnMap} onRetryResources={retryResources} onSave={home => workspace.ensureSaved ? workspace.ensureSaved(home, true) : !shortlistIds.includes(home.id) && workspace.toggleShortlist(home)} onCompare={toggleCompare} onLocate={focusDetailHome} /> : <p className="text-sm text-muted-foreground">This record is not in the loaded results. Restore its search, check Saved, or load more records.</p>}</div><footer className="explore-detail-footer"><Button variant="ghost" onClick={closeDetail}><ArrowLeft aria-hidden="true" className="size-4" />Results</Button><div className="flex items-center gap-1"><span className="mr-2 text-xs text-muted-foreground" aria-live="polite">{detailIndex >= 0 ? `${detailIndex + 1} / ${navigationHomes.length}` : 'Linked record'}</span><Button variant="outline" size="icon" aria-label="Previous record" disabled={detailIndex <= 0} onClick={() => inspect(navigationHomes[detailIndex - 1])}><ArrowLeft aria-hidden="true" className="size-4" /></Button><Button variant="outline" size="icon" aria-label="Next record" disabled={detailIndex < 0 || detailIndex >= navigationHomes.length - 1} onClick={() => inspect(navigationHomes[detailIndex + 1])}><ArrowRight aria-hidden="true" className="size-4" /></Button></div></footer></aside>
   );
   const recordPanels = <>{resultsPanel}{detailsPanel}</>;
   return <div style={{ '--sidebar-width': `${sidebarWidth}px` }} className={`explore-desk workspace-canvas ${layoutMode === 'map' ? 'explore-desk--map' : ''}`}>
     {layoutMode === 'map' ? <MapResearchSidebar open={mapResultsOpen} onOpenChange={setMapResultsOpen} toolbar={toolbar}>{resultsPanel}</MapResearchSidebar> : toolbar}
     {layoutMode === 'map' && detailId && <div className="map-record-details"><div ref={setMapControlsTarget} className="detail-map-tools-host" />{detailsPanel}</div>}
     <div ref={stageRef} style={{ '--sidebar-width': `${sidebarWidth}px` }} className={`explore-stage ${resizing ? 'explore-stage--resizing' : ''} ${detailId ? 'explore-stage--detail' : ''} ${mobileView === 'map' ? 'explore-stage--mobile-map' : ''} ${mapResultsOpen ? 'explore-stage--results-open' : ''} `}>
-      <div className="explore-map"><WorkspaceMap controlsTarget={mapControlsTarget} homes={mapHomes} resources={resourceFeatures} resourceState={resourceState} retryResources={retryResources} sourceStatus={sourceStatus} hoveredHome={workspace.hoveredHome} selectedHome={selectedMapHome} onSelect={onMapSelect} refreshViewport={refreshViewport} viewportBounds={viewportBounds} onSearchArea={savedOnly ? undefined : onSearchMapArea} searchBusy={busy} className="explore-map-panel" /></div>
+      <div className="explore-map"><WorkspaceMap controlsTarget={mapControlsTarget} onAddressSelected={revealAddressOnMap} homes={mapHomes} resources={resourceFeatures} resourceState={resourceState} retryResources={retryResources} sourceStatus={sourceStatus} hoveredHome={workspace.hoveredHome} selectedHome={selectedMapHome} onSelect={onMapSelect} facilityFocus={facilityFocus} visibleResourceTypes={visibleResourceTypes} onVisibleResourceTypesChange={updateVisibleResourceTypes} cameraIntent={mapCameraIntent} onCameraIntent={onMapCameraIntent} refreshViewport={refreshViewport} viewportBounds={viewportBounds} onSearchArea={savedOnly ? undefined : onSearchMapArea} searchBusy={busy} className="explore-map-panel" /></div>
       {layoutMode === 'split' && <div className="explore-divider" role="separator" tabIndex={0} aria-label="Resize map and sidebar" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={Math.max(280, stageWidth - 280)} aria-valuenow={sidebarWidth} aria-valuetext={`${sidebarWidth} pixels sidebar width`} onPointerDown={event => { event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId); setResizing(true); }} onPointerMove={moveDivider} onPointerUp={event => { event.currentTarget.releasePointerCapture(event.pointerId); setResizing(false); }} onLostPointerCapture={() => setResizing(false)} onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resizeSidebar(sidebarWidth + (event.key === 'ArrowLeft' ? 24 : -24)); } else if (event.key === 'Home') { event.preventDefault(); resizeSidebar(500); } }}><span /></div>}
       {layoutMode === 'split' && recordPanels}
     </div>

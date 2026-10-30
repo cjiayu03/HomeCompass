@@ -177,6 +177,35 @@ describe('workspace status integration', () => {
     expect(retryResources).toHaveBeenCalledTimes(1);
   });
 
+  it('shows a distinct symbol for each nearby data layer', () => {
+    render(<MapPanel homes={[]} resources={[]} />);
+
+    const layers = document.querySelector('[aria-labelledby="map-layers-heading"]');
+    expect(layers.querySelectorAll('label svg[aria-hidden="true"]')).toHaveLength(11);
+  });
+
+  it('explains that unlocated loaded records cannot appear as map pins', () => {
+    render(<MapPanel homes={[
+      { id: 'located', lat: 1.35, lng: 103.85 },
+      { id: 'missing', lat: null, lng: null },
+      { id: 'partial', lat: 1.34, lng: null },
+      { id: 'blank', lat: '', lng: '' },
+      { id: 'outside', lat: 1.5, lng: 103.85 },
+    ]} />);
+
+    expect(screen.getByRole('status', { name: 'Map location coverage' })).toHaveTextContent('1 of 5 loaded records have map locations. 4 lack verified coordinates');
+    expect(screen.getByText(/1 of 5 loaded records have map locations; 4 are omitted until verified coordinates are available/i)).toBeInTheDocument();
+  });
+
+  it('does not show a missing-location notice when every loaded record is mappable', () => {
+    render(<MapPanel homes={[
+      { id: 'one', lat: 1.35, lng: 103.85 },
+      { id: 'two', lat: '1.36', lng: '103.86' },
+    ]} />);
+
+    expect(screen.queryByRole('status', { name: 'Map location coverage' })).not.toBeInTheDocument();
+  });
+
   it('keeps the previous source register visible when refresh fails', () => {
     const source = { sourceId: 'hdb-resale', resourceType: 'hdb_resale', state: 'valid', rows: 42, retrievedAt: '2026-10-18T12:00:00+00:00' };
     useWorkspaceMock.mockReturnValue(workspace({

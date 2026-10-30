@@ -22,6 +22,10 @@ function AccessTile({ icon: Icon, label, value }) {
 const BrowseHomeCard = memo(function BrowseHomeCard({ home, saved, selected, mapActive, onLocate, onSave, onCompare, onInspect, setHoveredHome, brief, compact }) {
   const reasons = candidateReasons(home, brief || {});
   const matchEvidence = <div className="mt-3 space-y-2 text-xs leading-5"><ul aria-label="Evidence-backed matches" className="space-y-1">{reasons.matches.map(reason => <li key={reason}>✓ {reason}</li>)}</ul><p className="text-muted-foreground"><span className="font-medium text-foreground">To check:</span> {reasons.tradeoff}</p></div>;
+  function focusOnMap(event) {
+    if (!onLocate || event.target.closest?.('button, a, input, select, textarea, details, summary, [role="button"]')) return;
+    onLocate(home);
+  }
   return <article
       className="browse-home-card rounded-md border bg-card p-3 sm:p-4"
       data-selected={selected}
@@ -29,13 +33,14 @@ const BrowseHomeCard = memo(function BrowseHomeCard({ home, saved, selected, map
       data-home-id={home.id}
       aria-current={mapActive ? 'location' : undefined}
       aria-label={`${home.address}, ${home.type}, ${money(home.price)} recorded price`}
+      onClick={focusOnMap}
       onMouseEnter={() => setHoveredHome?.(home)}
       onMouseLeave={() => setHoveredHome?.(null)}
       onFocusCapture={() => setHoveredHome?.(home)}
       onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setHoveredHome?.(null); }}
     >
       <div className="home-row-heading">
-        <div className="home-row-address"><p className="home-row-location">{home.town} <span aria-hidden="true">·</span> {String(home.type || '').replace(/ROOM/g, 'room')}</p><h3>{onLocate ? <button aria-label={`Show ${home.address} on map`} aria-pressed={mapActive} onClick={() => onLocate(home)}>{home.address}</button> : home.address}</h3></div>
+        <div className="home-row-address"><p className="home-row-location">{home.town} <span aria-hidden="true">·</span> {String(home.type || '').replace(/ROOM/g, 'room')}</p><h3>{onLocate ? <button aria-label={`Show ${home.address} on map`} aria-pressed={mapActive} onClick={() => onLocate(home)}>{home.address}</button> : home.address}</h3>{mapActive && <span className="map-focus-badge" aria-live="polite"><MapPin aria-hidden="true" className="size-3.5" />Selected on map</span>}</div>
         <Button variant={saved ? 'soft' : 'ghost'} className="home-row-save" aria-label={saved ? `Remove ${home.address} from shortlist` : `Save ${home.address} to shortlist`} aria-pressed={saved} onClick={() => onSave(home)}><Bookmark className={`size-4 ${saved ? 'fill-current' : ''}`} /><span>{saved ? 'Saved' : 'Save'}</span></Button>
       </div>
       <div className="home-row-price"><span>{money(home.price)}</span><span>Recorded {home.observedOn || home.transactionDate || 'date unavailable'}</span></div>
