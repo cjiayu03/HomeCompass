@@ -469,7 +469,7 @@ describe('saved-search decision surfaces', () => {
   });
 
   it('offers saving the current live search from Explore', async () => {
-    renderWorkspace(<ExplorePage />);
+    const { fetchMock } = renderWorkspace(<ExplorePage />);
 
     const searchButton = await screen.findByRole('button', { name: 'Search', exact: true });
     await waitFor(() => expect(searchButton).toBeEnabled());
@@ -482,7 +482,8 @@ describe('saved-search decision surfaces', () => {
     expect(saveButton).toBeEnabled();
     fireEvent.click(saveButton);
 
-    expect(await screen.findByText('Evidence search saved to your account.')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Workplace options' })).toBeInTheDocument();
+    expect(JSON.parse(requestFor(fetchMock, '/api/v1/saved-searches', 'POST').body).name).toBe('Workplace options');
   });
 
   it('shows source provenance in the Explore record sidebar', async () => {

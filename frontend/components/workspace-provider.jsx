@@ -483,7 +483,9 @@ function syncResultNotice(result) {
 
 export function WorkspaceProvider({ children }) {
   const [hoveredHome, setHoveredHome] = useState(null);
-  const { user, loading: authLoading } = useAuth();
+  const auth = useAuth();
+  const { user, loading: authLoading, transitioning: authTransitioning = false, sessionVerified = true } = auth;
+  const refreshSession = auth.refreshSession;
   const userId = user?.id || null;
   const targetWorkspaceOwner = accountWorkspaceOwnerKey(userId);
   const fixtureMode = useMemo(() => process.env.NEXT_PUBLIC_HOME_DATA_MODE === 'fixture', []);
@@ -546,17 +548,43 @@ export function WorkspaceProvider({ children }) {
   const workspaceOwnerRef = useRef(null);
   const workspaceGenerationRef = useRef(0);
   const currentUserIdRef = useRef(userId);
+  const authTransitioningRef = useRef(authTransitioning);
+  const sessionVerifiedRef = useRef(sessionVerified);
+  const pendingSessionExpiredNoticeRef = useRef(false);
+  const authRequestControllersRef = useRef(new Set());
   const shortlistMutationQueueRef = useRef(Promise.resolve());
   currentUserIdRef.current = userId;
-  const workspaceReady = !authLoading && hydrated && workspaceOwner === targetWorkspaceOwner
+  authTransitioningRef.current = authTransitioning;
+  sessionVerifiedRef.current = sessionVerified;
+  const workspaceReady = !authLoading && !authTransitioning && (!userId || sessionVerified) && hydrated && workspaceOwner === targetWorkspaceOwner
     && workspaceOwnerRef.current === targetWorkspaceOwner;
   const isCurrentWorkspace = useCallback((expectedUserId, expectedOwner, expectedGeneration) => (
     currentUserIdRef.current === expectedUserId
+      && !authTransitioningRef.current
+      && (!expectedUserId || sessionVerifiedRef.current)
       && workspaceOwnerRef.current === expectedOwner
       && workspaceGenerationRef.current === expectedGeneration
   ), []);
 
   useEffect(() => () => window.clearTimeout(flashTimeoutRef.current), []);
+  useEffect(() => {
+    function cancelOwnerRequests(event) {
+      if (event.detail?.phase === 'end') {
+        authTransitioningRef.current = false;
+        return;
+      }
+      if (event.detail?.phase !== 'start') return;
+      authTransitioningRef.current = true;
+      workspaceGenerationRef.current += 1;
+      pendingSessionExpiredNoticeRef.current = false;
+      if (syncInFlightRef.current) setSyncState('error');
+      syncInFlightRef.current?.controller?.abort();
+      Object.values(requests.current).forEach((controller) => controller?.abort());
+      authRequestControllersRef.current.forEach((controller) => controller.abort());
+    }
+    window.addEventListener('homecompass:auth-transition', cancelOwnerRequests);
+    return () => window.removeEventListener('homecompass:auth-transition', cancelOwnerRequests);
+  }, []);
   useEffect(() => { homesRef.current = homes; }, [homes]);
   useEffect(() => { compareIdsRef.current = compareIds; }, [compareIds]);
   useEffect(() => { shortlistIdsRef.current = shortlistIds; }, [shortlistIds]);
@@ -593,6 +621,12 @@ export function WorkspaceProvider({ children }) {
     });
     setHomeState(fixtureMode ? fixtureState(nextHomes) : initialState('live'));
     setBusy(false);
+    window.clearTimeout(flashTimeoutRef.current);
+    setNotice(null);
+    if (pendingSessionExpiredNoticeRef.current && !userId) {
+      pendingSessionExpiredNoticeRef.current = false;
+      flash('Your session expired. Please sign in again. Guest data is still saved in this browser; retry account sync after signing in.', 'warning');
+    }
 
     let nextWorkspace;
     let snapshot;
@@ -680,11 +714,15 @@ export function WorkspaceProvider({ children }) {
     const syncUserId = userId;
     const syncOwnerKey = accountWorkspaceOwnerKey(syncUserId);
     const syncGeneration = workspaceGenerationRef.current;
+    const controller = new AbortController();
     const isCurrentOwner = () => workspaceReady && isCurrentWorkspace(syncUserId, syncOwnerKey, syncGeneration);
     if (!isCurrentOwner()) {
       return { ok: false, stale: true };
     }
-    if (syncInFlightRef.current?.userId === syncUserId) return syncInFlightRef.current.promise;
+    if (syncInFlightRef.current?.userId === syncUserId
+      && syncInFlightRef.current?.ownerKey === syncOwnerKey
+      && syncInFlightRef.current?.generation === syncGeneration
+      && !syncInFlightRef.current?.controller?.signal?.aborted) return syncInFlightRef.current.promise;
     const runSync = async () => {
       setSyncState('syncing');
       setSyncResult(null);
@@ -722,6 +760,7 @@ export function WorkspaceProvider({ children }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
+          signal: controller.signal,
         });
         if (!isCurrentOwner()) {
           return { ok: false, stale: true };
@@ -752,8 +791,35 @@ export function WorkspaceProvider({ children }) {
         flash(notice.text, notice.tone);
         return { ok: true, result };
       } catch (error) {
+        if (controller.signal.aborted || error?.name === 'AbortError') {
+          if (currentUserIdRef.current === syncUserId
+            && workspaceOwnerRef.current === syncOwnerKey
+            && workspaceGenerationRef.current === syncGeneration) setSyncState('error');
+          return { ok: false, stale: true, error };
+        }
         if (!isCurrentOwner()) {
           return { ok: false, stale: true, error };
+        }
+        if (isAuthenticationFailure(error) && typeof refreshSession === 'function') {
+          pendingSessionExpiredNoticeRef.current = true;
+          let currentSession = syncUserId ? { id: syncUserId } : null;
+          try {
+            currentSession = await refreshSession();
+          } catch {
+            currentSession = syncUserId ? { id: syncUserId } : null;
+          }
+          if (workspaceGenerationRef.current !== syncGeneration || authTransitioningRef.current) {
+            pendingSessionExpiredNoticeRef.current = false;
+            return { ok: false, stale: true, error };
+          }
+          if (!currentSession) {
+            return { ok: false, error };
+          }
+          if (!isCurrentOwner() || currentSession.id !== syncUserId) {
+            pendingSessionExpiredNoticeRef.current = false;
+            return { ok: false, stale: true, error };
+          }
+          pendingSessionExpiredNoticeRef.current = false;
         }
         setSyncState('error');
         flash(isAuthenticationFailure(error)
@@ -764,14 +830,20 @@ export function WorkspaceProvider({ children }) {
     };
 
     const request = runSync();
-    const inFlight = { userId: syncUserId, promise: request };
+    const inFlight = {
+      userId: syncUserId,
+      ownerKey: syncOwnerKey,
+      generation: syncGeneration,
+      controller,
+      promise: request,
+    };
     syncInFlightRef.current = inFlight;
     try {
       return await request;
     } finally {
       if (syncInFlightRef.current === inFlight) syncInFlightRef.current = null;
     }
-  }, [isCurrentWorkspace, userId, workspaceReady]);
+  }, [authTransitioningRef, isCurrentWorkspace, refreshSession, userId, workspaceReady]);
 
   useEffect(() => {
     if (!workspaceReady) return undefined;
@@ -783,6 +855,8 @@ export function WorkspaceProvider({ children }) {
       return undefined;
     }
     let active = true;
+    const controller = new AbortController();
+    authRequestControllersRef.current.add(controller);
     const accountUserId = user.id;
     const accountGeneration = workspaceGenerationRef.current;
     const isActiveOwner = () => active && workspaceReady
@@ -795,8 +869,8 @@ export function WorkspaceProvider({ children }) {
       const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL || '';
       try {
         const [shortlistResponse, profileResponse] = await Promise.all([
-          fetch(`${apiBase.replace(/\/$/, '')}/api/v1/shortlists`, { credentials: 'include' }).catch(() => null),
-          fetch(`${apiBase.replace(/\/$/, '')}/api/v1/profile`, { credentials: 'include' }).catch(() => null),
+          fetch(`${apiBase.replace(/\/$/, '')}/api/v1/shortlists`, { credentials: 'include', signal: controller.signal }).catch(() => null),
+          fetch(`${apiBase.replace(/\/$/, '')}/api/v1/profile`, { credentials: 'include', signal: controller.signal }).catch(() => null),
         ]);
         if (!isActiveOwner()) return;
         if (shortlistResponse?.ok) {
@@ -844,7 +918,11 @@ export function WorkspaceProvider({ children }) {
         /* Keep the current browser data if account hydration is temporarily unreachable. */
       }
     })();
-    return () => { active = false; };
+    return () => {
+      active = false;
+      controller.abort();
+      authRequestControllersRef.current.delete(controller);
+    };
   }, [fixtureMode, isCurrentWorkspace, syncGuestData, targetWorkspaceOwner, userId, workspaceOwner, workspaceReady]);
 
   const runRequest = useCallback(async (kind, getPayload, selectData, onSuccess, onError, { append = false } = {}) => {

@@ -25,10 +25,11 @@ export function AuthForm({ mode = 'login' }) {
   const alertRef = useRef(null);
   useEffect(() => { if (message) alertRef.current?.focus(); }, [message]);
   const router = useRouter();
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, transitioning = false } = useAuth();
 
   async function submit(event) {
     event.preventDefault();
+    if (busy || transitioning) return;
     setMessage('');
     const errors = {};
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) errors.email = 'Enter a valid email address.';
@@ -65,14 +66,14 @@ export function AuthForm({ mode = 'login' }) {
       <div><CardTitle className="text-2xl">{isSignup ? 'Create your account' : 'Welcome back'}</CardTitle><CardDescription className="mt-1">{isSignup ? 'Keep saved places and comparisons together.' : 'Sign in to pick up where you left off.'}</CardDescription></div>
     </CardHeader>
     <CardContent className="px-6 pb-6 sm:px-7 sm:pb-7">
-      <form ref={formRef} noValidate className="flex flex-col gap-4" onSubmit={submit}>
+      <form ref={formRef} method="post" noValidate className="flex flex-col gap-4" onSubmit={submit}>
         <label className="flex flex-col gap-2"><span className="text-xs font-semibold">Email</span><Input name="email" aria-invalid={Boolean(fieldErrors.email)} aria-describedby={fieldErrors.email ? "auth-email-error" : undefined} type="email" autoComplete="email" spellCheck={false} value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required />{fieldErrors.email && <span id="auth-email-error" className="text-xs text-destructive">{fieldErrors.email}</span>}</label>
         <label className="flex flex-col gap-2"><span className="text-xs font-semibold">Password</span><Input name="password" aria-invalid={Boolean(fieldErrors.password)} aria-describedby={fieldErrors.password ? "auth-password-error" : undefined} type={showPassword ? "text" : "password"} autoComplete={isSignup ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="••••••••" minLength={8} maxLength={128} required />{fieldErrors.password && <span id="auth-password-error" className="text-xs text-destructive">{fieldErrors.password}</span>}</label>
         {isSignup && <label className="flex flex-col gap-2"><span className="text-xs font-semibold">Confirm password</span><Input name="confirm" aria-invalid={Boolean(fieldErrors.confirm)} aria-describedby={fieldErrors.confirm ? "auth-confirm-error" : undefined} type={showPassword ? "text" : "password"} autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} placeholder="••••••••" minLength={8} maxLength={128} required />{fieldErrors.confirm && <span id="auth-confirm-error" className="text-xs text-destructive">{fieldErrors.confirm}</span>}</label>}
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={showPassword} onChange={e=>setShowPassword(e.target.checked)}/>Show password</label>
         {!isSignup && <Link href="/forgot-password" className="text-sm underline">Forgot password?</Link>}
         {message && <div ref={alertRef} tabIndex={-1} role="alert"><Alert tone="warning" className="text-xs leading-5">{message}</Alert></div>}
-        <Button type="submit" disabled={busy} aria-busy={busy} className="mt-1 h-12 w-full">{busy ? <LoadingScene compact label={isSignup ? 'Creating your account…' : 'Signing you in…'} /> : <>{isSignup ? 'Create account' : 'Sign in'} <ArrowRight className="size-4" /></>}</Button>
+        <Button type="submit" disabled={busy || transitioning} aria-busy={busy || transitioning} className="mt-1 h-12 w-full">{busy ? <LoadingScene compact label={isSignup ? 'Creating your account…' : 'Signing you in…'} /> : <>{isSignup ? 'Create account' : 'Sign in'} <ArrowRight className="size-4" /></>}</Button>
       </form>
       <p className="mt-5 text-center text-sm text-muted-foreground">{isSignup ? 'Already have an account?' : 'New here?'} <Link href={isSignup ? '/login' : '/signup'} className="font-semibold text-foreground underline decoration-primary/50 underline-offset-4 hover:decoration-primary">{isSignup ? 'Sign in' : 'Create an account'}</Link></p>
     </CardContent>

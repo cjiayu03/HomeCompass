@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { AuthProvider, useAuth } from '../components/auth-provider';
 import { RecoveryForm } from '../components/recovery-form';
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+it('uses POST for recovery and reset credential forms',()=>{render(<AuthProvider><RecoveryForm/></AuthProvider>);expect(document.querySelector('form')).toHaveAttribute('method','post');cleanup();window.history.replaceState(null,'','/');window.history.replaceState(null,'','/reset-password#token='+'a'.repeat(43));render(<AuthProvider><RecoveryForm reset/></AuthProvider>);expect(document.querySelector('form')).toHaveAttribute('method','post');});
 function Probe(){ const {user,signOut}=useAuth();return <><span>{user?.email}</span><button onClick={()=>signOut().catch(()=>{})}>Sign out</button></>; }
 it('retains authentication when logout fails', async()=>{
  vi.stubGlobal('fetch',vi.fn(async(path)=>new Response(JSON.stringify(path.endsWith('/session')?{user:{id:'u',email:'a@example.com'}}:{detail:{message:'offline'}}),{status:path.endsWith('/session')?200:503})));

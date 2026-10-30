@@ -42,16 +42,20 @@ function PlanningOwner({ owner, signedIn, children }) {
   const inFlight = useRef(false);
   const requestSequence = useRef(0);
   const clearVersion = useRef(0);
+  const authPaused = useRef(!signedIn);
+  const controllers = useRef(new Set());
 
   const refresh = useCallback(async (replace = false) => {
-    if (!signedIn) return;
+    if (!signedIn || authPaused.current) return;
     active.current = true;
     setCleared(false);
     setReady(true);
     const sequence=++requestSequence.current;
     setError('');
+    const controller = new AbortController();
+    controllers.current.add(controller);
     try {
-      const remote = await requestJson('/api/v1/planning/workspace');
+      const remote = await requestJson('/api/v1/planning/workspace', { signal: controller.signal });
       if (!active.current || sequence!==requestSequence.current) return;
       if (replace || !pending.current) {
         current.current = remote;
@@ -67,12 +71,14 @@ function PlanningOwner({ owner, signedIn, children }) {
       setOnlineReady(true);
       setStatus(pending.current ? 'pending' : 'saved');
     } catch (e) {
+      if (controller.signal.aborted) return;
       if (active.current && sequence===requestSequence.current) { setStatus('offline'); setOnlineReady(false); setError(e.message); }
-    }
+    } finally { controllers.current.delete(controller); }
   }, [signedIn]);
 
   useEffect(() => {
     active.current = true;
+    authPaused.current = !signedIn;
     try {
       const cached = JSON.parse(localStorage.getItem(key) || 'null');
       if (cached?.workspace && Array.isArray(cached.workspace.scenarios) && cached.workspace.decisions) {
@@ -92,8 +98,25 @@ function PlanningOwner({ owner, signedIn, children }) {
       photoRef.current = grouped;
       setPhotos(grouped);
     }).catch(() => { /* Photos are optional; addPhoto reports failures. */ });
-    return () => { active.current = false; requestSequence.current+=1; };
+    return () => {
+      active.current = false;
+      authPaused.current = true;
+      requestSequence.current+=1;
+      controllers.current.forEach(controller => controller.abort());
+    };
   }, [owner, key, signedIn, refresh]);
+
+  useEffect(() => {
+    const pause = event => {
+      if (event.detail?.phase !== 'start') return;
+      authPaused.current = true;
+      requestSequence.current += 1;
+      controllers.current.forEach(controller => controller.abort());
+      setOnlineReady(false);
+    };
+    window.addEventListener('homecompass:auth-transition', pause);
+    return () => window.removeEventListener('homecompass:auth-transition', pause);
+  }, []);
 
   useEffect(() => {
     function clearBrowserPlan(event) {
@@ -138,23 +161,26 @@ function PlanningOwner({ owner, signedIn, children }) {
   useEffect(() => {
     if (!ready || !signedIn || !onlineReady || !dirty) return;
     const timer = setTimeout(async () => {
-      if(inFlight.current)return;
+      if(inFlight.current || authPaused.current)return;
       inFlight.current=true;
       const localGeneration=generation.current;
       const localRequestSequence=requestSequence.current;
       setStatus('saving');
+      const controller = new AbortController();
+      controllers.current.add(controller);
       try {
-        const saved = await requestJson('/api/v1/planning/workspace', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(current.current)});
+        const saved = await requestJson('/api/v1/planning/workspace', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(current.current),signal:controller.signal});
         if (!active.current || localRequestSequence!==requestSequence.current) return;
         current.current = { ...current.current, revision: saved.revision };
         setWorkspace(w => ({...w, revision:saved.revision}));
         if (generation.current === localGeneration) { pending.current = false; setDirty(false); setStatus('saved'); }
       } catch (e) {
+        if (controller.signal.aborted) return;
         if (!active.current || localRequestSequence!==requestSequence.current) return;
         setError(e.status===409 ? 'This plan changed in another session. Your edits remain in this browser.' : e.message);
         setStatus(e.status===409 ? 'conflict' : 'offline');
         setOnlineReady(false);
-      } finally {inFlight.current=false;}
+      } finally {controllers.current.delete(controller);inFlight.current=false;}
     }, 700);
     return () => clearTimeout(timer);
   }, [ready, signedIn, onlineReady, dirty, workspace]);
@@ -218,8 +244,8 @@ function PlanningOwner({ owner, signedIn, children }) {
 }
 
 export function PlanningProvider({children}) {
-  const {user,loading}=useAuth();
+  const {user,loading,transitioning=false,sessionVerified=true}=useAuth();
   const owner=user?.id||'guest';
-  return <PlanningOwner key={owner} owner={owner} signedIn={Boolean(user)&&!loading}>{children}</PlanningOwner>;
+  return <PlanningOwner key={owner} owner={owner} signedIn={Boolean(user)&&!loading&&!transitioning&&sessionVerified}>{children}</PlanningOwner>;
 }
 export function usePlanning(){ const value=useContext(Context); if(!value)throw new Error('PlanningProvider is required');return value; }

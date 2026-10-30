@@ -129,13 +129,15 @@ describe('workspace status integration', () => {
       homes: [{ id: 'previous-home', address: 'Previously loaded home' }],
       homeState: dataState({ status: 'loading' }),
       resourceState: dataState({ status: 'empty' }),
+      busy: true,
     }));
 
     render(<ExplorePage />);
 
     expect(screen.getByText('Previously loaded home')).toBeInTheDocument();
-    expect(screen.getByText('Updating data')).toBeInTheDocument();
-    expect(screen.getByText(/previously loaded results remain visible/i)).toBeInTheDocument();
+    for (const button of screen.getAllByRole('button', { name: 'Searching…' })) {
+      expect(button).toBeDisabled();
+    }
   });
 
   it('shows and retries an initial live Explore error without installing fixture data', () => {

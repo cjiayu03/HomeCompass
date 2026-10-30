@@ -50,6 +50,7 @@ const mergedResult = {
 
 function authenticatedFetch({ shortlist = [], sync, shortlistMutation, aiInterpret, search } = {}) {
   const auth = { user: { id: 'user-1', email: 'family@example.com' } };
+  auth.refreshSession = vi.fn(async () => auth.user);
   useAuthMock.mockReturnValue(auth);
 
   const fetchMock = vi.fn(async (url, options = {}) => {
@@ -58,7 +59,7 @@ function authenticatedFetch({ shortlist = [], sync, shortlistMutation, aiInterpr
     if (path === '/api/v1/sync/guest') return sync ? sync(url, options) : json(mergedResult);
     if (path === '/api/v1/ai/interpret') return aiInterpret ? aiInterpret(url, options) : json({ filters: { query: 'interpreted' } });
     if (path === '/api/v1/search') return search ? search(url, options) : json({ items: [] });
-    if (path === '/api/v1/shortlists' && (!options.method || options.method === 'GET')) return json({ items: shortlist });
+    if (path === '/api/v1/shortlists' && (!options.method || options.method === 'GET')) return json({ items: typeof shortlist === 'function' ? shortlist() : shortlist });
     if (path.startsWith('/api/v1/shortlists') && options.method !== 'GET') {
       return shortlistMutation ? shortlistMutation(url, options) : json({});
     }
@@ -125,6 +126,116 @@ afterEach(() => {
 });
 
 describe('guest account synchronization', () => {
+  it('does not upload retained account A data while cookie ownership is unverified, then hydrates B separately', async () => {
+    const history = [{ mode: 'structured', criteria: { query: 'Account A private query', limit: 20 } }];
+    window.localStorage.setItem('homecompass.account.user-1.workspace', JSON.stringify({
+      brief: { ...defaultBrief, adults: 5 }, shortlistIds: [], compareIds: [], pendingHistory: history,
+    }));
+    const fetchMock = authenticatedFetch();
+    useAuthMock.mockReturnValue({ ...fetchMock.auth, sessionVerified: false });
+    const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
+    expect(readWorkspace().briefAdults).toBe(defaultBrief.adults);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry sync' }));
+    expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/api/v1/sync/guest'))).toBe(false);
+    expect(JSON.parse(window.localStorage.getItem('homecompass.account.user-1.workspace')).pendingHistory).toEqual(history);
+
+    useAuthMock.mockReturnValue({ ...fetchMock.auth, user: { id: 'user-2', email: 'b@example.com' }, sessionVerified: true });
+    view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
+    await waitFor(() => expect(readWorkspace().syncState).toBe('synced'));
+    const requests = fetchMock.mock.calls.filter(([url]) => url.endsWith('/api/v1/sync/guest'));
+    expect(requests).toHaveLength(1);
+    expect(JSON.parse(requests[0][1].body).history).toEqual([]);
+    expect(JSON.parse(window.localStorage.getItem('homecompass.account.user-1.workspace')).pendingHistory).toEqual(history);
+    await waitFor(() => expect(readWorkspace().briefAdults).toBe(2));
+  });
+
+  it('silently aborts an old-owner sync on auth transition and starts a fresh retry', async () => {
+    let firstSignal;
+    let syncCalls = 0;
+    authenticatedFetch({
+      sync: (_url, options) => {
+        syncCalls += 1;
+        if (syncCalls > 1) return json(mergedResult);
+        firstSignal = options.signal;
+        return new Promise((_resolve, reject) => {
+          firstSignal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+        });
+      },
+    });
+    renderWorkspace();
+    await waitFor(() => expect(firstSignal).toBeDefined());
+    fireEvent(window, new CustomEvent('homecompass:auth-transition', { detail: { phase: 'start' } }));
+    await waitFor(() => expect(firstSignal.aborted).toBe(true));
+    await waitFor(() => expect(readWorkspace().syncState).toBe('error'));
+    expect(readWorkspace().notice?.text || '').not.toMatch(/session expired/i);
+
+    fireEvent(window, new CustomEvent('homecompass:auth-transition', { detail: { phase: 'end' } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry sync' }));
+    await waitFor(() => expect(readWorkspace().syncState).toBe('synced'));
+    expect(syncCalls).toBe(2);
+    expect(readWorkspace().notice?.text || '').not.toMatch(/session expired/i);
+  });
+
+  it('clears an account warning after logout while keeping guest data pending', async () => {
+    const history = [{ mode: 'structured', criteria: { query: 'Bishan', limit: 20 } }];
+    window.localStorage.setItem('homecompass.guest-sync-pending', JSON.stringify({
+      brief: { adults: 3 },
+      shortlistHomeIds: ['home-a'],
+      compareHomeIds: [],
+      history,
+      places: [],
+    }));
+    authenticatedFetch({ sync: () => json({ detail: { code: 'INVALID_SESSION' } }, 401) });
+    const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
+    await waitFor(() => expect(readWorkspace().syncState).toBe('error'));
+    expect(readWorkspace().notice.text).toMatch(/session expired/i);
+    expect(JSON.parse(window.localStorage.getItem('homecompass.account.user-1.workspace')).pendingHistory).toEqual(history);
+    expect(JSON.parse(window.localStorage.getItem('homecompass.guest-sync-pending')).shortlistHomeIds).toEqual(['home-a']);
+
+    useAuthMock.mockReturnValue({ user: null });
+    view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
+    await waitFor(() => expect(readWorkspace()).toMatchObject({ syncState: 'local', notice: null }));
+    expect(JSON.parse(window.localStorage.getItem('homecompass.account.user-1.workspace')).pendingHistory).toEqual(history);
+    expect(JSON.parse(window.localStorage.getItem('homecompass.guest-sync-pending')).shortlistHomeIds).toEqual(['home-a']);
+  });
+
+  it('does not carry account A workspace data or its warning into account B', async () => {
+    window.localStorage.setItem('homecompass.account.user-1.workspace', JSON.stringify({
+      brief: { ...defaultBrief, adults: 5, budget: 700000 },
+      shortlistIds: ['home-a'],
+      compareIds: [],
+      decisionHomes: [homeA],
+    }));
+    let syncAttempts = 0;
+    const fetchMock = authenticatedFetch({
+      shortlist: () => useAuthMock().user?.id === 'user-1' ? [homeA] : [],
+      sync: () => {
+        syncAttempts += 1;
+        return syncAttempts === 1 ? json({ detail: { code: 'INVALID_SESSION' } }, 401) : json(mergedResult);
+      },
+    });
+    const accountA = fetchMock.auth;
+    const view = render(<WorkspaceProvider><Probe /></WorkspaceProvider>);
+    await waitFor(() => expect(readWorkspace().syncState).toBe('error'));
+    expect(readWorkspace().notice.text).toMatch(/session expired/i);
+
+    const accountB = {
+      ...accountA,
+      user: { id: 'user-2', email: 'other-family@example.com' },
+      refreshSession: vi.fn(async () => ({ id: 'user-2', email: 'other-family@example.com' })),
+    };
+    useAuthMock.mockReturnValue(accountB);
+    view.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
+    await waitFor(() => expect(readWorkspace().syncState).toBe('synced'));
+    await waitFor(() => expect(readWorkspace().briefAdults).toBe(2));
+    expect(readWorkspace().shortlistIds).toEqual([]);
+    expect(readWorkspace().notice?.text || '').not.toMatch(/session expired/i);
+    const syncRequests = fetchMock.mock.calls.filter(([url]) => new URL(url, 'http://homecompass.test').pathname === '/api/v1/sync/guest');
+    expect(syncRequests).toHaveLength(2);
+    expect(JSON.parse(syncRequests[1][1].body).shortlistHomeIds).not.toContain('home-a');
+    expect(JSON.parse(window.localStorage.getItem('homecompass.account.user-1.workspace')).shortlistIds).toEqual(['home-a']);
+  });
+
   it('submits the pre-hydration guest snapshot once with a stable key and reports merge results', async () => {
     const guestBrief = {
       ...defaultBrief,

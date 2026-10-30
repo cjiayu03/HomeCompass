@@ -135,7 +135,12 @@ async def _optional_active_user(
 ) -> dict | None:
     if not request.cookies.get(SESSION_COOKIE_NAME):
         return None
-    user = await require_user(request)
+    try:
+        user = await require_user(request)
+    except InvalidSessionError:
+        # An old cookie may remain after its session expires. Public search
+        # still works as a guest; endpoints that use saved places fail below.
+        return None
     return await require_active_user(user)
 
 
@@ -221,10 +226,14 @@ app.add_middleware(
 
 
 @app.exception_handler(InvalidSessionError)
-async def clear_invalid_session_cookie(_request: Request, exc: InvalidSessionError):
-    response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-    _clear_session_cookie(response)
-    return response
+async def invalid_session_response(_request: Request, exc: InvalidSessionError):
+    # A response for an old request must not clear a newer login's shared
+    # cookie. Explicit logout and account deletion own cookie removal.
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.middleware("http")
@@ -827,12 +836,12 @@ async def reset_password(data: ResetPasswordRequest, request: Request, response:
 
 @app.get("/api/v1/auth/session")
 async def current_local_session(request: Request, response: Response) -> dict:
+    response.headers["Cache-Control"] = "no-store"
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
         return {"user": None}
     user = await resolve_session_token(token)
     if user is None:
-        _clear_session_cookie(response)
         return {"user": None}
     try:
         email = await database.get_local_auth_email_by_user_id(user["id"])
@@ -841,7 +850,6 @@ async def current_local_session(request: Request, response: Response) -> dict:
     except (asyncpg.PostgresError, OSError) as exc:
         raise _storage_unavailable() from exc
     if email is None:
-        _clear_session_cookie(response)
         return {"user": None}
     return {"user": {"id": str(user["id"]), "email": email}}
 

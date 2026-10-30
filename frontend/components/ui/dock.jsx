@@ -75,10 +75,12 @@ export function Dock() {
   const pathname = usePathname();
   const router = useRouter();
   const { theme, setTheme } = useAppTheme();
-  const { user, signOut } = useAuth();
+  const { user, signOut, transitioning = false, sessionVerified = true } = useAuth();
   const { flash } = useWorkspace();
   const [signingOut, setSigningOut] = useState(false);
+  const authPaused = transitioning || Boolean(user) && !sessionVerified;
   async function handleAuthAction() {
+    if (signingOut || authPaused) return;
     if (!user) {
       router.push('/login');
       return;
@@ -105,7 +107,7 @@ export function Dock() {
         </button>
       </div>
       <div className="dock-item">
-        <button type="button" className="dock-control" disabled={signingOut} onClick={handleAuthAction} aria-label={user ? (signingOut ? 'Signing out' : 'Sign out') : 'Sign in'}>
+        <button type="button" className="dock-control" disabled={signingOut || authPaused} aria-busy={signingOut || transitioning} onClick={handleAuthAction} aria-label={user ? (signingOut ? 'Signing out' : 'Sign out') : 'Sign in'}>
           {user ? <LogOut aria-hidden="true" className="size-5" /> : <LogIn aria-hidden="true" className="size-5" />}
           <span className="dock-label">{signingOut ? 'Signing out' : user ? 'Sign out' : 'Sign in'}</span>
         </button>
