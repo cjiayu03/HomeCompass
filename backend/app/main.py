@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from . import database, recovery
 from .ai import gemini_configuration_ready, interpret_query, summarize_record
+from .source_text import source_label
 from .contracts import live_result_metadata
 from .database import (
     close_pool,
@@ -101,20 +102,41 @@ _LATEST_RESOURCE_CTE = """WITH latest_resource_sources AS (
 
 _HOME_EVIDENCE_JOINS = """
 LEFT JOIN LATERAL (
-  SELECT r.name, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
+  SELECT r.name, jsonb_build_object(
+    'id', r.id::text, 'name', r.name, 'resourceType', r.resource_type,
+    'lat', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_Y(r.geometry) END,
+    'lng', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_X(r.geometry) END,
+    'sourceId', snapshot.source_id, 'sourceVersion', snapshot.source_version,
+    'sourceUrl', snapshot.source_url
+  ) AS location, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
   FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
+  JOIN source_snapshot snapshot ON snapshot.id=r.source_snapshot_id
   WHERE r.resource_type='moe_school' AND r.geometry IS NOT NULL AND h.geometry IS NOT NULL
   ORDER BY h.geometry::geography <-> r.geometry::geography LIMIT 1
 ) school_access ON TRUE
 LEFT JOIN LATERAL (
-  SELECT r.name, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
+  SELECT r.name, jsonb_build_object(
+    'id', r.id::text, 'name', r.name, 'resourceType', r.resource_type,
+    'lat', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_Y(r.geometry) END,
+    'lng', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_X(r.geometry) END,
+    'sourceId', snapshot.source_id, 'sourceVersion', snapshot.source_version,
+    'sourceUrl', snapshot.source_url
+  ) AS location, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
   FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
+  JOIN source_snapshot snapshot ON snapshot.id=r.source_snapshot_id
   WHERE r.resource_type IN ('childcare','kindergarten') AND r.geometry IS NOT NULL AND h.geometry IS NOT NULL
   ORDER BY h.geometry::geography <-> r.geometry::geography LIMIT 1
 ) childcare_access ON TRUE
 LEFT JOIN LATERAL (
-  SELECT r.name, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
+  SELECT r.name, jsonb_build_object(
+    'id', r.id::text, 'name', r.name, 'resourceType', r.resource_type,
+    'lat', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_Y(r.geometry) END,
+    'lng', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_X(r.geometry) END,
+    'sourceId', snapshot.source_id, 'sourceVersion', snapshot.source_version,
+    'sourceUrl', snapshot.source_url
+  ) AS location, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
   FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
+  JOIN source_snapshot snapshot ON snapshot.id=r.source_snapshot_id
   WHERE r.resource_type IN ('chas_clinic','dementia_gtp') AND r.geometry IS NOT NULL AND h.geometry IS NOT NULL
   ORDER BY h.geometry::geography <-> r.geometry::geography LIMIT 1
 ) care_access ON TRUE
@@ -124,7 +146,7 @@ LEFT JOIN LATERAL (
 def _distance_label(record, name_key: str, distance_key: str, pending: str) -> str:
     if record["latitude"] is None:
         return "Home location is not matched yet"
-    name = record[name_key]
+    name = source_label(record[name_key])
     distance = record[distance_key]
     if name is None or distance is None:
         return pending
@@ -282,6 +304,30 @@ def _score_home(record, *, budget_cents=None, weights=None, distance_targets=Non
     return score_home_evidence(evidence, weights, targets)
 
 
+def _score_locations(record, score_details) -> list[dict]:
+    components = {item["name"]: item for item in score_details["components"]}
+    locations = []
+    for name in ("school", "childcare", "care"):
+        location = _optional_record_value(record, f"{name}_location")
+        if isinstance(location, str):
+            location = json.loads(location)
+        if not isinstance(location, dict) or location.get("id") is None:
+            continue
+        component = components.get(name, {})
+        distance = _optional_record_value(record, f"{name}_distance_m")
+        locations.append({
+            **location,
+            "name": source_label(location.get("name")),
+            "component": name,
+            "distanceM": float(distance) if distance is not None else None,
+            "usedInScore": score_details["score"] is not None
+                and component.get("normalizedValue") is not None
+                and component.get("weight", 0) > 0,
+            "contribution": component.get("contribution"),
+        })
+    return locations
+
+
 def _home(record, score=None) -> dict:
     price_cents = record["price_observation_cents"]
     source_version = record["source_version"]
@@ -322,6 +368,7 @@ def _home(record, score=None) -> dict:
         "school": _distance_label(record, "school_name", "school_distance_m", "No geocoded school in the current source snapshot"),
         "childcare": _distance_label(record, "childcare_name", "childcare_distance_m", "No geocoded childcare location in the current source snapshot"),
         "care": _distance_label(record, "care_name", "care_distance_m", "No geocoded clinic or care point in the current source snapshot"),
+        "scoreLocations": _score_locations(record, score_details),
         "amenityDistancesM": {
             name: float(value) if value is not None else None
             for name in ('school', 'childcare', 'care')
@@ -686,6 +733,9 @@ LEFT JOIN LATERAL (
                     CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
                     h.place_distances, h.school_name, h.school_distance_m,
                     h.childcare_name, h.childcare_distance_m, h.care_name, h.care_distance_m,
+                    school_access.location AS school_location,
+                    childcare_access.location AS childcare_location,
+                    care_access.location AS care_location,
                     CASE WHEN h.geometry IS NULL THEN FALSE ELSE EXISTS (
                       SELECT 1 FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
                       WHERE r.resource_type='dengue_cluster' AND r.geometry IS NOT NULL AND ST_Intersects(h.geometry,r.geometry)
@@ -693,7 +743,7 @@ LEFT JOIN LATERAL (
                     h.ranking_score,
                     s.id AS source_snapshot_id, s.source_id, s.source_version, s.retrieved_at
              FROM page_homes h JOIN source_snapshot s ON s.id = h.source_snapshot_id
-             {place_joins}
+             {_HOME_EVIDENCE_JOINS}
              ORDER BY h.ranking_score DESC NULLS LAST, h.observed_on DESC NULLS LAST, h.id"""
     async with pool.acquire() as connection:
         total_row = await connection.fetchrow(count_sql, *count_values)
@@ -1101,7 +1151,7 @@ async def resources(
     for row in rows:
         geometry = json.loads(row["geometry"]) if row["geometry"] else None
         features.append({"type": "Feature", "id": row["id"], "geometry": geometry,
-                         "properties": {"name": row["name"], "resourceType": row["resource_type"], "status": row["status"],
+                         "properties": {"name": source_label(row["name"]), "resourceType": row["resource_type"], "status": row["status"],
                                         "attributes": row["attributes"], "sourceId": row["source_id"], "sourceUrl": row["source_url"],
                                         "sourceVersion": row["source_version"], "retrievedAt": row["retrieved_at"].isoformat(),
                                         "locationSourceId": row["location_source_id"], "locationRetrievedAt": row["location_retrieved_at"].isoformat() if row["location_retrieved_at"] else None}})
@@ -1351,8 +1401,11 @@ async def home_detail(home_id: str) -> dict:
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_Y(h.geometry) END AS latitude,
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
                       school_access.name AS school_name, school_access.distance_m AS school_distance_m,
+                    school_access.location AS school_location,
                       childcare_access.name AS childcare_name, childcare_access.distance_m AS childcare_distance_m,
+                    childcare_access.location AS childcare_location,
                       care_access.name AS care_name, care_access.distance_m AS care_distance_m,
+                    care_access.location AS care_location,
                       CASE WHEN h.geometry IS NULL THEN FALSE ELSE EXISTS (
                         SELECT 1 FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
                         WHERE r.resource_type='dengue_cluster' AND r.geometry IS NOT NULL AND ST_Intersects(h.geometry,r.geometry)
@@ -1502,8 +1555,11 @@ async def get_shortlist(user: dict = Depends(require_active_user)) -> dict:
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_Y(h.geometry) END AS latitude,
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
                       school_access.name AS school_name, school_access.distance_m AS school_distance_m,
+                    school_access.location AS school_location,
                       childcare_access.name AS childcare_name, childcare_access.distance_m AS childcare_distance_m,
+                    childcare_access.location AS childcare_location,
                       care_access.name AS care_name, care_access.distance_m AS care_distance_m,
+                    care_access.location AS care_location,
                       CASE WHEN h.geometry IS NULL THEN FALSE ELSE EXISTS (
                         SELECT 1 FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
                         WHERE r.resource_type='dengue_cluster' AND r.geometry IS NOT NULL AND ST_Intersects(h.geometry,r.geometry)

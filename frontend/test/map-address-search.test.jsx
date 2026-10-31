@@ -184,3 +184,13 @@ it('rejects multiple exact block and street matches at different coordinates', (
     { address: '109A Canberra Walk Singapore 751109', latitude: 1.451, longitude: 103.821 },
   ])).toBeNull();
 });
+
+it('opens the compact control on tap without submitting an empty address', () => {
+  render(<MapAddressSearch onSelect={vi.fn()} onClear={vi.fn()} />);
+  const input = screen.getByLabelText('Find an address or postal code');
+  fireEvent.click(screen.getByRole('button', { name: 'Search map addresses' }));
+  expect(input).toHaveFocus();
+  expect(input.closest('.map-address-search')).toHaveAttribute('data-expanded', 'true');
+  expect(request).not.toHaveBeenCalled();
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+});

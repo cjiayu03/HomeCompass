@@ -28,6 +28,8 @@ from uuid import uuid4
 import asyncpg
 import httpx
 
+from ..source_text import source_label
+
 from ..local_env import load_local_project_env
 from .data_gov_sg import DATASET_API_ROOT, MAX_DOWNLOAD_BYTES, _safe_download_url
 
@@ -223,7 +225,7 @@ def parse_resource_payload(source: SourceDefinition, payload: bytes) -> tuple[li
         row_hash = hashlib.sha256(f"{source.dataset_id}|{stable_key}|{stable}|{geometry or ''}".encode("utf-8")).hexdigest()[:40]
         status = _pick(attributes, source.status_fields)
         rows.append((f"{source.resource_type}-{row_hash}", geometry, attributes, str(status) if status is not None else None))
-        rows[-1] = (rows[-1][0], rows[-1][1], {**attributes, "_source_name": str(name)}, rows[-1][3])
+        rows[-1] = (rows[-1][0], rows[-1][1], {**attributes, "_source_name": source_label(str(name))}, rows[-1][3])
     if not rows:
         raise ValueError("No valid source records were found; the previous layer was left untouched.")
     return rows, rejected

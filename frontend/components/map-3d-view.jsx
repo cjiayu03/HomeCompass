@@ -1,6 +1,7 @@
 'use client';
 
 import { resourceColors as RESOURCE_COLORS, resourceLabel } from '@/lib/map-layers';
+import { evidenceCollection } from '@/lib/score-locations';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { LngLatBounds, Map as MapLibreMap, Marker as MapLibreMarker, Popup, setWorkerUrl } from 'maplibre-gl';
@@ -140,7 +141,7 @@ function visibleMapOffset(map) {
   return [visibleCenterX - width / 2, 0];
 }
 
-export default function Map3DView({ homes, resources, visibleResourceTypes, selectedHome, hoveredHome, anchors=[], onUnavailable, onSelect, cameraIntent = INITIAL_CAMERA_INTENT, homeFocusRequest = 0, facilityFocus, centerRequest, addressTarget, addressRequest, addressFocused = false, onViewportChange }) {
+export default function Map3DView({ homes, resources, visibleResourceTypes, selectedHome, evidenceLocations = [], hoveredHome, anchors=[], onUnavailable, onSelect, cameraIntent = INITIAL_CAMERA_INTENT, homeFocusRequest = 0, facilityFocus, centerRequest, addressTarget, addressRequest, addressFocused = false, onViewportChange }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const activePopupRef = useRef(null);
@@ -156,6 +157,8 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
   const [mapLayoutRevision, setMapLayoutRevision] = useState(0);
 
   const homeData = useMemo(() => makeHomeCollection(homes, selectedHome, hoveredHome), [homes, selectedHome?.id, selectedHome?.lat, selectedHome?.lng, hoveredHome?.id, hoveredHome?.lat, hoveredHome?.lng]);
+  const evidenceCoordinates = JSON.stringify(evidenceLocations.map(item => [Number(item.lng), Number(item.lat)]));
+  const evidenceData = useMemo(() => evidenceCollection(selectedHome, evidenceLocations), [selectedHome, evidenceLocations]);
   const resourceData = useMemo(() => makeResourceCollection(resources, visibleResourceTypes), [resources, visibleResourceTypes]);
 
   useEffect(() => { onSelectRef.current = onSelect; }, [onSelect]);
@@ -277,7 +280,32 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
         });
         map.setLayoutProperty?.('hc-resource-points', 'visibility', 'none');
         bindResourceInteractions(map, ['hc-resource-point-icons'], activePopupRef);
+        map.addLayer({
+          id: 'hc-score-icons', type: 'symbol', source: 'hc-score-evidence',
+          filter: ['all', ['==', ['geometry-type'], 'Point'], ['in', ['get', 'resourceType'], ['literal', availableTypes]]],
+          layout: { 'icon-image': ['concat', 'hc-resource-icon-', ['get', 'resourceType']], 'icon-size': 0.85, 'icon-allow-overlap': true, 'icon-ignore-placement': true },
+        });
+        map.setFilter('hc-score-points', ['all', ['==', ['geometry-type'], 'Point'], ['!', ['in', ['get', 'resourceType'], ['literal', availableTypes]]]]);
+        map.on('click', 'hc-score-icons', event => {
+          const properties = event.features?.[0]?.properties || {};
+          activePopupRef.current?.remove();
+          activePopupRef.current = new Popup({ closeButton: true, maxWidth: '280px' }).setLngLat(event.lngLat).setDOMContent(popupContent(properties.name, `${properties.label} · ${properties.distanceLabel}`, properties.context, properties.sourceUrl)).addTo(map);
+        });
+        map.on('mouseenter', 'hc-score-icons', () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', 'hc-score-icons', () => { map.getCanvas().style.cursor = ''; });
+
       });
+      map.addSource('hc-score-evidence', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({ id: 'hc-score-connections', type: 'line', source: 'hc-score-evidence', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': .75, 'line-dasharray': [3, 4] } });
+      map.addLayer({ id: 'hc-score-points', type: 'circle', source: 'hc-score-evidence', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 8, 'circle-color': ['get', 'color'], 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2.5 } });
+      const labelFont = map.getStyle().layers.find(layer => layer.type === 'symbol' && layer.layout?.['text-font'])?.layout['text-font'] || ['Noto Sans Regular'];
+      if (map.getStyle().glyphs) map.addLayer({ id: 'hc-score-labels', type: 'symbol', source: 'hc-score-evidence', filter: ['==', ['geometry-type'], 'Point'], layout: { 'text-field': ['concat', ['get', 'name'], '\n', ['get', 'label'], ' · ', ['get', 'distanceLabel']], 'text-font': labelFont, 'text-size': 12, 'text-anchor': 'bottom', 'text-offset': [0, -1.1], 'text-allow-overlap': false }, paint: { 'text-color': '#183d2e', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
+      map.on('click', 'hc-score-points', event => {
+        const properties = event.features?.[0]?.properties || {};
+        new Popup({ closeButton: true, maxWidth: '280px' }).setLngLat(event.lngLat).setDOMContent(popupContent(properties.name, `${properties.label} · ${properties.distanceLabel}`, properties.context, properties.sourceUrl)).addTo(map);
+      });
+      map.on('mouseenter', 'hc-score-points', () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', 'hc-score-points', () => { map.getCanvas().style.cursor = ''; });
 
       map.on('click', 'hc-home-points', (event) => {
         const feature = event.features?.[0];
@@ -355,15 +383,32 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
   }, [mapReady, resourceData, visibleResourceTypes]);
 
   useEffect(() => {
+    if (mapReady) setSourceData(mapRef.current, 'hc-score-evidence', evidenceData);
+  }, [mapReady, evidenceData]);
+
+  useEffect(() => {
     const map = mapRef.current;
     if (!mapReady || !map || !selectedHome || !hasMapCoordinates(selectedHome) || addressFocused) return;
+    const coordinates = JSON.parse(evidenceCoordinates);
+    if (coordinates.length) {
+      const bounds = new LngLatBounds();
+      bounds.extend([Number(selectedHome.lng), Number(selectedHome.lat)]);
+      coordinates.forEach(point => bounds.extend(point));
+      const container = map.getContainer();
+      const desk = container.closest('.explore-desk');
+      const left = desk?.querySelector('.map-research-sidebar[data-state="open"]')?.getBoundingClientRect().width || 0;
+      const right = desk?.querySelector('.map-record-details')?.getBoundingClientRect().width || 0;
+      if (container.clientWidth - left - right < 160) return;
+      map.fitBounds(bounds, { padding: { top: 70, bottom: 100, left: left + 48, right: right + 48 }, maxZoom: 16, duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 350 });
+      return;
+    }
     map.flyTo({
       center: [Number(selectedHome.lng), Number(selectedHome.lat)],
       zoom: selectedHomeZoom(map.getZoom()),
       offset: visibleMapOffset(map),
       duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650,
     });
-  }, [mapReady, selectedHome?.id, selectedHome?.lat, selectedHome?.lng, homeFocusRequest, addressFocused, mapLayoutRevision]);
+  }, [mapReady, selectedHome?.id, selectedHome?.lat, selectedHome?.lng, homeFocusRequest, addressFocused, mapLayoutRevision, evidenceCoordinates]);
 
   useEffect(() => {
     const map = mapRef.current;

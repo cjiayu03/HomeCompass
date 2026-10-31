@@ -7,7 +7,7 @@ import {
   LocateFixed,
   UsersRound,
 } from 'lucide-react';
-import { Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createElement, Component, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useWorkspace } from '@/components/workspace-provider';
@@ -21,6 +21,7 @@ import { mapLayerIcons } from '@/lib/map-layer-icons';
 import { dedupePointFeatures, facilityLocationLabel } from '@/lib/geo-cluster';
 import { requestJson } from '@/lib/api-client';
 import { matchHomeMapCandidate, normalizeMapAddressCandidates } from '@/lib/map-address-search';
+import { selectedEvidenceLocations } from '@/lib/score-locations';
 
 class MapBoundary extends Component {
   state={failed:false};
@@ -128,6 +129,7 @@ export function MapPanel({ controlsTarget, cameraIntent, onCameraIntent, onAddre
   const [localVisibleResourceTypes, setLocalVisibleResourceTypes] = useState(() => mapResourceTypes || ['silver_zone']);
   const visibleResourceTypes = controlledResourceTypes ?? localVisibleResourceTypes;
   const nearest=useMemo(()=>!mapSelectedHome?[]:dedupePointFeatures(resources).filter(f=>f.geometry?.type==='Point'&&visibleResourceTypes.includes(f.properties?.resourceType)).map(feature=>({feature,name:feature.properties?.name||resourceLabel(feature.properties?.resourceType),distance:distanceM(mapSelectedHome,{lng:feature.geometry.coordinates[0],lat:feature.geometry.coordinates[1]})})).filter(f=>f.distance!=null).sort((a,b)=>a.distance-b.distance).slice(0,3),[mapSelectedHome,resources,visibleResourceTypes]);
+  const evidenceLocations = useMemo(() => selectedEvidenceLocations(mapSelectedHome, places), [mapSelectedHome, places]);
   const dengueSource = sourceStatus?.items?.find(source => source.resourceType === 'dengue_cluster');
   const dengueReview = sourceFreshness(dengueSource);
   const mappedCount = homes.filter(hasMapCoordinates).length;
@@ -212,8 +214,8 @@ export function MapPanel({ controlsTarget, cameraIntent, onCameraIntent, onAddre
   return (
     <section className={cn('relative isolate z-0 h-[clamp(360px,50dvh,440px)] min-h-0 overflow-hidden rounded-xl border bg-secondary shadow-soft lg:h-full', className)} aria-label={mapMode === '3d' ? 'Movable 3D neighborhood map' : 'Movable OpenStreetMap view'}>
       <div className="absolute inset-0 z-0">{mapMode === '3d'
-        ? <MapBoundary onUnavailable={fallback}><Map3DView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={mapSelectedHome} hoveredHome={mapHoveredHome} anchors={anchors} onUnavailable={fallback} onSelect={onSelect} cameraIntent={activeCameraIntent} homeFocusRequest={activeCameraIntent.type === 'home' ? activeCameraIntent.request : 0} facilityFocus={facilityFocus} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} /></MapBoundary>
-        : <MapView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={mapSelectedHome} hoveredHome={mapHoveredHome} anchors={anchors} onSelect={onSelect} cameraIntent={activeCameraIntent} homeFocusRequest={activeCameraIntent.type === 'home' ? activeCameraIntent.request : 0} facilityFocus={facilityFocus} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} />}</div>
+        ? <MapBoundary onUnavailable={fallback}><Map3DView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={mapSelectedHome} evidenceLocations={evidenceLocations} hoveredHome={mapHoveredHome} anchors={anchors} onUnavailable={fallback} onSelect={onSelect} cameraIntent={activeCameraIntent} homeFocusRequest={activeCameraIntent.type === 'home' ? activeCameraIntent.request : 0} facilityFocus={facilityFocus} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} /></MapBoundary>
+        : <MapView homes={homes} resources={resources} visibleResourceTypes={visibleResourceTypes} selectedHome={mapSelectedHome} evidenceLocations={evidenceLocations} hoveredHome={mapHoveredHome} anchors={anchors} onSelect={onSelect} cameraIntent={activeCameraIntent} homeFocusRequest={activeCameraIntent.type === 'home' ? activeCameraIntent.request : 0} facilityFocus={facilityFocus} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} />}</div>
       {unlocatedCount > 0 && <div className="pointer-events-none absolute bottom-14 left-3 z-10 max-w-[min(24rem,calc(100%-1.5rem))]">
         <p role="status" aria-label="Map location coverage" className="glass-card rounded-lg px-3 py-2 text-xs leading-4 text-foreground shadow-soft">{mappedCount} of {homes.length} loaded records have map locations. {unlocatedCount} lack verified coordinates, so they cannot appear as pins yet.</p>
       </div>}
@@ -230,10 +232,12 @@ export function MapPanel({ controlsTarget, cameraIntent, onCameraIntent, onAddre
         : <MapAddressSearch selectedAddress={addressTarget} onSelect={selectAddress} onClear={() => setAddressTarget(null)} optionsOpen={mapOptionsOpen} onSearchStart={() => setMapOptionsOpen(false)} />}
       {controlsTarget ? createPortal(mapControls, controlsTarget) : mapControls}
 
-      {mapSelectedHome && !addressTarget && <div className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[min(24rem,calc(100%-1.5rem))]">
-        <details className="glass-card pointer-events-auto rounded-lg px-3 py-2 text-xs">
-          <summary className="cursor-pointer font-semibold text-foreground">{mapSelectedHome.address}</summary>
-          <p className="mt-1">Nearest places in enabled layers:</p>
+      {mapSelectedHome && !addressTarget && <div className="pointer-events-none absolute bottom-3 left-3 z-10 max-w-[min(21rem,calc(100%-1.5rem))]">
+        <details key={mapSelectedHome.id} className="score-map-legend glass-card pointer-events-auto rounded-lg px-3 py-2 text-xs">
+          <summary className="min-h-8 cursor-pointer font-semibold text-foreground">{evidenceLocations.length ? `${evidenceLocations.length} supporting location${evidenceLocations.length === 1 ? '' : 's'}` : 'Score locations'}</summary>
+          <div className="max-h-44 overflow-y-auto overscroll-contain"><p className="mb-2 text-muted-foreground">{mapSelectedHome.address}</p>
+          {evidenceLocations.length ? <ul className="space-y-2">{evidenceLocations.map(item => <li key={item.id} className="flex gap-2"><span aria-hidden="true" className="mt-0.5 shrink-0" style={{ color: item.color }}>{createElement(mapLayerIcons[item.resourceType] || LocateFixed, { className: 'size-4' })}</span><div><p className="font-medium">{item.name}</p><p className="text-muted-foreground">{item.label} · {Number.isFinite(item.distanceM) ? `${Math.round(item.distanceM).toLocaleString()} m` : 'Distance unavailable'}</p><p className="text-muted-foreground">{item.context}</p></div></li>)}</ul> : <p className="text-muted-foreground">{Array.isArray(mapSelectedHome.scoreLocations) ? 'No mapped amenity evidence is available for this record.' : 'Reload results to see the locations supporting this score.'}</p>}
+          <p className="mt-2 font-medium">Nearest places in enabled layers:</p>
           {nearest.length ? nearest.map(({ feature, name, distance }, index) => {
             const type = feature.properties?.resourceType;
             const LayerIcon = mapLayerIcons[type] || LocateFixed;
@@ -242,8 +246,8 @@ export function MapPanel({ controlsTarget, cameraIntent, onCameraIntent, onAddre
               <LayerIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" style={{ color: resourceColors[type] }} />
               <span>{name} · {resourceLabel(type)} · {Math.round(distance)} m{location ? ` · ${location}` : ''}</span>
             </div>;
-          }) : <p>{visibleResourceTypes.some(type => !['silver_zone', 'school_zone', 'dengue_cluster'].includes(type)) ? 'No nearby point evidence in the loaded area.' : 'Turn on facility layers in Map options to see places near this home.'}</p>}
-          <p className="mt-1">Straight-line estimates; loaded map data may be incomplete.</p>
+          }) : <p>Turn on facility layers in Map options to see places near this home.</p>}
+          <p className="mt-2 text-muted-foreground">Connections show straight-line distances, not walking routes.</p></div>
         </details>
       </div>}
     </section>

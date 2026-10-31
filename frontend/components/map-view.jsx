@@ -2,8 +2,8 @@
 
 import { resourceColors, resourceLabel } from '@/lib/map-layers';
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Circle, CircleMarker, GeoJSON, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Circle, CircleMarker, GeoJSON, MapContainer, Marker, Popup, Polyline, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import { clusterPointFeatures, facilityLocationLabel } from '@/lib/geo-cluster';
 import { MapViewportListener } from '@/components/map-viewport-listener';
@@ -133,8 +133,9 @@ const mapAddressIcon = L.divIcon({
   iconAnchor: [16, 38],
 });
 
-function FlyToSelected({ home, request, addressFocused }) {
+function FlyToSelected({ home, locations = [], request, addressFocused }) {
   const map = useMap();
+  const locationCoordinates = JSON.stringify(locations.map(item => [Number(item.lat), Number(item.lng)]));
   useEffect(() => {
     map.closePopup();
     if (!hasMapCoordinates(home) || addressFocused) return;
@@ -144,6 +145,14 @@ function FlyToSelected({ home, request, addressFocused }) {
     const size = map.getSize();
     // A narrow phone panel must be collapsed before there is room to inspect the map.
     if (size.x - leftInset - rightInset < 160) return;
+    const coordinates = JSON.parse(locationCoordinates);
+    if (coordinates.length) {
+      map.fitBounds(L.latLngBounds([[home.lat, home.lng], ...coordinates]), {
+        paddingTopLeft: [leftInset + 48, 70], paddingBottomRight: [rightInset + 48, 100], maxZoom: 16,
+        animate: !window.matchMedia('(prefers-reduced-motion: reduce)').matches, duration: .35,
+      });
+      return;
+    }
     const zoom = selectedHomeZoom(map.getZoom());
     const visibleCenterX = (leftInset + size.x - rightInset) / 2;
     const targetPoint = map.project([Number(home.lat), Number(home.lng)], zoom);
@@ -151,7 +160,7 @@ function FlyToSelected({ home, request, addressFocused }) {
     const center = [shiftedCenter.lat, shiftedCenter.lng];
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) map.setView(center, zoom, { animate: false });
     else map.flyTo(center, zoom, { duration: 0.65 });
-  }, [home?.id, home?.lat, home?.lng, request, addressFocused, map]);
+  }, [home?.id, home?.lat, home?.lng, request, addressFocused, locationCoordinates, map]);
   return null;
 }
 
@@ -368,12 +377,42 @@ function ResourceFeatures({ features, visibleTypes }) {
 }
 
 const MemoResourceFeatures = memo(ResourceFeatures);
+function EvidencePoint({ item }) {
+  const map = useMap();
+  const [direction, setDirection] = useState(item.labelDirection);
+  const update = useCallback(() => {
+    const point = map.latLngToContainerPoint([Number(item.lat), Number(item.lng)]);
+    const size = map.getSize();
+    let next = item.labelDirection;
+    if ((next === 'right' && size.x - point.x < 200) || (next === 'left' && point.x < 200)) next = size.y - point.y > 100 ? 'bottom' : 'top';
+    if (next === 'top' || next === 'bottom') {
+      if (point.x < 100) next = 'right';
+      else if (size.x - point.x < 100) next = 'left';
+    }
+    if (next === 'top' && point.y < 90) next = 'bottom';
+    if (next === 'bottom' && size.y - point.y < 90) next = 'top';
+    setDirection(next);
+  }, [map, item.lat, item.lng, item.labelDirection]);
+  useMapEvents({ moveend: update, resize: update });
+  useEffect(update, [update]);
+  const evidenceIcon = useMemo(() => L.divIcon({
+    className: 'map-resource-marker-icon score-evidence-marker',
+    html: mapLayerMarkerMarkup(item.resourceType),
+    iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -13],
+  }), [item.resourceType]);
+  const offset = { right: [10, 0], left: [-10, 0], top: [0, -10], bottom: [0, 10] }[direction];
+  return <Marker position={[Number(item.lat), Number(item.lng)]} icon={evidenceIcon} title={item.name} alt={`${item.label}: ${item.name}`}>
+    <Tooltip key={direction} permanent direction={direction} offset={offset} opacity={1} className="score-location-label"><strong>{item.name}</strong><br />{item.label}{Number.isFinite(item.distanceM) && <> · {Math.round(item.distanceM).toLocaleString()} m</>}</Tooltip>
+    <Popup><strong>{item.name}</strong><br />{item.context}<br />{Number.isFinite(item.distanceM) ? `${Math.round(item.distanceM).toLocaleString()} m straight-line` : 'Distance unavailable'}{item.sourceVersion && <><br />Source: {item.sourceVersion}</>}</Popup>
+  </Marker>;
+}
+
 const HomeMarker = memo(function HomeMarker({ home, selected, hovered, onSelect }) {
   const events = useMemo(() => ({ click: () => onSelect(home) }), [onSelect, home]);
   return <Marker title={home.address} alt={`Map marker for ${home.address}`} position={[home.lat, home.lng]} icon={makeMarkerIcon(selected, hovered)} zIndexOffset={selected ? 2000 : hovered ? 1000 : 0} eventHandlers={events} />;
 });
 
-export default memo(function MapView({ homes, resources = [], visibleResourceTypes = [], selectedHome, hoveredHome, anchors=[], onSelect, cameraIntent, homeFocusRequest = 0, facilityFocus, centerRequest, addressTarget, addressRequest, addressFocused = false, onViewportChange }) {
+export default memo(function MapView({ homes, resources = [], visibleResourceTypes = [], selectedHome, evidenceLocations = [], hoveredHome, anchors=[], onSelect, cameraIntent, homeFocusRequest = 0, facilityFocus, centerRequest, addressTarget, addressRequest, addressFocused = false, onViewportChange }) {
   const mappedHomes = useMemo(() => homes.filter(hasMapCoordinates), [homes]);
   const markerHomes = useMemo(() => {
     const byId = new Map(mappedHomes.map((home) => [String(home.id), home]));
@@ -385,8 +424,13 @@ export default memo(function MapView({ homes, resources = [], visibleResourceTyp
   const tileUrl = process.env.NEXT_PUBLIC_MAP_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
   return <MapContainer center={[1.3521, 103.8198]} zoom={11} scrollWheelZoom zoomControl className="h-full min-h-0 w-full">
     <TileLayer attribution="&copy; OpenStreetMap contributors" url={tileUrl} />
-    <ResizeMap/><MapViewportListener onBoundsChange={onViewportChange} /><FitHomes homes={mappedHomes} selectedHome={selectedHome} addressTarget={addressTarget} /><FlyToSelected home={selectedHome} request={homeFocusRequest} addressFocused={addressFocused} /><FocusResource facilityFocus={facilityFocus} /><FlyToAddress target={addressTarget} request={addressRequest} focused={addressFocused} /><ResetSingapore request={centerRequest} cameraIntent={cameraIntent} /><MemoResourceFeatures features={resources} visibleTypes={visibleResourceTypes} /><HoverPreview home={hoveredHome} selectedHome={selectedHome} addressTarget={addressTarget} />
+    <ResizeMap/><MapViewportListener onBoundsChange={onViewportChange} /><FitHomes homes={mappedHomes} selectedHome={selectedHome} addressTarget={addressTarget} /><FlyToSelected locations={evidenceLocations} home={selectedHome} request={homeFocusRequest} addressFocused={addressFocused} /><FocusResource facilityFocus={facilityFocus} /><FlyToAddress target={addressTarget} request={addressRequest} focused={addressFocused} /><ResetSingapore request={centerRequest} cameraIntent={cameraIntent} /><MemoResourceFeatures features={resources} visibleTypes={visibleResourceTypes} /><HoverPreview home={hoveredHome} selectedHome={selectedHome} addressTarget={addressTarget} />
     {anchors.map((anchor,i)=><Circle key={anchor.id} center={[anchor.lat,anchor.lng]} radius={anchor.radius} pathOptions={{color:['#42624f','#627f90','#8a7898'][i%3],fillOpacity:0.08,weight:2,dashArray:'5 5'}}><Popup>{anchor.label}: {anchor.radius.toLocaleString()} m straight-line reach</Popup></Circle>)}
+    {hasMapCoordinates(selectedHome) && evidenceLocations.map(item => <Fragment key={item.id}>
+      <Polyline positions={[[Number(selectedHome.lat), Number(selectedHome.lng)], [Number(item.lat), Number(item.lng)]]} interactive={false} pathOptions={{ color: '#ffffff', weight: 5, opacity: .8 }} />
+      <Polyline positions={[[Number(selectedHome.lat), Number(selectedHome.lng)], [Number(item.lat), Number(item.lng)]]} interactive={false} pathOptions={{ className: 'score-evidence-connection', color: item.color, weight: 2.5, opacity: .95, dashArray: '5 7' }} />
+      <EvidencePoint item={item} />
+    </Fragment>)}
     {markerHomes.map(home => <HomeMarker key={home.id} home={home} selected={home.id === selectedHome?.id} hovered={home.id === hoveredHome?.id} onSelect={onSelect} />)}
     <AddressMarker target={addressTarget} />
   </MapContainer>;

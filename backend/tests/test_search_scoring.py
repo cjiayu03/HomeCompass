@@ -166,3 +166,53 @@ def test_search_without_budget_preserves_raw_affordability_price(monkeypatch):
     assert components["affordability"]["targetValue"] is None
     assert components["affordability"]["normalizedValue"] is None
     assert components["affordability"]["evidenceStatus"] == "missing"
+
+
+def test_search_exposes_the_exact_locations_linked_to_score_distances(monkeypatch):
+    import json
+
+    locations = {
+        f"{name}_location": json.dumps({
+            "id": f"{name}-source-row", "name": f"Verified {name}",
+            "resourceType": resource_type, "lat": 1.301 + index / 1000,
+            "lng": 103.801, "sourceId": f"{name}-source", "sourceVersion": "2026-09",
+            "sourceUrl": "https://data.gov.sg/datasets/example",
+        })
+        for index, (name, resource_type) in enumerate([
+            ("school", "moe_school"), ("childcare", "childcare"), ("care", "chas_clinic")
+        ])
+    }
+    response = _post_search(monkeypatch, [_home_row(**locations)], {"budget": 500000})
+    assert response.status_code == 200
+    item = response.json()["items"][0]
+    assert len(item["scoreLocations"]) == 3
+    components = _components(item)
+    for location in item["scoreLocations"]:
+        component = components[location["component"]]
+        assert location["distanceM"] == component["rawValue"]
+        assert location["contribution"] == component["contribution"]
+        assert location["usedInScore"] is True
+        assert location["id"] == f"{location['component']}-source-row"
+        assert location["sourceVersion"] == "2026-09"
+
+
+def test_unranked_and_missing_locations_are_not_claimed_as_scoring_evidence(monkeypatch):
+    location = {"id": "school-1", "name": "School", "lat": 1.3, "lng": 103.8}
+    response = _post_search(monkeypatch, [_home_row(school_location=location)], {
+        "budget": 500000,
+        "priority_weights": {"school": 0, "childcare": 0, "care": 0, "affordability": 1},
+    })
+    item = response.json()["items"][0]
+    assert len(item["scoreLocations"]) == 1
+    assert item["scoreLocations"][0]["usedInScore"] is False
+    assert main._home(_home_row(latitude=None, school_distance_m=None,
+        childcare_distance_m=None, care_distance_m=None))["scoreLocations"] == []
+
+
+def test_amenity_labels_do_not_render_source_replacement_characters():
+    name = 'THK\ufffdActive Ageing Centre\ufffd@ Kaki Bukit'
+    item = main._home(_home_row(care_name=name, care_location={
+        'id': 'care-1', 'name': name, 'lat': 1.3, 'lng': 103.8,
+    }))
+    assert item['care'] == 'THK Active Ageing Centre @ Kaki Bukit · 1,500 m straight-line'
+    assert item['scoreLocations'][0]['name'] == 'THK Active Ageing Centre @ Kaki Bukit'

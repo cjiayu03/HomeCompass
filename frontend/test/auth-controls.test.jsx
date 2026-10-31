@@ -68,3 +68,15 @@ it('closes the previous account deletion confirmation when the owner changes', a
   await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
   expect(screen.getByText('b@example.com')).toBeInTheDocument();
 });
+
+it('shows household preferences and useful links from the current workspace', () => {
+  setup({ user: null });
+  workspace.mockReturnValue({ ...workspace(), brief: { adults: 2, children: 1, olderAdults: 0, budget: 650000, preferredTowns: ['Bishan'], preferredFlatType: '4 ROOM' }, places: [{ id: 'school' }], shortlistIds: ['one', 'two'], compareIds: ['one'] });
+  render(<AccountPage />);
+  expect(screen.getByText('2 adults, 1 child')).toBeInTheDocument();
+  expect(screen.getByText('Planning your next home in Bishan.')).toBeInTheDocument();
+  expect(screen.getByText('4 ROOM')).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: /Saved homes 2 saved records/ })).toHaveAttribute('href', '/shortlist');
+  expect(screen.getByRole('link', { name: /Places that matter 1 saved place/ })).toHaveAttribute('href', '#household-places');
+  expect(screen.getByRole('link', { name: 'Sign in to sync' })).toHaveAttribute('href', '/login?next=%2Faccount');
+});

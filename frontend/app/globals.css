@@ -716,3 +716,60 @@ body:has(.app-shell--explore) { overflow: hidden; }
 
 .explore-detail-heading { background: hsl(var(--accent) / .35); }
 .explore-detail-label { display: flex; align-items: center; gap: 6px; color: hsl(var(--primary)); font-size: 13px; line-height: 1.5; font-weight: 650; }
+
+.leaflet-tooltip.score-location-label { width: max-content; max-width: 180px; white-space: normal; line-height: 1.4; border: 1px solid hsl(var(--border)); border-radius: 7px; background: hsl(var(--popover)); color: hsl(var(--popover-foreground)); padding: 5px 8px; font-family: var(--font-sans),sans-serif; font-size: 12px; box-shadow: 0 2px 8px rgb(0 0 0 / .12); }
+.score-map-legend { background: hsl(var(--card) / .97); }
+.score-map-legend summary { display: list-item; }
+
+/* Address navigation stays small until it is needed, including on touch. */
+.map-address-form { display: flex; align-items: center; gap: 4px; width: 136px; max-width: 100%; min-height: 44px; padding: 3px; border: 1px solid hsl(var(--border)); border-radius: 24px; background: hsl(var(--background)); box-shadow: 0 2px 8px rgb(0 0 0 / .08); transition: width 180ms ease; }
+.map-address-input { width: 0; min-width: 0; flex: 0 1 0; padding: 0; opacity: 0; background: transparent; border-radius: 20px; font-size: 14px; outline: none; }
+.map-address-submit { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1 0 auto; min-width: 36px; height: 36px; padding: 0 10px; border-radius: 20px; font-size: 12px; font-weight: 600; color: hsl(var(--foreground)); }
+.map-address-submit:hover { background: hsl(var(--secondary)); }
+.map-address-submit:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.map-address-submit:disabled { opacity: .5; }
+.map-address-search[data-expanded="true"] .map-address-form, .map-address-form:focus-within { width: 100%; }
+.map-address-search[data-expanded="true"] .map-address-input, .map-address-form:focus-within .map-address-input { width: auto; flex: 1 1 0; height: 36px; padding: 0 9px; opacity: 1; }
+.map-address-search[data-expanded="true"] .map-address-submit, .map-address-form:focus-within .map-address-submit { flex: 0 0 36px; padding: 0; background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+.map-address-search[data-expanded="true"] .map-address-compact-label, .map-address-form:focus-within .map-address-compact-label { display: none; }
+@media (hover: hover) {
+  .map-address-form:hover { width: 100%; }
+  .map-address-form:hover .map-address-input { width: auto; flex: 1 1 0; height: 36px; padding: 0 9px; opacity: 1; }
+  .map-address-form:hover .map-address-submit { flex: 0 0 36px; padding: 0; background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+  .map-address-form:hover .map-address-compact-label { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .map-address-form { transition: none; } }
+
+.account-page { background: hsl(var(--background)); padding-bottom: 90px; }
+.account-page .glass-card { background: hsl(var(--card)); box-shadow: none; backdrop-filter: none; }
+.account-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 8px 0 4px; }
+.account-heading > div { max-width: 42rem; }
+.account-overview { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); border-block: 1px solid hsl(var(--border)); }
+.account-preferences { min-width: 0; padding: 24px 28px 24px 0; }
+.account-edit-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font-size: 13px; font-weight: 600; color: hsl(var(--primary)); }
+.account-edit-link:hover { text-decoration: underline; }
+.account-preference-list { margin-top: 12px; }
+.account-preference-list > div { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 16px; padding: 11px 0; border-bottom: 1px solid hsl(var(--border) / .65); font-size: 14px; }
+.account-preference-list dt { color: hsl(var(--muted-foreground)); }
+.account-preference-list dd { font-weight: 500; overflow-wrap: anywhere; }
+.account-shortcuts { min-width: 0; padding: 28px 0 24px 28px; border-left: 1px solid hsl(var(--border)); }
+.account-shortcut { display: flex; align-items: center; gap: 14px; min-height: 80px; padding: 14px 0; border-bottom: 1px solid hsl(var(--border) / .65); }
+.account-shortcut > span { min-width: 0; flex: 1; }
+.account-shortcut strong, .account-shortcut span span { display: block; }
+.account-shortcut strong { font-size: 14px; font-weight: 600; }
+.account-shortcut span span { margin-top: 4px; font-size: 12px; color: hsl(var(--muted-foreground)); }
+.account-shortcut:hover strong { color: hsl(var(--primary)); text-decoration: underline; }
+.account-shortcut:focus-visible, .account-edit-link:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 4px; }
+.account-sync-summary { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.account-places { scroll-margin-top: 20px; }
+@media (max-width: 767px) {
+  .account-heading { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .account-heading h1 { font-size: 26px; }
+  .account-overview { grid-template-columns: minmax(0, 1fr); }
+  .account-preferences { padding: 20px 0; }
+  .account-shortcuts { padding: 20px 0; border-left: 0; border-top: 1px solid hsl(var(--border)); }
+  .account-sync-summary { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .account-preference-list > div { grid-template-columns: 115px minmax(0, 1fr); gap: 12px; }
+}
+.map-address-form:focus-within { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.map-address-input:focus-visible { outline: none; box-shadow: none; }

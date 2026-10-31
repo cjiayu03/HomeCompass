@@ -391,3 +391,16 @@ def test_cursor_values_are_bound_parameters_not_sql_text(monkeypatch):
     sql, values = connection.home_queries[0]
     assert marker not in sql
     assert marker in values
+
+
+def test_resource_labels_are_readable_without_changing_cursor_keys(monkeypatch):
+    name = 'THK\ufffdActive Ageing Centre\ufffd@ Kaki Bukit'
+    connection = _PaginationConnection(resources=[
+        _resource_row('resource-a', 'dementia_gtp', name, 103.8, 1.3),
+        _resource_row('resource-b', 'dementia_gtp', name, 103.8, 1.3),
+    ])
+    response = _response(monkeypatch, connection, 'GET', '/api/v1/resources', params={'limit': 1})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['features'][0]['properties']['name'] == 'THK Active Ageing Centre @ Kaki Bukit'
+    assert decode_cursor(payload['nextCursor'])['name'] == name
