@@ -404,3 +404,15 @@ def test_resource_labels_are_readable_without_changing_cursor_keys(monkeypatch):
     payload = response.json()
     assert payload['features'][0]['properties']['name'] == 'THK Active Ageing Centre @ Kaki Bukit'
     assert decode_cursor(payload['nextCursor'])['name'] == name
+
+
+def test_score_cursor_is_bound_as_a_database_number(monkeypatch):
+    connection = _PaginationConnection(homes=[_home_row('home-after', date(2026, 4, 1))])
+    cursor = encode_cursor({'score': '97.3', 'observed_on': '2026-04-03', 'id': 'home-before'})
+    response = _response(monkeypatch, connection, 'GET', '/api/v1/homes', params={'cursor': cursor})
+    assert response.status_code == 200
+    sql, values = connection.home_queries[0]
+    score_param = re.search(r'ranking_score < \$(\d+)::double precision', sql)
+    bound_score = values[int(score_param.group(1)) - 1]
+    assert isinstance(bound_score, float)
+    assert bound_score == 97.3

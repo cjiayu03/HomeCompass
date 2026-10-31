@@ -623,6 +623,9 @@ LEFT JOIN LATERAL (
 
     where = f"WHERE {' AND '.join(predicates)}" if predicates else ""
     count_values = list(values)
+    count_from = f"candidate_home h {place_joins} {where}"
+    if request.distinct_blocks:
+        count_from = f"(SELECT h.town, h.address FROM {count_from} GROUP BY h.town, h.address) matching_blocks"
     count_sql = _LATEST_RESOURCE_CTE + location_cte + place_cte + f""", active_cache AS (
              SELECT state.generation_id
              FROM home_scoring_evidence_state state
@@ -635,9 +638,7 @@ LEFT JOIN LATERAL (
                  SELECT array_agg(id ORDER BY id) FROM latest_resource_sources
                ), '{{}}'::uuid[])
          ) SELECT count(*) AS total, (SELECT generation_id FROM active_cache) AS generation_id
-             FROM candidate_home h
-             {place_joins}
-             {where}"""
+             FROM {count_from}"""
 
     scoring_weights = priority_weights if priority_weights is not None else request.priority_weights
     scoring_weights = scoring_weights or DEFAULT_WEIGHTS
@@ -687,7 +688,7 @@ LEFT JOIN LATERAL (
         score = cursor.get("score")
         observed_on = date.fromisoformat(cursor["observed_on"]) if cursor["observed_on"] else None
         if score is not None:
-            values.append(score)
+            values.append(float(score))
             score_param = len(values)
         values.extend([observed_on, cursor["id"]])
         observed_on_param = len(values) - 1
@@ -706,10 +707,20 @@ LEFT JOIN LATERAL (
         )
     values.append(request.limit + 1)
     limit_placeholder = len(values)
+    block_cte = ""
+    page_source = "ranked_homes"
+    if request.distinct_blocks:
+        # Choose the best matching transaction for each block before applying
+        # the page cursor, so older sales cannot consume an entire result page.
+        block_cte = """, block_homes AS MATERIALIZED (
+             SELECT DISTINCT ON (town, address) * FROM ranked_homes
+             ORDER BY town, address, ranking_score DESC NULLS LAST,
+                      observed_on DESC NULLS LAST, id
+         )"""
+        page_source = "block_homes"
     sql = _LATEST_RESOURCE_CTE + location_cte + place_cte + f""", evidence_homes AS MATERIALIZED (
-             SELECT h.*, evidence.school_name, evidence.school_distance_m,
-                    evidence.childcare_name, evidence.childcare_distance_m,
-                    evidence.care_name, evidence.care_distance_m,
+             SELECT h.id, h.town, h.address, h.price_observation_cents, h.observed_on,
+                    evidence.school_distance_m, evidence.childcare_distance_m, evidence.care_distance_m,
                     {place_distances_select}
              FROM candidate_home h {place_joins}
              LEFT JOIN home_scoring_evidence evidence
@@ -723,9 +734,17 @@ LEFT JOIN LATERAL (
              FROM evidence_homes
          ), ranked_homes AS MATERIALIZED (
              SELECT normalized_homes.*, {score_expression} AS ranking_score FROM normalized_homes
-         ), page_homes AS MATERIALIZED (
-             SELECT * FROM ranked_homes {cursor_filter}
+         ){block_cte}, selected_homes AS MATERIALIZED (
+             SELECT * FROM {page_source} {cursor_filter}
              ORDER BY ranking_score DESC NULLS LAST, observed_on DESC NULLS LAST, id LIMIT ${limit_placeholder}
+         ), page_homes AS MATERIALIZED (
+             SELECT original.*, selected.place_distances, selected.ranking_score,
+                    evidence.school_name, selected.school_distance_m,
+                    evidence.childcare_name, selected.childcare_distance_m,
+                    evidence.care_name, selected.care_distance_m
+             FROM selected_homes selected JOIN candidate_home original ON original.id = selected.id
+             LEFT JOIN home_scoring_evidence evidence
+               ON evidence.generation_id = ${cache_generation_param}::uuid AND evidence.home_id = selected.id
          ) SELECT h.id, h.address, h.town, h.flat_type, h.price_observation_cents, h.observed_on,
                     h.source_semantics, h.floor_area_sqm, h.storey_range, h.lease_commence_year,
                     h.geocode_status, h.geometry_source, h.geocoded_at,
@@ -1164,6 +1183,7 @@ async def resources(
 @app.get("/api/v1/homes")
 async def homes(
     query: str = "",
+    distinct_blocks: bool = True,
     budget: int | None = None,
     town: str | None = None,
     bounds: str | None = None,
@@ -1175,6 +1195,7 @@ async def homes(
     request = _validated_query_model(
         SearchRequest,
         query=query,
+        distinct_blocks=distinct_blocks,
         budget=budget,
         town=town,
         bounds=bounds,
@@ -1190,6 +1211,7 @@ async def homes(
     if not score_ranking_available:
         limitations.append("Fit ranking is temporarily unavailable until the scoring evidence cache is refreshed.")
     return {"items": results, "count": len(results), "total": total, "nextCursor": next_cursor, "hasMore": has_more,
+            "distinctBlocks": request.distinct_blocks,
             "scoreRankingAvailable": score_ranking_available,
             "sourceStatus": {"hdb": {"state": "database-snapshot", "datasetId": HDB_RESALE_DATASET_ID}},
             "limitations": limitations, **live_result_metadata(source_summary, limitations)}
@@ -1260,6 +1282,7 @@ async def search(
         "nextCursor": next_cursor,
         "hasMore": has_more,
         "criteria": request.model_dump(),
+        "distinctBlocks": request.distinct_blocks,
         "sourceStatus": {"hdb": {"state": "database-snapshot", "datasetId": HDB_RESALE_DATASET_ID}},
         "sourceSnapshotIds": source_snapshot_ids,
         "unappliedCriteria": unsupported,

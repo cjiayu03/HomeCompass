@@ -57,7 +57,7 @@ export default function ExplorePage() {
   const detailOpener = useRef(null);
   const previousDetailId = useRef('');
   const [sort, setSort] = useState('fit');
-  const [groupBlocks, setGroupBlocks] = useState(true);
+  const groupBlocks = workspace.appliedDistinctBlocks !== false;
   const [linkedRecord, setLinkedRecord] = useState(null);
   const [detailId, setDetailId] = useState('');
   const [selectedMapHome, setSelectedMapHome] = useState(null);
@@ -204,7 +204,7 @@ export default function ExplorePage() {
     const error = briefValidationError(nextBrief);
     if (error) { setFilterError(error); return null; }
     setFilterError('');
-    const result = await applySearch(nextQuery, nextBrief, searchOptions);
+    const result = await applySearch(nextQuery, nextBrief, { distinctBlocks: groupBlocks, ...searchOptions });
     if (result != null) { setDetailId(''); updateLocation(nextBrief, { detailId: '', bounds: searchOptions.bounds || null }); }
     return result;
   }
@@ -293,7 +293,7 @@ export default function ExplorePage() {
   const onMapSelect = useStableEvent(selectFromMap);
   const onSearchMapArea = useStableEvent(() => runSearch(workspace.appliedQuery ?? query, appliedBrief, { bounds: viewportBounds, interpret: false }));
   const collectionControls = (
-<div className="explore-collection-bar"><div className="flex items-center gap-1" role="group" aria-label="Record collection"><Button variant={!savedOnly ? 'soft' : 'ghost'} aria-pressed={!savedOnly} onClick={() => changeView(false)} aria-label="All results"><span className="collection-label-wide">All results</span><span className="collection-label-compact">All</span></Button><Button variant={savedOnly ? 'soft' : 'ghost'} aria-pressed={savedOnly} onClick={() => changeView(true)}><Bookmark aria-hidden="true" className="size-4" />Saved ({shortlistIds.length})</Button></div><div className="flex items-center gap-2"><ComparisonAction homes={selectedHomes} onRemove={onCompareRecord} onOpen={() => setCompareOpen(true)} /><details className="explore-sort"><summary title="Sort and group">Sort</summary><div className="explore-sort-menu"><label className="grid gap-2 text-sm">Sort results<select className="h-11 rounded-lg border bg-background px-2" value={sort} onChange={event => setSort(event.target.value)}><option value="fit">Fit score · all results</option><option value="recent">Most recent loaded</option><option value="price">Recorded price · loaded</option></select></label>{!savedOnly && <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={groupBlocks} onChange={event => setGroupBlocks(event.target.checked)} />Group repeated block records</label>}</div></details><Button className="explore-results-toggle" variant={mapResultsOpen ? 'soft' : 'outline'} aria-pressed={mapResultsOpen || Boolean(detailId)} onClick={() => { if (detailId) closeDetail(); else setMapResultsOpen(current => !current); }}>Results</Button></div></div>
+<div className="explore-collection-bar"><div className="flex items-center gap-1" role="group" aria-label="Record collection"><Button variant={!savedOnly ? 'soft' : 'ghost'} aria-pressed={!savedOnly} onClick={() => changeView(false)} aria-label="All results"><span className="collection-label-wide">All results</span><span className="collection-label-compact">All</span></Button><Button variant={savedOnly ? 'soft' : 'ghost'} aria-pressed={savedOnly} onClick={() => changeView(true)}><Bookmark aria-hidden="true" className="size-4" />Saved ({shortlistIds.length})</Button></div><div className="flex items-center gap-2"><ComparisonAction homes={selectedHomes} onRemove={onCompareRecord} onOpen={() => setCompareOpen(true)} /><details className="explore-sort"><summary title="Sort and group">Sort</summary><div className="explore-sort-menu"><label className="grid gap-2 text-sm">Sort results<select className="h-11 rounded-lg border bg-background px-2" value={sort} onChange={event => setSort(event.target.value)}><option value="fit">Fit score · all results</option><option value="recent">Most recent loaded</option><option value="price">Recorded price · loaded</option></select></label>{!savedOnly && <label className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={groupBlocks} disabled={busy} onChange={event => { void runSearch(query, appliedBrief, { interpret: false, distinctBlocks: event.target.checked }); }} />One best-fit record per block</label>}</div></details><Button className="explore-results-toggle" variant={mapResultsOpen ? 'soft' : 'outline'} aria-pressed={mapResultsOpen || Boolean(detailId)} onClick={() => { if (detailId) closeDetail(); else setMapResultsOpen(current => !current); }}>Results</Button></div></div>
   );
   const toolbar = <>
     <header className="explore-topbar">
@@ -328,11 +328,11 @@ export default function ExplorePage() {
 
   </>;
   const resultsPanel = (
-<section className="explore-results" aria-label="Historical transaction results"><div className="explore-results-heading"><div><h2>{savedOnly ? 'Your saved places' : 'Places to explore'}</h2><p>{savedOnly ? `${visibleHomes.length} saved records` : `${homes.length.toLocaleString()} of ${(pagination?.total ?? homes.length).toLocaleString()} records loaded`}</p></div><span className="explore-source-note">Past sales,<br />not live listings</span></div>{collectionControls}<div ref={resultsRef} className="explore-results-scroll" aria-busy={busy}>
+<section className="explore-results" aria-label="Historical transaction results"><div className="explore-results-heading"><div><h2>{savedOnly ? 'Your saved places' : 'Places to explore'}</h2><p>{savedOnly ? `${visibleHomes.length} saved records` : `${homes.length.toLocaleString()} of ${(pagination?.total ?? homes.length).toLocaleString()} ${groupBlocks ? 'blocks' : 'records'} loaded`}</p></div><span className="explore-source-note">Past sales,<br />not live listings</span></div>{collectionControls}<div ref={resultsRef} className="explore-results-scroll" aria-busy={busy}>
         {recordGroups.map(({ home, count }) => <div key={home.id} className="space-y-2">{count > 1 && <p className="px-2 text-xs text-muted-foreground">{count} loaded sales at this block / flat type · latest dated observation shown</p>}<HomeCard variant="browse" compact home={home} saved={shortlistIds.includes(home.id)} selected={selectedHomes.some(item => item.id === home.id)} mapActive={selectedMapHome?.id === home.id} onLocate={onLocateRecord} onSave={onSaveRecord} onCompare={onCompareRecord} onInspect={onInspectRecord} /></div>)}
         {!visibleHomes.length && !busy && homeState?.status !== 'idle' && <div className="grid min-h-64 content-center rounded-xl border border-dashed p-5 text-center"><h3 className="text-lg font-semibold">{empty}</h3><p className="mt-2 text-sm leading-6 text-muted-foreground">{savedOnly ? 'Save a location from All results to keep its evidence here.' : homeState?.status === 'error' ? 'Your search is retained. Retry the same request to continue.' : 'Try fewer requirements or a wider area.'}</p>{savedOnly ? <Button variant="outline" className="mx-auto mt-4" onClick={() => changeView(false)}>Browse all results</Button> : <Button variant="outline" className="mx-auto mt-4" onClick={homeState?.status === 'error' ? retryHomes : reset}> {homeState?.status === 'error' ? 'Retry search' : 'Reset search'}</Button>}</div>}
     {!savedOnly && !visibleHomes.length && !busy && ['empty', 'success'].includes(homeState?.status) && <div className="mt-4"><EmptyRecovery brief={appliedBrief} lastSearchSnapshot={lastSearchSnapshot} applySearch={runSearch} fixtureMode={fixtureMode} /></div>}
-        {!savedOnly && pagination?.hasMore && <Button variant="outline" className="w-full" disabled={busy} onClick={loadMoreHomes}>{busy ? 'Loading…' : 'Load more transactions'}</Button>}
+        {!savedOnly && pagination?.hasMore && <Button variant="outline" className="w-full" disabled={busy} onClick={loadMoreHomes}>{busy ? 'Loading…' : groupBlocks ? 'Load more blocks' : 'Load more transactions'}</Button>}
       </div></section>
   );
   const detailsPanel = (

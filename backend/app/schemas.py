@@ -261,6 +261,7 @@ def _validate_request_cursor(value: str | None, expected_keys: frozenset[str]):
 
 class SearchRequest(BaseModel):
     query: str = Field(default="", max_length=160)
+    distinct_blocks: bool = True
     budget: int | None = Field(default=None, ge=0, le=10_000_000)
     town: str | None = Field(default=None, max_length=80)
     towns: list[str] = Field(default_factory=list, max_length=30)

@@ -955,7 +955,10 @@ export function WorkspaceProvider({ children }) {
         if (kind === 'home') homesRef.current = data;
       }
       if (kind === 'home') setPagination(pageState(payload, Array.isArray(payload.items) ? payload.items : data));
-      setState((current) => successState(payload, kind === 'source' ? data.items || [] : appliedData, current));
+      setState((current) => ({
+        ...successState(payload, kind === 'source' ? data.items || [] : appliedData, current),
+        ...(kind === 'home' ? { distinctBlocks: payload.distinctBlocks ?? payload.criteria?.distinct_blocks ?? true } : {}),
+      }));
       onSuccess?.(payload, data);
       return data;
     } catch (error) {
@@ -1675,7 +1678,7 @@ export function WorkspaceProvider({ children }) {
     homesRef.current = results;
     setPagination({ limit: HOME_PAGE_LIMIT, total: results.length, nextCursor: null, hasMore: false });
     activeHomePageRequest.current = null;
-    setHomeState(fixtureState(results));
+    setHomeState({ ...fixtureState(results), distinctBlocks: options.distinctBlocks !== false });
     flash(results.length ? `${results.length} labelled fixture candidates found.` : 'No homes match every current filter. Adjust the filters to search again.', results.length ? 'info' : 'warning');
     return results;
   }
@@ -1790,6 +1793,7 @@ export function WorkspaceProvider({ children }) {
           const requestCriteria = {
             ...criteria,
             priority_weights: priorityWeights,
+            distinct_blocks: options.distinctBlocks !== false,
             place_constraints: serverPlaceConstraints,
             limit: HOME_PAGE_LIMIT,
             ...(cursor ? { cursor } : {}),
@@ -2185,6 +2189,7 @@ export function WorkspaceProvider({ children }) {
     homes: exposedHomes,
     setHomes: setCurrentHomes,
     homeState: exposedHomeState,
+    appliedDistinctBlocks: exposedHomeState.distinctBlocks !== false,
     pagination: exposedPagination,
     loadMoreHomes,
     resourceFeatures,
