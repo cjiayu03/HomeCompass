@@ -12,7 +12,8 @@ import { HOME_SAVED_EVENT, COMPARISON_ADDED_EVENT } from '@/lib/workspace-events
 const WorkspaceContext = createContext(null);
 const priorityWeightKeys = Object.keys(defaultBrief.priorityWeights);
 const HOME_PAGE_LIMIT = 50;
-const RESOURCE_PAGE_LIMIT = 500;
+const RESOURCE_PAGE_LIMIT = 100;
+const RESOURCE_MAX_PAGES_PER_LAYER = 5;
 const GUEST_SNAPSHOT_STORAGE_KEY = 'homecompass.guest-sync-pending';
 const GUEST_SYNC_KEY_STORAGE_KEY = 'homecompass.guest-sync-key';
 const GUEST_SYNC_FINGERPRINT_STORAGE_KEY = 'homecompass.guest-sync-fingerprint';
@@ -992,17 +993,31 @@ export function WorkspaceProvider({ children }) {
     const selectedTypes = [...mapResourceTypesRef.current];
     return runRequest('resource', async (signal) => {
       if (!selectedTypes.length) return { features: [], dataMode: 'live', hasMore: false };
-      // Bound each enabled layer independently so dense park/clinic data cannot
-      // consume the whole page and hide smaller community or health layers.
-      const pages = await Promise.all(selectedTypes.map(type => {
-        const layerParams = new URLSearchParams(params);
-        layerParams.set('resource_type', type);
-        return requestJson(`/api/v1/resources?${layerParams}`, { signal });
+      // Fetch smaller GeoJSON pages so complex polygons do not make one map
+      // request excessively large. Keep the previous 500-feature per-layer
+      // ceiling and follow the API cursor within that bound.
+      const pages = await Promise.all(selectedTypes.map(async type => {
+        const features = [];
+        let cursor = null;
+        let lastPage = null;
+        let hasMore = false;
+        for (let pageIndex = 0; pageIndex < RESOURCE_MAX_PAGES_PER_LAYER; pageIndex += 1) {
+          const layerParams = new URLSearchParams(params);
+          layerParams.set('resource_type', type);
+          layerParams.set('limit', String(RESOURCE_PAGE_LIMIT));
+          if (cursor) layerParams.set('cursor', cursor);
+          lastPage = await requestJson(`/api/v1/resources?${layerParams}`, { signal });
+          features.push(...requireResultArray(lastPage, 'features'));
+          cursor = lastPage.nextCursor || null;
+          hasMore = lastPage.hasMore === true && Boolean(cursor);
+          if (!hasMore) break;
+        }
+        return { ...lastPage, features, hasMore, nextCursor: hasMore ? cursor : null };
       }));
       const denguePage = pages.find(page => page?.dengue);
-      return { ...pages[0], ...(denguePage ? { dengue: denguePage.dengue } : {}), features: pages.flatMap(page => requireResultArray(page, 'features')),
-        hasMore: pages.some(page => page.hasMore === true), nextCursor: null,
-        total: pages.reduce((sum, page) => sum + (Number.isFinite(page.total) ? page.total : page.features.length), 0) };
+      const features = pages.flatMap(page => requireResultArray(page, 'features'));
+      return { ...pages[0], ...(denguePage ? { dengue: denguePage.dengue } : {}), features, count: features.length,
+        hasMore: pages.some(page => page.hasMore === true), nextCursor: null, total: features.length };
     },
       (payload) => requireResultArray(payload, 'features'), (payload) => {
         if (Array.isArray(payload.counts)) mapResourceCountsRef.current = payload.counts;
