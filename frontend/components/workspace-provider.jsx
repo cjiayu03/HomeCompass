@@ -1184,6 +1184,7 @@ export function WorkspaceProvider({ children }) {
           mode: snapshot.mode,
           criteria: snapshot.criteria,
           scoring_version: snapshot.metadata.scorePolicyVersion,
+          sourceSnapshotIds: snapshot.sourceSnapshotIds,
         }),
       });
       if (!isCurrentOwner()) return;

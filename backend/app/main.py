@@ -750,7 +750,12 @@ LEFT JOIN LATERAL (
                AND state.resource_snapshot_ids = COALESCE((
                  SELECT array_agg(id ORDER BY id) FROM latest_resource_sources
                ), '{{}}'::uuid[])
-         ) SELECT count(*) AS total, (SELECT generation_id FROM active_cache) AS generation_id
+         ) SELECT count(*) AS total, (SELECT generation_id FROM active_cache) AS generation_id,
+             (SELECT COALESCE(jsonb_agg(snapshot_id::text ORDER BY snapshot_id), '[]'::jsonb)
+              FROM (SELECT DISTINCT source_snapshot_id AS snapshot_id FROM candidate_home
+                    UNION SELECT id AS snapshot_id FROM latest_resource_sources
+                    UNION SELECT id AS snapshot_id FROM latest_dengue_snapshot
+                    ORDER BY snapshot_id LIMIT 20) search_sources) AS source_snapshot_ids
              FROM {count_from}"""
 
     scoring_weights = priority_weights if priority_weights is not None else request.priority_weights
@@ -882,6 +887,14 @@ LEFT JOIN LATERAL (
             active_generation = total_row["generation_id"]
         except (KeyError, IndexError, TypeError):
             active_generation = None
+        try:
+            source_snapshot_ids = total_row["source_snapshot_ids"]
+        except (KeyError, IndexError, TypeError):
+            source_snapshot_ids = None
+        if isinstance(source_snapshot_ids, str):
+            source_snapshot_ids = json.loads(source_snapshot_ids)
+        if not isinstance(source_snapshot_ids, list):
+            source_snapshot_ids = None
         values[cache_generation_param - 1] = active_generation
         rows = await connection.fetch(sql, *values)
     total = int(total_row["total"] or 0)
@@ -932,7 +945,9 @@ LEFT JOIN LATERAL (
         total,
         next_cursor,
         has_more,
-        _result_source_snapshot_ids(rows),
+        [str(snapshot_id) for snapshot_id in source_snapshot_ids]
+        if source_snapshot_ids is not None
+        else _result_source_snapshot_ids(rows),
         active_generation is not None,
     )
 
@@ -1914,11 +1929,10 @@ async def save_history(request: SearchHistoryRequest, user: dict = Depends(requi
     pool = require_pool()
     history_id = uuid4()
     criteria = request.criteria.model_dump(exclude_none=True)
+    snapshot_ids = [str(snapshot_id) for snapshot_id in request.source_snapshot_ids]
     async with pool.acquire() as connection:
         async with connection.transaction():
             await ensure_user(connection, user)
-            snapshots = await connection.fetch("SELECT id FROM source_snapshot WHERE status IN ('valid','degraded') ORDER BY retrieved_at DESC LIMIT 20")
-            snapshot_ids = [str(row["id"]) for row in snapshots]
             await connection.execute(
                 """INSERT INTO search_history (id,user_id,mode,criteria,source_snapshot_ids,scoring_version)
                    VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6)""",
