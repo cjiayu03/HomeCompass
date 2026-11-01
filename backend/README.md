@@ -79,4 +79,4 @@ Calls are disabled unless `GEMINI_API_KEY`, a positive `GEMINI_MONTHLY_BUDGET_US
 
 ## Health and privacy
 
-`GET /health` exposes configuration state (not secrets). Search history and personal places are account-owned. Search history is not written automatically by the current UI; call `POST /api/v1/history` only after the team confirms retention and replay policy.
+`GET /health` exposes configuration state (not secrets). Search history and personal places are account-owned. Successful signed-in searches are recorded with the criteria, scoring policy version, and source snapshot IDs returned by that run. Replaying history keeps the saved criteria and uses current source data and scoring; it does not restore an old data snapshot.

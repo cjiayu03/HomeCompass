@@ -605,6 +605,14 @@ class SearchHistoryRequest(BaseModel):
     mode: Literal["structured", "natural_language"]
     criteria: SearchRequest
     scoring_version: str | None = Field(default=None, max_length=60)
+    source_snapshot_ids: list[UUID] = Field(
+        default_factory=list, alias="sourceSnapshotIds", max_length=20
+    )
+
+    @field_validator("source_snapshot_ids")
+    @classmethod
+    def deduplicate_source_snapshot_ids(cls, values):
+        return list(dict.fromkeys(values))
 
 
 class SavedSearchPlaceConstraint(PlaceConstraint):
