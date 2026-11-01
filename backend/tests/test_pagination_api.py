@@ -19,6 +19,8 @@ class _PaginationConnection:
         self.resource_queries = []
 
     async def fetchrow(self, sql, *values):
+        if "FROM source_snapshot WHERE source_id=$1" in sql:
+            return None
         if "count(*) AS total" in sql and "FROM candidate_home h" in sql:
             bounds = _bounds_from_query(sql, values, "h.geometry")
             return {"total": sum(_inside(row, bounds) for row in self.homes)}
@@ -221,6 +223,14 @@ def test_home_pages_continue_in_observed_date_id_order_and_keep_total(monkeypatc
     }
     first_sql, first_values = connection.home_queries[0]
     assert "ORDER BY ranking_score DESC NULLS LAST, observed_on DESC NULLS LAST, id" in first_sql
+    assert "h.school_name, h.school_distance_m" in first_sql
+    assert "h.childcare_name, h.childcare_distance_m" in first_sql
+    assert "h.care_name, h.care_distance_m" in first_sql
+    assert "school_access.location AS school_location" in first_sql
+    assert "childcare_access.location AS childcare_location" in first_sql
+    assert "care_access.location AS care_location" in first_sql
+    assert "dengue_snapshot.id AS dengue_snapshot_id" in first_sql
+    assert "LEFT JOIN latest_dengue_snapshot dengue_snapshot ON TRUE" in first_sql
     assert _limit_from_query(first_sql, first_values) == 3
 
     second = _response(
