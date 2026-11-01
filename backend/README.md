@@ -43,6 +43,15 @@ Global fit ranking uses precomputed amenity distances so the search endpoint doe
 
 The importer calls data.gov.sg's initiate-download and poll-download endpoints, checks the returned HTTPS host against `DATA_GOV_SG_DOWNLOAD_HOSTS`, caps response and record sizes, validates expected columns/values, hashes the response, counts rejected rows and transactionally promotes the normalized snapshot. For this local import only, `.env` currently sets `DATA_GOV_SG_DOWNLOAD_HOSTS="*"` because the export endpoint returned a regional Amazon S3 URL. This wildcard still requires HTTPS and does not follow redirects. Before deploying the importer, replace it with the exact verified download host(s). Imported records are historical resale transactions. The dataset has no coordinates; geometry stays `NULL` and geocoding status stays pending until the team chooses and configures a provider. The importer does not represent rows as available homes.
 
+To refresh only NEA active dengue clusters, run from the repository root using the configured local environment:
+
+```bash
+cd backend
+../.venv/bin/python -m app.sources.data_gov_resources d_dbfabf16158d1b0e1c420627c0819168
+```
+
+The importer brackets the GeoJSON export with data.gov.sg metadata and records a publication time only when both metadata reads agree. The map's 48-hour display window is an application freshness rule, not an NEA update guarantee; downloading an old export does not make it fresh. `FMEL_UPD_D` is the feature-record update date, not a case-report date. Check `/api/v1/sources` or the map legend for the current source state and as-of time.
+
 `DATA_GOV_SG_API_KEY` is optional for limited exploration and recommended for regular workflows. Never put it in the browser bundle.
 
 ## OneMap geocoding
