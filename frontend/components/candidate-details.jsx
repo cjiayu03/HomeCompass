@@ -1,14 +1,16 @@
 'use client';
 
-import { useMemo } from 'react';
-import { Bookmark, Check, CheckCircle2, MapPin, Ruler, Layers, CalendarDays, Scale, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Bookmark, Check, CheckCircle2, MapPin, Ruler, Layers, CalendarDays, Scale, Sparkles, X } from 'lucide-react';
 import { MatchReasons } from '@/components/search-workbench';
 import { EvidenceContext } from '@/components/evidence-context';
 import { candidateReasons } from '@/components/evidence-helpers';
+import { useAuth } from '@/components/auth-provider';
 import { AreaProfile } from '@/components/area-profile';
 import { AffordabilityPlanner } from '@/components/affordability-planner';
 import { PlaceDistanceList } from '@/components/place-picker';
 import { Button } from '@/components/ui/button';
+import { requestJson } from '@/lib/api-client';
 import { money } from '@/lib/utils';
 import { distanceM } from '@/lib/planning';
 import { mapLayers, nearbyFacilityTypes, resourceColors } from '@/lib/map-layers';
@@ -21,6 +23,8 @@ function distanceLabel(meters) {
 }
 
 export function CandidateDetails({ home, homes = [], brief = {}, saved = false, selected = false, resources = [], resourceState, visibleResourceTypes = [], onToggleNearbyLayer, onEnableNearbyLayers, onShowFacilityOnMap, onRetryResources, onSave, onCompare, onLocate }) {
+  const { user, loading: authLoading } = useAuth();
+  const [summaryState, setSummaryState] = useState({ homeId: null, status: 'idle', result: null, error: '' });
   const nearbyFacilities = useMemo(() => {
     if (!home) return [];
     const enabled = new Set(visibleResourceTypes.filter(type => nearbyFacilityTypes.includes(type)));
@@ -34,7 +38,25 @@ export function CandidateDetails({ home, homes = [], brief = {}, saved = false, 
       .filter(Boolean)
       .sort((left, right) => left.distance - right.distance);
   }, [home?.id, home?.lat, home?.lng, resources, visibleResourceTypes]);
+  useEffect(() => {
+    setSummaryState({ homeId: home?.id || null, status: 'idle', result: null, error: '' });
+  }, [home?.id, user?.id]);
   if (!home) return null;
+  const summary = summaryState.homeId === home.id ? summaryState : { status: 'idle', result: null, error: '' };
+  const generateSummary = async () => {
+    const requestedHomeId = home.id;
+    setSummaryState({ homeId: requestedHomeId, status: 'loading', result: null, error: '' });
+    try {
+      const result = await requestJson(`/api/v1/ai/summaries/${encodeURIComponent(requestedHomeId)}`, { method: 'POST' });
+      setSummaryState(current => current.homeId === requestedHomeId
+        ? { homeId: requestedHomeId, status: 'ready', result, error: '' }
+        : current);
+    } catch (error) {
+      setSummaryState(current => current.homeId === requestedHomeId
+        ? { homeId: requestedHomeId, status: 'error', result: null, error: error?.message || 'The AI summary could not be generated.' }
+        : current);
+    }
+  };
   const reasons = candidateReasons(home, brief);
   const route = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${home.address}, Singapore`)}`;
   const activeNearbyTypes = nearbyFacilityTypes.filter(type => visibleResourceTypes.includes(type));
@@ -66,6 +88,29 @@ export function CandidateDetails({ home, homes = [], brief = {}, saved = false, 
     <section className="candidate-matches"><h3>What the loaded evidence supports</h3>{reasons.matches.length > 0 ? <ul>{reasons.matches.map(reason => <li key={reason}><CheckCircle2 aria-hidden="true" className="size-4" /><span>{reason}</span></li>)}</ul> : <p className="mt-2 text-muted-foreground">No verified matches to your criteria are available yet.</p>}<p className="candidate-tradeoff"><strong>Check before deciding</strong><span>{reasons.tradeoff}</span></p></section>
     <MatchReasons home={home} brief={brief} />
     <EvidenceContext home={home} />
+    <section className="rounded-xl border bg-card/60 p-4" aria-labelledby="ai-summary-heading">
+      <div className="flex items-start gap-3">
+        <Sparkles aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-primary" />
+        <div className="min-w-0 flex-1">
+          <h3 id="ai-summary-heading" className="font-semibold">AI evidence summary</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">A short overview grounded in this historical transaction, sourced nearby services, and dated dengue status.</p>
+        </div>
+      </div>
+      {user ? <Button className="mt-3" variant="outline" onClick={generateSummary} disabled={summary.status === 'loading' || authLoading} aria-busy={summary.status === 'loading'}>
+        <Sparkles aria-hidden="true" className="size-4" />{summary.status === 'loading' ? 'Generating summary…' : summary.result ? 'Generate again' : 'Generate summary'}
+      </Button> : authLoading ? <p className="mt-3 text-xs text-muted-foreground" role="status">Checking sign-in status…</p> : <p className="mt-3 text-xs text-muted-foreground"><a className="font-medium text-primary underline" href="/login">Sign in</a> to generate an AI summary.</p>}
+      {summary.status === 'loading' && <p className="mt-3 text-xs text-muted-foreground" role="status">Generating a summary from verified records…</p>}
+      {summary.status === 'error' && <p className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs leading-5 text-destructive" role="alert">{summary.error}</p>}
+      {summary.result && <div className="mt-4 space-y-3" aria-live="polite">
+        <p className="text-sm leading-6">{summary.result.overview}</p>
+        {summary.result.observations?.length > 0 && <ul className="space-y-2 text-xs leading-5">{summary.result.observations.map((item, index) => <li key={`${index}-${item.text}`} className="rounded-lg bg-secondary/50 p-3"><p>{item.text}</p><p className="mt-1 text-muted-foreground">Evidence: {item.evidence_fields.join(', ').replaceAll('_', ' ')}</p></li>)}</ul>}
+        <details className="rounded-lg border px-3 py-2 text-xs">
+          <summary className="min-h-9 cursor-pointer content-center font-medium">Sources and limitations</summary>
+          <p className="mt-2 text-muted-foreground">Transaction source: {summary.result.source?.datasetId || 'not reported'} · {summary.result.source?.datasetVersion || 'version not reported'} · retrieved {summary.result.source?.retrievedAt || 'date not reported'}</p>
+          {summary.result.limitations?.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-4 text-muted-foreground">{summary.result.limitations.map(item => <li key={item}>{item}</li>)}</ul>}
+        </details>
+      </div>}
+    </section>
     <PlaceDistanceList distances={home.placeDistances} />
     <section className="candidate-nearby mt-5 border-t pt-4" aria-labelledby="nearby-facilities-heading">
       <div className="flex items-start justify-between gap-3">
