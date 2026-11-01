@@ -16,6 +16,29 @@ HomeCompass is a Singapore home-research workspace built around historical HDB r
   
 **AI Summary is currently unavailable
 
+## How the home-fit score is calculated
+
+The **Source score** is a weighted average of up to four evidence components, each normalized to a 0–100 scale:
+
+- **School access**, **childcare access**, and **care access** use distance to available source evidence. For a distance `d` and target distance `t` in metres, the component score is `max(0, 100 × (1 − d / t))`. A distance at or beyond the target scores 0; a distance of 0 scores 100.
+- **Affordability** compares a historical transaction price `p` with the household budget `b`: `clamp(50 + 50 × (b − p) / b, 0, 100)`. A price equal to budget scores 50; twice the budget or more scores 0; a zero price scores 100.
+
+For each component with valid evidence, let `sᵢ` be its component score and `wᵢ` its household priority weight. The overall score is:
+
+```text
+score = round to 1 decimal place (Σ(wᵢ × sᵢ) / Σ(wᵢ))
+```
+
+The sum includes only components with available evidence. Missing evidence is **not** treated as a score of zero. HomeCompass also calculates weighted coverage:
+
+```text
+coverage = available component weights / all positive component weights
+```
+
+The overall score is shown only when coverage is at least 50%; otherwise it is reported as **Insufficient evidence**. Default weights are school 2, childcare 2, care 2, and affordability 1. Default distance targets are 1,500 m for schools and 2,000 m for childcare and care access. A search can supply different distance targets, and household priorities can change the weights. With no valid budget, affordability evidence is unavailable. The result’s expandable **Score evidence** section shows component values, weights, contributions, coverage, and missing evidence.
+
+This is a transparent comparison aid, not a property valuation, eligibility decision, or measure of overall home quality. It depends on the available source snapshots and recorded transaction data; HDB transaction prices are historical, not current asking prices.
+
 ## Technology
 
 - Frontend: Next.js, React, Tailwind CSS, MapLibre GL, and Leaflet.
