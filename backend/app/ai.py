@@ -82,14 +82,28 @@ def _monthly_cost(input_tokens: int, output_tokens: int) -> Decimal:
     return (Decimal(input_tokens) * input_price + Decimal(output_tokens) * output_price) / Decimal(1_000_000)
 
 
+def _configured_cap() -> Decimal:
+    value = os.getenv("GEMINI_MONTHLY_BUDGET_USD", "")
+    if not value:
+        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_UNCONFIGURED", "message": "Gemini is disabled until a monthly budget is configured."})
+    try:
+        cap = Decimal(value)
+    except InvalidOperation as exc:
+        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_INVALID", "message": "Gemini's monthly budget must be a non-negative dollar amount."}) from exc
+    if not cap.is_finite() or cap < 0:
+        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_INVALID", "message": "Gemini's monthly budget must be a non-negative dollar amount."})
+    input_rate = _monthly_cost(1_000_000, 0)
+    output_rate = _monthly_cost(0, 1_000_000)
+    if cap == 0 and (os.getenv("GEMINI_FREE_TIER", "").strip().lower() != "true" or input_rate != 0 or output_rate != 0):
+        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_INVALID", "message": "A zero budget requires explicit free-tier mode and zero input and output rates."})
+    return cap
+
+
 def gemini_configuration_ready() -> bool:
     if not is_configured_value(os.getenv("GEMINI_API_KEY")):
         return False
     try:
-        cap = Decimal(os.getenv("GEMINI_MONTHLY_BUDGET_USD", ""))
-        if not cap.is_finite() or cap <= 0:
-            return False
-        _monthly_cost(0, 0)
+        _configured_cap()
     except (InvalidOperation, HTTPException):
         return False
     return True
@@ -97,17 +111,9 @@ def gemini_configuration_ready() -> bool:
 
 async def _reserve_usage(input_upper_bound: int, output_limit: int) -> tuple[object, Decimal, Decimal, object]:
     key = os.getenv("GEMINI_API_KEY")
-    cap_value = os.getenv("GEMINI_MONTHLY_BUDGET_USD")
     if not is_configured_value(key):
         raise HTTPException(status_code=503, detail={"code": "AI_UNCONFIGURED", "message": "Gemini is disabled until a server-side API key is supplied."})
-    if not cap_value:
-        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_UNCONFIGURED", "message": "Gemini is disabled until the team sets a monthly spend cap."})
-    try:
-        cap = Decimal(cap_value)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_INVALID", "message": "The configured Gemini monthly cap must be a positive dollar amount."}) from exc
-    if not cap.is_finite() or cap <= 0:
-        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_INVALID", "message": "The configured Gemini monthly cap must be a positive dollar amount."})
+    cap = _configured_cap()
     reserve = _monthly_cost(input_upper_bound, output_limit)
     if reserve > cap:
         raise HTTPException(status_code=429, detail={"code": "AI_REQUEST_EXCEEDS_BUDGET", "message": "The configured monthly budget is too small for one bounded Gemini request."})
@@ -119,7 +125,7 @@ async def _reserve_usage(input_upper_bound: int, output_limit: int) -> tuple[obj
             await connection.execute("INSERT INTO ai_monthly_usage (month_start) VALUES ($1) ON CONFLICT DO NOTHING", month)
             accepted = await connection.fetchval(
                 """UPDATE ai_monthly_usage SET reserved_usd = reserved_usd + $1, request_count = request_count + 1, updated_at=now()
-                   WHERE month_start = $2 AND spent_usd + reserved_usd + $1 <= $3 RETURNING TRUE""",
+                   WHERE month_start = $2 AND ($3 = 0 OR spent_usd + reserved_usd + $1 <= $3) RETURNING TRUE""",
                 reserve,
                 month,
                 cap,

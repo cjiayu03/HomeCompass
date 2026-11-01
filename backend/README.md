@@ -75,7 +75,7 @@ There is no email-based password reset. An operator with backend access can rese
 
 `/api/v1/ai/interpret` uses the Gemini Interactions API, defaults to `gemini-3.8-flash`, uses a strict JSON schema and sends `store=false`. It sends only the search phrase, not account or profile data. `/api/v1/ai/summaries/{home_id}` summarizes a historical transaction alongside sourced nearest-service distances and the current policy-evaluated dengue state. Observations cite the supplied evidence keys; the response includes source dates and limitations. Straight-line distance is not a route, and a route is reported as unavailable until a user-selected origin is supplied. Both endpoints require an authenticated session and share the AI request limiter.
 
-Calls are disabled unless `GEMINI_API_KEY`, a positive `GEMINI_MONTHLY_BUDGET_USD`, and current input/output rates are configured. The database reserves a conservative bounded cost before each call and records actual usage if the response supplies token counts. Verify current provider pricing and obtain approval for the monthly cap before enabling either endpoint.
+Calls require `GEMINI_API_KEY`, a monthly budget and input/output rates. For a Google Free Tier project, explicitly set `GEMINI_FREE_TIER=true`, `GEMINI_MONTHLY_BUDGET_USD=0`, and both `GEMINI_INPUT_USD_PER_MILLION` and `GEMINI_OUTPUT_USD_PER_MILLION` to `0`. The app cannot verify the project's billing tier or prevent charges if it is upgraded. For paid usage, configure a positive budget and current rates; the database reserves a bounded cost before each call and records actual usage when token counts are available.
 
 ## Health and privacy
 
