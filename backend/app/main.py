@@ -116,7 +116,7 @@ LEFT JOIN LATERAL (
     'lat', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_Y(r.geometry) END,
     'lng', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_X(r.geometry) END,
     'sourceId', snapshot.source_id, 'sourceVersion', snapshot.source_version,
-    'sourceUrl', snapshot.source_url
+    'sourceUrl', snapshot.source_url, 'retrievedAt', snapshot.retrieved_at
   ) AS location, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
   FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
   JOIN source_snapshot snapshot ON snapshot.id=r.source_snapshot_id
@@ -129,7 +129,7 @@ LEFT JOIN LATERAL (
     'lat', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_Y(r.geometry) END,
     'lng', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_X(r.geometry) END,
     'sourceId', snapshot.source_id, 'sourceVersion', snapshot.source_version,
-    'sourceUrl', snapshot.source_url
+    'sourceUrl', snapshot.source_url, 'retrievedAt', snapshot.retrieved_at
   ) AS location, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
   FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
   JOIN source_snapshot snapshot ON snapshot.id=r.source_snapshot_id
@@ -142,7 +142,7 @@ LEFT JOIN LATERAL (
     'lat', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_Y(r.geometry) END,
     'lng', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_X(r.geometry) END,
     'sourceId', snapshot.source_id, 'sourceVersion', snapshot.source_version,
-    'sourceUrl', snapshot.source_url
+    'sourceUrl', snapshot.source_url, 'retrievedAt', snapshot.retrieved_at
   ) AS location, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
   FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
   JOIN source_snapshot snapshot ON snapshot.id=r.source_snapshot_id
@@ -1608,28 +1608,86 @@ async def interpret(
 
 
 @app.post("/api/v1/ai/summaries/{home_id}")
-async def record_summary(home_id: str, user: dict = Depends(require_active_user)) -> dict:
+async def record_summary(
+    home_id: str,
+    http_request: Request,
+    user: dict = Depends(require_active_user),
+) -> dict:
+    _get_ai_interpret_limiter().check(rate_limit_key(user, http_request))
     pool = require_pool()
     async with pool.acquire() as connection:
         row = await connection.fetchrow(
-            """SELECT h.id, h.town, h.flat_type, h.price_observation_cents, h.observed_on,
-                      h.floor_area_sqm, h.storey_range, s.source_id, s.source_version, s.source_url
-               FROM candidate_home h JOIN source_snapshot s ON s.id=h.source_snapshot_id WHERE h.id=$1""",
+            _LATEST_RESOURCE_CTE + f""" SELECT h.id, h.address, h.town, h.flat_type, h.price_observation_cents, h.observed_on,
+                      h.source_semantics, h.floor_area_sqm, h.storey_range, h.lease_commence_year,
+                      h.geocode_status, h.geometry_source, h.geocoded_at,
+                      CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_Y(h.geometry) END AS latitude,
+                      CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
+                      {_DENGUE_HOME_SELECT},
+                      school_access.name AS school_name, school_access.distance_m AS school_distance_m,
+                      school_access.location AS school_location,
+                      childcare_access.name AS childcare_name, childcare_access.distance_m AS childcare_distance_m,
+                      childcare_access.location AS childcare_location,
+                      care_access.name AS care_name, care_access.distance_m AS care_distance_m,
+                      care_access.location AS care_location,
+                      s.source_id, s.source_version, s.source_url, s.retrieved_at
+               FROM candidate_home h JOIN source_snapshot s ON s.id=h.source_snapshot_id
+               {_HOME_EVIDENCE_JOINS}
+               {_DENGUE_HOME_JOINS}
+               WHERE h.id=$1""",
             home_id,
         )
     if row is None:
         raise HTTPException(status_code=404, detail={"code": "HOME_NOT_FOUND", "message": "No imported transaction record was found."})
-    evidence = {"town": row["town"], "flat_type": row["flat_type"],
-                "transaction_month": row["observed_on"].strftime("%Y-%m") if row["observed_on"] else None,
-                "resale_price": f"SGD {row['price_observation_cents'] / 100:,.2f}" if row["price_observation_cents"] is not None else None,
-                "floor_area_sqm": float(row["floor_area_sqm"]) if row["floor_area_sqm"] is not None else None,
-                "storey_range": row["storey_range"]}
+    home = _home(row)
+    amenities = {item["component"]: item for item in home["scoreLocations"]}
+
+    def access_evidence(component: str) -> dict:
+        location = amenities.get(component)
+        if location is None:
+            return {"state": "unavailable", "message": home[component]}
+        return {
+            "state": "available",
+            "name": location.get("name"),
+            "distanceM": location.get("distanceM"),
+            "distanceMethod": "straight-line",
+            "source": {
+                "id": location.get("sourceId"),
+                "version": location.get("sourceVersion"),
+                "retrievedAt": location.get("retrievedAt"),
+                "url": location.get("sourceUrl"),
+            },
+        }
+
+    evidence = {
+        "town": row["town"],
+        "flat_type": row["flat_type"],
+        "transaction_month": row["observed_on"].strftime("%Y-%m") if row["observed_on"] else None,
+        "resale_price": f"SGD {row['price_observation_cents'] / 100:,.2f}" if row["price_observation_cents"] is not None else None,
+        "floor_area_sqm": float(row["floor_area_sqm"]) if row["floor_area_sqm"] is not None else None,
+        "storey_range": row["storey_range"],
+        "school_access": access_evidence("school"),
+        "childcare_access": access_evidence("childcare"),
+        "care_access": access_evidence("care"),
+        "dengue_status": {
+            key: home["dengue"].get(key)
+            for key in (
+                "state", "label", "severity", "coverage", "caseCount", "locality",
+                "sourceUpdatedAt", "checkedAt", "validUntil", "featureUpdatedAt", "sourceUrl", "reason",
+            )
+            if home["dengue"].get(key) is not None
+        },
+        "route_status": {
+            "state": "not_calculated",
+            "reason": "A route requires a user-selected origin; this summary request has no origin.",
+        },
+    }
     evidence = {key: value for key, value in evidence.items() if value is not None}
     result, model = await summarize_record(evidence)
     return {"homeId": home_id, "overview": result.overview,
             "observations": [item.model_dump() for item in result.observations],
-            "source": {"datasetId": row["source_id"], "datasetVersion": row["source_version"], "url": row["source_url"]},
-            "limitations": ["Historical transaction evidence only; this is not a current listing.", "No score, amenity distance, route, or suitability claim is included."],
+            "evidence": evidence,
+            "source": {"datasetId": row["source_id"], "datasetVersion": row["source_version"], "retrievedAt": row["retrieved_at"].isoformat() if row["retrieved_at"] else None, "url": row["source_url"]},
+            "limitations": ["Historical transaction evidence only; this is not a current listing.", "Service distances are straight-line proximity, not routes or travel times.", "No route was calculated because no origin was supplied.", "Dengue status reflects the dated source state and does not establish absence of risk."],
             "provider": "gemini", "model": model, "storedByProvider": False}
 
 

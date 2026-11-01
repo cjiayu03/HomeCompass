@@ -71,9 +71,11 @@ The API creates local email/password accounts and issues a 30-day HttpOnly, Same
 
 There is no email-based password reset. An operator with backend access can reset a password and revoke all existing sessions with `python -m app.auth_admin set-password <email>` from `backend/`; the command prompts without echoing the password. Account deletion removes the local account and its dependent records and sessions transactionally.
 
-## Gemini interpretation
+## Gemini interpretation and evidence summaries
 
-`/api/v1/ai/interpret` uses the Gemini Interactions API, defaults to `gemini-3.8-flash`, uses a strict JSON schema and sends `store=false`. It sends only the search phrase, not account or profile data. The call is disabled unless `GEMINI_API_KEY`, a positive `GEMINI_MONTHLY_BUDGET_USD`, and current input/output rates are configured. The database reserves a conservative bounded cost before each call and records actual usage if the response supplies token counts. Verify current provider pricing before enabling it.
+`/api/v1/ai/interpret` uses the Gemini Interactions API, defaults to `gemini-3.8-flash`, uses a strict JSON schema and sends `store=false`. It sends only the search phrase, not account or profile data. `/api/v1/ai/summaries/{home_id}` summarizes a historical transaction alongside sourced nearest-service distances and the current policy-evaluated dengue state. Observations cite the supplied evidence keys; the response includes source dates and limitations. Straight-line distance is not a route, and a route is reported as unavailable until a user-selected origin is supplied. Both endpoints require an authenticated session and share the AI request limiter.
+
+Calls are disabled unless `GEMINI_API_KEY`, a positive `GEMINI_MONTHLY_BUDGET_USD`, and current input/output rates are configured. The database reserves a conservative bounded cost before each call and records actual usage if the response supplies token counts. Verify current provider pricing and obtain approval for the monthly cap before enabling either endpoint.
 
 ## Health and privacy
 
