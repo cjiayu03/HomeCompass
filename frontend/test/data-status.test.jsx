@@ -11,7 +11,7 @@ vi.mock('../components/workspace-provider.jsx', () => ({ useWorkspace: useWorksp
 vi.mock('../components/planning-provider.jsx', () => ({ usePlanning: () => ({ scenarios: [], decisions: {}, photos: {} }) }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ replace: vi.fn() }) }));
 vi.mock('../components/auth-provider.jsx', () => ({ useAuth: () => ({ client: null, user: null }) }));
-vi.mock('next/dynamic', () => ({ default: () => function MapCanvas() { return <div data-testid="map-canvas" />; } }));
+vi.mock('next/dynamic', () => ({ default: () => function MapCanvas({ resources = [], denguePolicy }) { return <div data-testid="map-canvas" data-dengue-count={resources.filter(feature => feature.properties?.resourceType === 'dengue_cluster').length} data-dengue-state={denguePolicy?.state || ''} />; } }));
 vi.mock('next/link', () => ({ default: ({ href, children, ...props }) => <a href={href} {...props}>{children}</a> }));
 vi.mock('../components/brief-ribbon.jsx', () => ({ BriefRibbon: () => <div /> }));
 vi.mock('../components/home-card.jsx', () => ({ HomeCard: ({ home }) => <div data-testid="home-card">{home.address}</div> }));
@@ -65,6 +65,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -175,6 +176,51 @@ describe('workspace status integration', () => {
     expect(screen.getByText('Silver Zones')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /retry resource data/i }));
     expect(retryResources).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the fresh NEA red and yellow legend with the source timestamp', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse('2026-10-30T09:00:00.000Z'));
+    const updated = '2026-10-30T08:00:00.000Z';
+    const policy = { state: 'fresh', fresh: true, usable: true, complete: true, rows: 2, sourceUpdatedAt: updated, validUntil: '2026-11-01T08:00:00.000Z', checkedAt: '2026-10-30T09:00:00.000Z', reason: 'Complete current export.' };
+    useWorkspaceMock.mockReturnValue(workspace({ sourceState: dataState({ status: 'success' }) }));
+    render(<MapPanel homes={[]} resources={[]} sourceStatus={{ items: [{ resourceType: 'dengue_cluster', state: 'valid', dengue: policy }] }} visibleResourceTypes={['dengue_cluster']} resourceState={dataState({ status: 'empty', counts: [{ resourceType: 'dengue_cluster', total: 2, unlocated: 0 }] })} />);
+
+    const legend = screen.getByRole('region', { name: 'NEA dengue map legend' });
+    expect(legend).toHaveTextContent('Red · 10+ cases');
+    expect(legend).toHaveTextContent('Yellow · 2–9 cases');
+    expect(legend).toHaveTextContent('Updated 30 Oct 2026');
+    expect(legend).toHaveTextContent('No clusters loaded here.');
+    expect(legend).toHaveTextContent('NEA control boundaries, not an estimate of individual infection risk');
+  });
+
+  it('shows stale source state explicitly and never calls an empty view safe', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse('2026-10-30T09:00:00.000Z'));
+    const updated = '2026-10-27T08:00:00.000Z';
+    const policy = { state: 'stale', fresh: false, usable: false, complete: true, rows: 12, sourceUpdatedAt: updated, validUntil: '2026-10-29T08:00:00.000Z', checkedAt: '2026-10-30T09:00:00.000Z', reason: "The NEA active-cluster snapshot is older than the app's 48-hour display window." };
+    useWorkspaceMock.mockReturnValue(workspace({ sourceState: dataState({ status: 'success' }) }));
+    render(<MapPanel homes={[]} resources={[]} sourceStatus={{ items: [{ resourceType: 'dengue_cluster', state: 'valid', dengue: policy }] }} visibleResourceTypes={['dengue_cluster']} />);
+
+    const legend = screen.getByRole('region', { name: 'NEA dengue map legend' });
+    expect(legend).toHaveAttribute('data-state', 'stale');
+    expect(legend).toHaveTextContent('Data expired. Overlay hidden.');
+    expect(legend).not.toHaveTextContent('No clusters loaded here');
+  });
+
+  it('uses the newer resource policy when the separately cached source register is older', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse('2026-10-30T09:00:00.000Z'));
+    const oldPolicy = { state: 'stale', fresh: false, usable: false, complete: true, rows: 12, sourceUpdatedAt: '2026-10-20T08:00:00.000Z', validUntil: '2026-10-22T08:00:00.000Z', checkedAt: '2026-10-30T08:00:00.000Z' };
+    const currentPolicy = { state: 'fresh', fresh: true, usable: true, complete: true, rows: 1, sourceUpdatedAt: '2026-10-30T08:30:00.000Z', validUntil: '2026-11-01T08:30:00.000Z', checkedAt: '2026-10-30T08:59:00.000Z' };
+    const feature = { type: 'Feature', id: 'new-cluster', geometry: { type: 'MultiPolygon', coordinates: [] }, properties: { resourceType: 'dengue_cluster', caseCount: 18, sourceUpdatedAt: currentPolicy.sourceUpdatedAt } };
+    useWorkspaceMock.mockReturnValue(workspace({ sourceState: dataState({ status: 'success' }) }));
+    render(<MapPanel homes={[]} resources={[feature]} sourceStatus={{ items: [{ resourceType: 'dengue_cluster', state: 'valid', dengue: oldPolicy }] }} visibleResourceTypes={['dengue_cluster']} resourceState={dataState({ status: 'success', dengue: currentPolicy, counts: [{ resourceType: 'dengue_cluster', total: 1, unlocated: 0 }] })} />);
+
+    expect(screen.getByRole('region', { name: 'NEA dengue map legend' })).toHaveAttribute('data-state', 'fresh');
+    expect(screen.getByTestId('map-canvas')).toHaveAttribute('data-dengue-count', '1');
+    expect(screen.getByTestId('map-canvas')).toHaveAttribute('data-dengue-state', 'fresh');
+    expect(screen.getByLabelText('Map options')).toBeInTheDocument();
   });
 
   it('shows a distinct symbol for each nearby data layer', () => {

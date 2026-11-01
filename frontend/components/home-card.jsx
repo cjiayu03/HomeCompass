@@ -10,6 +10,7 @@ import { MagicCard } from '@/components/ui/magic-card';
 import { EvidenceContext } from '@/components/evidence-context';
 import { PlaceDistanceList } from '@/components/place-picker';
 import { candidateReasons } from '@/components/evidence-helpers';
+import { DengueStatus } from '@/components/dengue-status';
 import { useWorkspace } from '@/components/workspace-provider';
 
 function AccessTile({ icon: Icon, label, value }) {
@@ -49,6 +50,7 @@ const BrowseHomeCard = memo(function BrowseHomeCard({ home, saved, selected, map
         {home.storeyRange && <div><dt>Floor band</dt><dd>{String(home.storeyRange).replace(/\s+TO\s+/i, '–')}</dd></div>}
         {home.remainingLeaseYears != null && <div><dt>Lease left</dt><dd>≈ {home.remainingLeaseYears} years</dd></div>}
       </dl>
+      <DengueStatus home={home} compact className="mt-2" />
       {!compact && matchEvidence}
       <div className="home-row-actions"><Button variant="default" onClick={() => onInspect(home)}>Details <ArrowUpRight aria-hidden="true" className="size-4" /></Button><Button variant={selected ? 'soft' : 'outline'} onClick={() => onCompare(home)} aria-pressed={selected} aria-label={selected ? `Remove ${home.address} from comparison` : `Compare ${home.address}`} title={selected ? 'Remove from comparison' : 'Add to comparison'}>{selected ? <X aria-hidden="true" className="size-4" /> : <Scale aria-hidden="true" className="size-4" />}{selected ? 'Remove' : 'Compare'}</Button></div>
       <details className="browse-evidence"><summary><span>Evidence &amp; sources</span><span className="browse-score">{Number.isFinite(home.score) ? `${home.score.toFixed(1)} / 100` : 'Score unavailable'}</span></summary>{compact && matchEvidence}<EvidenceContext home={home} className="mt-2" /></details>
@@ -105,7 +107,7 @@ export function HomeCard({ home, saved, selected, mapActive = false, onLocate, o
         </div></div>}
 
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border/70 pt-3">
-          <div className="flex min-w-0 flex-wrap items-center gap-2"><Badge variant="outline" className="max-w-full">{home.risk}</Badge></div>
+          <DengueStatus home={home} compact className="min-w-0 flex-1" />
           <div className="flex shrink-0 items-center gap-1.5">
             <Button size="icon" variant={saved ? 'soft' : 'ghost'} aria-label={saved ? `Remove ${home.address} from shortlist` : `Save ${home.address} to shortlist`} aria-pressed={saved} onClick={() => onSave(home)}>{saved ? <Bookmark className="size-4 fill-current" /> : <Bookmark className="size-4" />}</Button>
             {!compact && <><Button size="sm" variant="ghost" onClick={() => onInspect(home)}>Details <ArrowUpRight className="size-3.5" /></Button><Button size="sm" variant={selected ? 'soft' : 'outline'} onClick={() => onCompare(home)} aria-pressed={selected}>{selected ? <Check className="size-3.5" /> : <Scale className="size-3.5" />}{selected ? 'Selected' : 'Compare'}</Button></>}

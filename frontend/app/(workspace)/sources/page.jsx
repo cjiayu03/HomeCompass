@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { ArrowUpRight, Database, MapPin } from 'lucide-react';
 import { DataStatus } from '@/components/data-status';
 import { sourceFreshness } from '@/components/evidence-helpers';
+import { useDengueNow } from '@/components/dengue-status';
 import { Button } from '@/components/ui/button';
 
 const labels = {
@@ -32,6 +33,8 @@ export default function SourcesPage() {
   const { sourceStatus, sourceState, refreshSources } = useWorkspace();
   const sources = sourceStatus?.items || [];
   const imported = sources.filter((source) => ['valid', 'degraded'].includes(source.state)).length;
+  const denguePolicy = sources.find(source => source.resourceType === 'dengue_cluster')?.dengue;
+  useDengueNow(denguePolicy?.validUntil);
 
   return <div className="container flex max-w-[1320px] flex-col gap-7 px-4 py-7 sm:px-6 sm:py-9 lg:px-8">
     <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
@@ -52,11 +55,11 @@ export default function SourcesPage() {
     />
 
     {sources.length > 0 && <div className="grid gap-3 md:grid-cols-2">
-      {sources.map((source) => { const freshness = sourceFreshness(source); return <Card key={source.sourceId} className="overflow-hidden"><CardContent className="p-4 sm:p-5">
+      {sources.map((source) => { const freshness = sourceFreshness(source); const sourceDate = source.resourceType === 'dengue_cluster' ? source.dengue?.sourceUpdatedAt : source.sourceUpdatedAt || source.version; return <Card key={source.sourceId} className="overflow-hidden"><CardContent className="p-4 sm:p-5">
         <div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="font-display text-base font-semibold">{labels[source.resourceType] || source.resourceType}</p><p className="mt-1 truncate font-mono text-[10px] text-muted-foreground">{source.sourceId}</p></div><Badge variant={source.state === 'valid' ? 'secondary' : source.state === 'degraded' ? 'outline' : 'outline'} className="shrink-0">{stateLabel(source.state)}</Badge></div>
-        <div className="mt-4 grid grid-cols-2 gap-3 text-xs"><div><p className="text-muted-foreground">Records</p><p className="mt-1 font-semibold">{source.rows?.toLocaleString?.() ?? '—'}{source.rejected ? <span className="font-normal text-muted-foreground"> · {source.rejected} rejected</span> : null}</p></div><div><p className="text-muted-foreground">Source updated</p><p className="mt-1 font-semibold">{dateLabel(source.sourceUpdatedAt || source.version)}</p></div><div className="col-span-2"><p className="text-muted-foreground">Retrieved locally</p><p className="mt-1 font-semibold">{dateLabel(source.retrievedAt)}</p></div></div>
-        <p className="mt-3 rounded-lg bg-muted/40 p-3 text-xs"><strong>{freshness.label}</strong>{freshness.ageDays != null && ` · ${freshness.ageDays} days since source date`}{freshness.thresholdDays != null && ` · review interval ${freshness.thresholdDays} days`}</p>
-        <div className="mt-4 flex items-center justify-between border-t pt-3"><span className="text-[11px] text-muted-foreground">{source.state === 'valid' || source.state === 'degraded' ? 'Snapshot stored in the database' : source.resourceType === 'geocoding_and_routing' ? 'Not a data.gov.sg dataset' : 'Registered; not yet fetched'}</span>{source.url && <a href={source.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Official source <ArrowUpRight className="size-3.5" /></a>}</div>
+        <div className="mt-4 grid grid-cols-2 gap-3 text-xs"><div><p className="text-muted-foreground">Records</p><p className="mt-1 font-semibold">{source.rows?.toLocaleString?.() ?? '—'}{source.rejected ? <span className="font-normal text-muted-foreground"> · {source.rejected} rejected</span> : null}</p></div><div><p className="text-muted-foreground">{source.resourceType === 'dengue_cluster' ? 'Dataset publication' : 'Source updated'}</p><p className="mt-1 font-semibold">{dateLabel(sourceDate)}</p></div><div className="col-span-2"><p className="text-muted-foreground">Retrieved locally</p><p className="mt-1 font-semibold">{dateLabel(source.retrievedAt)}</p></div></div>
+        <p className="mt-3 rounded-lg bg-muted/40 p-3 text-xs"><strong>{freshness.label}</strong>{freshness.ageHours != null && ` · ${freshness.ageHours.toFixed(1)} hours since publication`}{freshness.thresholdHours != null && ` · ${freshness.thresholdHours}-hour HomeCompass display window`}{source.resourceType === 'dengue_cluster' && <span className="mt-2 block text-muted-foreground">Feature dates are record-updated times, not case-report dates. NEA boundaries show intervention areas, not individual infection probability. {source.dengue?.reason}</span>}{source.resourceType !== 'dengue_cluster' && freshness.ageDays != null && ` · ${freshness.ageDays} days since source date`}{source.resourceType !== 'dengue_cluster' && freshness.thresholdDays != null && ` · review interval ${freshness.thresholdDays} days`}</p>
+        <div className="mt-4 flex items-center justify-between gap-3 border-t pt-3"><span className="text-[11px] text-muted-foreground">{source.state === 'valid' || source.state === 'degraded' ? 'Snapshot stored in the database' : source.resourceType === 'geocoding_and_routing' ? 'Not a data.gov.sg dataset' : 'Registered; not yet fetched'}</span><div className="flex flex-wrap items-center gap-3">{source.resourceType === 'dengue_cluster' && <a href="https://www.nea.gov.sg/dengue-zika/dengue/dengue-clusters" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">NEA cluster map <ArrowUpRight className="size-3.5" /></a>}{source.url && <a href={source.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">Official dataset <ArrowUpRight className="size-3.5" /></a>}</div></div>
       </CardContent></Card>; })}
     </div>}
   </div>;

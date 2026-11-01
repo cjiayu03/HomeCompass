@@ -13,7 +13,10 @@ import { isMapAddressCandidate } from '@/lib/map-address-search';
 import { hasMapCoordinates } from '@/lib/map-coordinates';
 import { selectedHomeZoom } from '@/lib/map-zoom';
 import { mapLayerMarkerSvg } from '@/lib/map-layer-icons';
-import { dedupePointFeatures, facilityLocationLabel } from '@/lib/geo-cluster';
+import { dedupePointFeatures } from '@/lib/geo-cluster';
+import { dengueSeverityColors, mapFeatureRevision } from '@/lib/map-layers';
+import { filterCurrentDengueFeatures, evaluateDengueSnapshot } from '@/lib/dengue-status';
+import { mapResourcePopupContent } from '@/lib/map-resource-popup';
 
 const MAP_STYLE = 'https://tiles.openfreemap.org/styles/bright';
 const BUILDING_TILES = 'https://tiles.openfreemap.org/planet';
@@ -39,10 +42,10 @@ function makeHomeCollection(homes, selectedHome, hoveredHome) {
   };
 }
 
-function makeResourceCollection(resources, visibleTypes) {
+function makeResourceCollection(resources, visibleTypes, denguePolicy, dengueNow) {
   return {
     type: 'FeatureCollection',
-    features: dedupePointFeatures(resources.filter((feature) => (
+    features: dedupePointFeatures(filterCurrentDengueFeatures(resources, denguePolicy, dengueNow).filter((feature) => (
       feature?.geometry && visibleTypes.includes(feature.properties?.resourceType)
     ))),
   };
@@ -109,17 +112,22 @@ function loadResourceIconImages(map, isCurrent) {
   })));
 }
 
-function bindResourceInteractions(map, layerIds, activePopupRef) {
+function bindResourceInteractions(map, layerIds, activePopupRef, activePopupDengueRef) {
   for (const layerId of layerIds) {
     map.on('click', layerId, (event) => {
-      const properties = event.features?.[0]?.properties || {};
-      const sourceDate = `Source date: ${properties.sourceVersion || 'not reported'}`;
-      const location = facilityLocationLabel({ properties });
+      const feature = event.features?.[0];
+      const properties = feature?.properties || {};
       activePopupRef.current?.remove();
-      activePopupRef.current = new Popup({ closeButton: true, maxWidth: '260px' })
+      const content = mapResourcePopupContent({ ...feature, properties });
+      const popup = new Popup({ closeButton: true, maxWidth: '260px' })
         .setLngLat(event.lngLat)
-        .setDOMContent(popupContent(properties.name, [resourceLabel(properties.resourceType), location].filter(Boolean).join(' · '), sourceDate, properties.sourceUrl))
+        .setDOMContent(content)
         .addTo(map);
+      activePopupRef.current = popup;
+      activePopupDengueRef.current = properties.resourceType === 'dengue_cluster';
+      if (activePopupDengueRef.current) content.addEventListener('toggle', () => {
+        if (activePopupRef.current === popup) popup.setLngLat(event.lngLat);
+      }, true);
     });
     map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
@@ -141,10 +149,12 @@ function visibleMapOffset(map) {
   return [visibleCenterX - width / 2, 0];
 }
 
-export default function Map3DView({ homes, resources, visibleResourceTypes, selectedHome, evidenceLocations = [], hoveredHome, anchors=[], onUnavailable, onSelect, cameraIntent = INITIAL_CAMERA_INTENT, homeFocusRequest = 0, facilityFocus, centerRequest, addressTarget, addressRequest, addressFocused = false, onViewportChange }) {
+export default function Map3DView({ homes, resources, visibleResourceTypes, denguePolicy, dengueNow = Date.now(), selectedHome, evidenceLocations = [], hoveredHome, anchors=[], onUnavailable, onSelect, cameraIntent = INITIAL_CAMERA_INTENT, homeFocusRequest = 0, facilityFocus, centerRequest, addressTarget, addressRequest, addressFocused = false, onViewportChange }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const activePopupRef = useRef(null);
+  const activePopupDengueRef = useRef(false);
+  const previousDengueDataRevisionRef = useRef(null);
   const onSelectRef = useRef(onSelect);
   const onViewportChangeRef = useRef(onViewportChange);
   const homesRef = useRef(homes);
@@ -159,7 +169,8 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
   const homeData = useMemo(() => makeHomeCollection(homes, selectedHome, hoveredHome), [homes, selectedHome?.id, selectedHome?.lat, selectedHome?.lng, hoveredHome?.id, hoveredHome?.lat, hoveredHome?.lng]);
   const evidenceCoordinates = JSON.stringify(evidenceLocations.map(item => [Number(item.lng), Number(item.lat)]));
   const evidenceData = useMemo(() => evidenceCollection(selectedHome, evidenceLocations), [selectedHome, evidenceLocations]);
-  const resourceData = useMemo(() => makeResourceCollection(resources, visibleResourceTypes), [resources, visibleResourceTypes]);
+  const resourceData = useMemo(() => makeResourceCollection(resources, visibleResourceTypes, denguePolicy, dengueNow), [resources, visibleResourceTypes, denguePolicy, dengueNow]);
+  const dengueDataRevision = `${visibleResourceTypes.includes('dengue_cluster')}|${denguePolicy?.sourceUpdatedAt || ''}|${mapFeatureRevision(resourceData.features.filter((feature) => feature.properties?.resourceType === 'dengue_cluster'))}`;
 
   useEffect(() => { onSelectRef.current = onSelect; }, [onSelect]);
   useEffect(() => { onViewportChangeRef.current = onViewportChange; }, [onViewportChange]);
@@ -244,12 +255,17 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
       });
 
       map.addSource('hc-resources', { type: 'geojson', data: resourceData });
-      const resourceColor = ['match', ['get', 'resourceType'], ...Object.entries(RESOURCE_COLORS).flat(), '#718096'];
+      const baseResourceColor = ['match', ['get', 'resourceType'], ...Object.entries(RESOURCE_COLORS).flat(), '#718096'];
+      const resourceColor = ['case',
+        ['all', ['==', ['get', 'resourceType'], 'dengue_cluster'], ['>=', ['to-number', ['get', 'caseCount'], 0], 10]], dengueSeverityColors.red,
+        ['==', ['get', 'resourceType'], 'dengue_cluster'], dengueSeverityColors.yellow,
+        baseResourceColor,
+      ];
       const isVisible = visibleResourceFilter(visibleResourceTypesRef.current);
       map.addLayer({
         id: 'hc-resource-polygons', type: 'fill', source: 'hc-resources',
-        filter: ['all', ['==', ['geometry-type'], 'Polygon'], isVisible],
-        paint: { 'fill-color': resourceColor, 'fill-opacity': 0.12 },
+        filter: ['all', ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]], isVisible],
+        paint: { 'fill-color': resourceColor, 'fill-opacity': ['case', ['==', ['get', 'resourceType'], 'dengue_cluster'], 0.18, 0.12] },
       });
       map.addLayer({
         id: 'hc-resource-lines', type: 'line', source: 'hc-resources',
@@ -261,6 +277,8 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
         filter: ['all', ['==', ['geometry-type'], 'Point'], isVisible],
         paint: { 'circle-radius': 5, 'circle-color': resourceColor, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 },
       });
+      // Keep the selected orange home markers above polygon fills and amenity symbols.
+      map.moveLayer?.('hc-home-points');
 
       void loadResourceIconImages(map, () => mapRef.current === map).then((loadedTypes) => {
         if (mapRef.current !== map || !loadedTypes.some(Boolean) || map.getLayer?.('hc-resource-point-icons')) return;
@@ -278,8 +296,9 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
             'icon-ignore-placement': true,
           },
         });
+        map.moveLayer?.('hc-home-points');
         map.setLayoutProperty?.('hc-resource-points', 'visibility', 'none');
-        bindResourceInteractions(map, ['hc-resource-point-icons'], activePopupRef);
+        bindResourceInteractions(map, ['hc-resource-point-icons'], activePopupRef, activePopupDengueRef);
         map.addLayer({
           id: 'hc-score-icons', type: 'symbol', source: 'hc-score-evidence',
           filter: ['all', ['==', ['geometry-type'], 'Point'], ['in', ['get', 'resourceType'], ['literal', availableTypes]]],
@@ -290,10 +309,10 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
           const properties = event.features?.[0]?.properties || {};
           activePopupRef.current?.remove();
           activePopupRef.current = new Popup({ closeButton: true, maxWidth: '280px' }).setLngLat(event.lngLat).setDOMContent(popupContent(properties.name, `${properties.label} · ${properties.distanceLabel}`, properties.context, properties.sourceUrl)).addTo(map);
+          activePopupDengueRef.current = false;
         });
         map.on('mouseenter', 'hc-score-icons', () => { map.getCanvas().style.cursor = 'pointer'; });
         map.on('mouseleave', 'hc-score-icons', () => { map.getCanvas().style.cursor = ''; });
-
       });
       map.addSource('hc-score-evidence', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       map.addLayer({ id: 'hc-score-connections', type: 'line', source: 'hc-score-evidence', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-opacity': .75, 'line-dasharray': [3, 4] } });
@@ -302,7 +321,9 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
       if (map.getStyle().glyphs) map.addLayer({ id: 'hc-score-labels', type: 'symbol', source: 'hc-score-evidence', filter: ['==', ['geometry-type'], 'Point'], layout: { 'text-field': ['concat', ['get', 'name'], '\n', ['get', 'label'], ' · ', ['get', 'distanceLabel']], 'text-font': labelFont, 'text-size': 12, 'text-anchor': 'bottom', 'text-offset': [0, -1.1], 'text-allow-overlap': false }, paint: { 'text-color': '#183d2e', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
       map.on('click', 'hc-score-points', event => {
         const properties = event.features?.[0]?.properties || {};
-        new Popup({ closeButton: true, maxWidth: '280px' }).setLngLat(event.lngLat).setDOMContent(popupContent(properties.name, `${properties.label} · ${properties.distanceLabel}`, properties.context, properties.sourceUrl)).addTo(map);
+        activePopupRef.current?.remove();
+        activePopupRef.current = new Popup({ closeButton: true, maxWidth: '280px' }).setLngLat(event.lngLat).setDOMContent(popupContent(properties.name, `${properties.label} · ${properties.distanceLabel}`, properties.context, properties.sourceUrl)).addTo(map);
+        activePopupDengueRef.current = false;
       });
       map.on('mouseenter', 'hc-score-points', () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', 'hc-score-points', () => { map.getCanvas().style.cursor = ''; });
@@ -320,9 +341,10 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
           .setLngLat(event.lngLat)
           .setDOMContent(popupContent(home.address, `${home.town} · ${money(home.price)}`, score))
           .addTo(map);
+        activePopupDengueRef.current = false;
       });
 
-      bindResourceInteractions(map, ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points'], activePopupRef);
+      bindResourceInteractions(map, ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points'], activePopupRef, activePopupDengueRef);
       for (const layerId of ['hc-home-points']) {
         map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
         map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
@@ -370,17 +392,35 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
     const map = mapRef.current;
     if (!mapReady || !map?.getSource('hc-resources')) return;
     setSourceData(map, 'hc-resources', resourceData);
+    if (previousDengueDataRevisionRef.current !== null
+      && previousDengueDataRevisionRef.current !== dengueDataRevision
+      && activePopupDengueRef.current) {
+      activePopupRef.current?.remove();
+      activePopupRef.current = null;
+      activePopupDengueRef.current = false;
+    }
+    previousDengueDataRevisionRef.current = dengueDataRevision;
     const isVisible = visibleResourceFilter(visibleResourceTypes);
     for (const layerId of ['hc-resource-polygons', 'hc-resource-lines', 'hc-resource-points', 'hc-resource-point-icons']) {
       if (map.getLayer && !map.getLayer(layerId)) continue;
       const geometryFilter = layerId === 'hc-resource-polygons'
-        ? ['==', ['geometry-type'], 'Polygon']
+        ? ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]]
         : layerId === 'hc-resource-lines'
           ? ['in', ['geometry-type'], ['literal', ['LineString', 'MultiLineString', 'Polygon', 'MultiPolygon']]]
           : ['==', ['geometry-type'], 'Point'];
       map.setFilter(layerId, ['all', geometryFilter, isVisible]);
     }
-  }, [mapReady, resourceData, visibleResourceTypes]);
+  }, [mapReady, resourceData, visibleResourceTypes, dengueDataRevision]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map || !activePopupDengueRef.current) return;
+    if (!evaluateDengueSnapshot(denguePolicy, dengueNow).usable) {
+      activePopupRef.current?.remove();
+      activePopupRef.current = null;
+      activePopupDengueRef.current = false;
+    }
+  }, [mapReady, denguePolicy, dengueNow]);
 
   useEffect(() => {
     if (mapReady) setSourceData(mapRef.current, 'hc-score-evidence', evidenceData);
@@ -417,14 +457,13 @@ export default function Map3DView({ homes, resources, visibleResourceTypes, sele
     const [longitude, latitude] = feature.geometry.coordinates;
     if (![longitude, latitude].every(Number.isFinite)) return;
     const properties = feature.properties || {};
-    const sourceDate = `Source date: ${properties.sourceVersion || 'not reported'}`;
-    const location = facilityLocationLabel(feature);
     activePopupRef.current?.remove();
     const popup = new Popup({ closeButton: true, maxWidth: '280px', offset: 18 })
       .setLngLat([longitude, latitude])
-      .setDOMContent(popupContent(properties.name || 'Unnamed facility', [resourceLabel(properties.resourceType), location].filter(Boolean).join(' · '), sourceDate, properties.sourceUrl))
+      .setDOMContent(mapResourcePopupContent(feature))
       .addTo(map);
     activePopupRef.current = popup;
+    activePopupDengueRef.current = properties.resourceType === 'dengue_cluster';
     map.flyTo({
       center: [longitude, latitude],
       zoom: Math.min(Math.max(map.getZoom() + 2, 17), 19),
