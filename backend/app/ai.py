@@ -213,9 +213,13 @@ async def interpret_query(request: InterpretRequest) -> tuple[QueryInterpretatio
 
 async def summarize_record(evidence: dict) -> tuple[RecordSummary, str]:
     prompt = (
-        "Write a short, neutral overview of this one historical HDB resale transaction using only the JSON evidence below. "
-        "Do not infer whether a home is currently available, whether its price is affordable, nearby amenities, travel, risk, or suitability. "
-        "Each observation must cite one or more exact evidence_fields from the provided record. If the record lacks enough information, say so.\n\n"
+        "Write a short, neutral overview of this historical HDB resale transaction using only the JSON evidence below. "
+        "The access fields describe the nearest mapped service and a straight-line distance, not a walking route, travel time, "
+        "eligibility, opening status, or suitability. Repeat dengue status only as the supplied state and label; preserve its "
+        "freshness, coverage, and uncertainty. A no-active-cluster result is not proof of no dengue risk. The route_status field "
+        "explains whether a route was calculated; never invent a route or commute estimate. Do not imply current availability, "
+        "affordability, valuation, or recommendation. Each observation must cite exact evidence_fields present in the JSON. "
+        "If evidence is missing or unavailable, state that limitation instead of filling the gap.\n\n"
         f"Evidence JSON: {json.dumps(evidence, ensure_ascii=False, separators=(',', ':'))}"
     )
     try:
