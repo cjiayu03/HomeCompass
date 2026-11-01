@@ -22,3 +22,9 @@ def test_resource_import_cleans_label_and_preserves_original_source_attributes()
     assert rejected == 0
     assert rows[0][2]['_source_name'] == 'THK Active Ageing Centre @ Kaki Bukit'
     assert rows[0][2]['NAME'] == name
+
+
+def test_generated_kml_identifiers_are_not_shown_as_facility_names():
+    assert source_label('kml_180') == 'Name unavailable'
+    assert source_label(' KML_1 ') == 'Name unavailable'
+    assert source_label('KML Clinic') == 'KML Clinic'

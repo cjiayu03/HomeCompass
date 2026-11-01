@@ -1,6 +1,7 @@
 'use client';
 
 import { mapFeatureRevision, resourceColors, resourceLabel } from '@/lib/map-layers';
+import { spreadEvidencePoints } from '@/lib/score-locations';
 
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Circle, CircleMarker, GeoJSON, MapContainer, Marker, Popup, Polyline, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
@@ -352,34 +353,38 @@ function ResourceFeatures({ features, visibleTypes, denguePolicy, dengueNow }) {
 }
 
 const MemoResourceFeatures = memo(ResourceFeatures);
-function EvidencePoint({ item }) {
-  const map = useMap();
-  const [direction, setDirection] = useState(item.labelDirection);
-  const update = useCallback(() => {
-    const point = map.latLngToContainerPoint([Number(item.lat), Number(item.lng)]);
-    const size = map.getSize();
-    let next = item.labelDirection;
-    if ((next === 'right' && size.x - point.x < 200) || (next === 'left' && point.x < 200)) next = size.y - point.y > 100 ? 'bottom' : 'top';
-    if (next === 'top' || next === 'bottom') {
-      if (point.x < 100) next = 'right';
-      else if (size.x - point.x < 100) next = 'left';
-    }
-    if (next === 'top' && point.y < 90) next = 'bottom';
-    if (next === 'bottom' && size.y - point.y < 90) next = 'top';
-    setDirection(next);
-  }, [map, item.lat, item.lng, item.labelDirection]);
-  useMapEvents({ moveend: update, resize: update });
-  useEffect(update, [update]);
+function EvidencePoint({ item, position }) {
   const evidenceIcon = useMemo(() => L.divIcon({
     className: 'map-resource-marker-icon score-evidence-marker',
     html: mapLayerMarkerMarkup(item.resourceType),
     iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -13],
   }), [item.resourceType]);
-  const offset = { right: [10, 0], left: [-10, 0], top: [0, -10], bottom: [0, 10] }[direction];
-  return <Marker position={[Number(item.lat), Number(item.lng)]} icon={evidenceIcon} title={item.name} alt={`${item.label}: ${item.name}`}>
-    <Tooltip key={direction} permanent direction={direction} offset={offset} opacity={1} className="score-location-label"><strong>{item.name}</strong><br />{item.label}{Number.isFinite(item.distanceM) && <> · {Math.round(item.distanceM).toLocaleString()} m</>}</Tooltip>
+  return <Marker position={position} icon={evidenceIcon} title={`${item.label}: ${item.name}`} alt={`${item.label}: ${item.name}`}>
+    <Tooltip direction="top" offset={[0, -10]} opacity={1} className="score-location-label"><strong>{item.name}</strong><br />{item.label}{Number.isFinite(item.distanceM) && <> · {Math.round(item.distanceM).toLocaleString()} m</>}</Tooltip>
     <Popup><strong>{item.name}</strong><br />{item.context}<br />{Number.isFinite(item.distanceM) ? `${Math.round(item.distanceM).toLocaleString()} m straight-line` : 'Distance unavailable'}{item.sourceVersion && <><br />Source: {item.sourceVersion}</>}</Popup>
   </Marker>;
+}
+
+function EvidenceMarkers({ home, locations }) {
+  const map = useMap();
+  const [revision, setRevision] = useState(0);
+  const update = useCallback(() => setRevision(value => value + 1), []);
+  useMapEvents({ zoomend: update, moveend: update, resize: update });
+  const positions = useMemo(() => {
+    const points = locations.map(item => map.latLngToLayerPoint([Number(item.lat), Number(item.lng)]));
+    const homePoint = map.latLngToLayerPoint([Number(home.lat), Number(home.lng)]);
+    return spreadEvidencePoints(points, homePoint).map(point => map.layerPointToLatLng(point));
+  }, [map, home.lat, home.lng, locations, revision]);
+  return locations.map((item, index) => {
+    const actual = [Number(item.lat), Number(item.lng)];
+    const position = positions[index];
+    const route = item.route?.coordinates?.map(([lng, lat]) => [lat, lng]);
+    return <Fragment key={item.id}>
+      {route?.length >= 2 && <><Polyline positions={route} interactive={false} pathOptions={{ color: '#ffffff', weight: 8, opacity: 1 }} /><Polyline positions={route} interactive={false} pathOptions={{ className: 'score-evidence-connection', color: item.color, weight: 4.5, opacity: 1 }} /></>}
+      {map.latLngToLayerPoint(actual).distanceTo(map.latLngToLayerPoint(position)) > 1 && <Polyline positions={[actual, position]} interactive={false} pathOptions={{ color: item.color, weight: 1.5, opacity: .8, dashArray: '2 3' }} />}
+      <EvidencePoint item={item} position={position} />
+    </Fragment>;
+  });
 }
 
 const HomeMarker = memo(function HomeMarker({ home, selected, hovered, onSelect }) {
@@ -401,11 +406,7 @@ export default memo(function MapView({ homes, resources = [], visibleResourceTyp
     <TileLayer attribution="&copy; OpenStreetMap contributors" url={tileUrl} />
     <ResizeMap/><MapViewportListener onBoundsChange={onViewportChange} /><FitHomes homes={mappedHomes} selectedHome={selectedHome} addressTarget={addressTarget} /><FlyToSelected locations={evidenceLocations} home={selectedHome} request={homeFocusRequest} addressFocused={addressFocused} /><FocusResource facilityFocus={facilityFocus} /><FlyToAddress target={addressTarget} request={addressRequest} focused={addressFocused} /><ResetSingapore request={centerRequest} cameraIntent={cameraIntent} /><MemoResourceFeatures features={resources} visibleTypes={visibleResourceTypes} denguePolicy={denguePolicy} dengueNow={dengueNow} /><HoverPreview home={hoveredHome} selectedHome={selectedHome} addressTarget={addressTarget} />
     {anchors.map((anchor,i)=><Circle key={anchor.id} center={[anchor.lat,anchor.lng]} radius={anchor.radius} pathOptions={{color:['#42624f','#627f90','#8a7898'][i%3],fillOpacity:0.08,weight:2,dashArray:'5 5'}}><Popup>{anchor.label}: {anchor.radius.toLocaleString()} m straight-line reach</Popup></Circle>)}
-    {hasMapCoordinates(selectedHome) && evidenceLocations.map(item => <Fragment key={item.id}>
-      <Polyline positions={[[Number(selectedHome.lat), Number(selectedHome.lng)], [Number(item.lat), Number(item.lng)]]} interactive={false} pathOptions={{ color: '#ffffff', weight: 5, opacity: .8 }} />
-      <Polyline positions={[[Number(selectedHome.lat), Number(selectedHome.lng)], [Number(item.lat), Number(item.lng)]]} interactive={false} pathOptions={{ className: 'score-evidence-connection', color: item.color, weight: 2.5, opacity: .95, dashArray: '5 7' }} />
-      <EvidencePoint item={item} />
-    </Fragment>)}
+    {hasMapCoordinates(selectedHome) && <EvidenceMarkers home={selectedHome} locations={evidenceLocations} />}
     {markerHomes.map(home => <HomeMarker key={home.id} home={home} selected={home.id === selectedHome?.id} hovered={home.id === hoveredHome?.id} onSelect={onSelect} />)}
     <AddressMarker target={addressTarget} />
   </MapContainer>;

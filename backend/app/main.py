@@ -14,7 +14,7 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from . import database, recovery
 from .dengue import dengue_home_status, evaluate_dengue_snapshot, parse_dengue_timestamp
@@ -32,6 +32,7 @@ from .database import (
 )
 from .domain import weighted_score
 from .onemap import OneMapProviderError, search_address_candidates
+from .walking_routes import walking_route
 from .pagination import MAX_CURSOR_LENGTH, decode_cursor, encode_cursor
 from .local_auth import (
     hash_password,
@@ -1952,6 +1953,27 @@ def _public_map_address_items(candidates, provider_token: str) -> list[dict[str,
         if len(items) == 10:
             break
     return items
+
+
+class WalkingRouteRequest(BaseModel):
+    start_lat: float = Field(ge=1, le=2, allow_inf_nan=False)
+    start_lng: float = Field(ge=103, le=105, allow_inf_nan=False)
+    end_lat: float = Field(ge=1, le=2, allow_inf_nan=False)
+    end_lng: float = Field(ge=103, le=105, allow_inf_nan=False)
+
+
+@app.post("/api/v1/map/walking-route")
+async def map_walking_route(payload: WalkingRouteRequest, request: Request, response: Response) -> dict:
+    response.headers['Cache-Control'] = 'no-store'
+    _get_address_search_limiter().check(f"map-route:{rate_limit_key(None, request)}")
+    token = os.getenv('ONEMAP_ACCESS_TOKEN', '').strip()
+    if not is_configured_value(token):
+        raise HTTPException(status_code=503, detail={'code': 'ONEMAP_UNCONFIGURED', 'message': 'Walking routes are not configured.'})
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            return await walking_route(client, token, (payload.start_lat, payload.start_lng), (payload.end_lat, payload.end_lng))
+    except Exception:
+        raise HTTPException(status_code=502, detail={'code': 'ROUTE_UNAVAILABLE', 'message': 'Walking route is unavailable.'}) from None
 
 
 @app.post("/api/v1/map/address-search")

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evidenceCollection, selectedEvidenceLocations } from '../lib/score-locations';
+import { evidenceCollection, selectedEvidenceLocations, spreadEvidencePoints } from '../lib/score-locations';
 
 const home = { id: 'home', lat: 1.3, lng: 103.8, scoreLocations: [{ id: 'school-1', component: 'school', name: 'Scoring school', lat: 1.301, lng: 103.801, distanceM: 157, resourceType: 'moe_school', usedInScore: true }] };
 
@@ -8,9 +8,11 @@ describe('selected home evidence', () => {
     const locations = selectedEvidenceLocations(home);
     expect(locations).toHaveLength(1);
     expect(locations[0]).toMatchObject({ lat: 1.301, lng: 103.801, distanceM: 157, context: 'Used in score', labelDirection: 'top' });
+    locations[0].route = { coordinates: [[103.8, 1.3], [103.8005, 1.3008], [103.801, 1.301]] };
     const collection = evidenceCollection(home, locations);
     expect(collection.features[0].geometry.coordinates).toEqual([103.801, 1.301]);
-    expect(collection.features[1].geometry.coordinates).toEqual([[103.8, 1.3], [103.801, 1.301]]);
+    expect(collection.features[1].geometry.coordinates).toEqual([[103.8, 1.3], [103.8005, 1.3008], [103.801, 1.301]]);
+    expect(evidenceCollection(home, [{ ...locations[0], route: null }]).features).toHaveLength(1);
     expect(collection.features[1].properties.distanceLabel).toBe('157 m straight-line');
   });
   it('keeps personal places separate from the score and includes only evaluated place checks', () => {
@@ -26,4 +28,11 @@ describe('selected home evidence', () => {
     for (const lat of [null, '', false, 999]) expect(selectedEvidenceLocations({ ...home, scoreLocations: [{ ...home.scoreLocations[0], lat }] })).toEqual([]);
     expect(selectedEvidenceLocations({ ...home, scoreLocations: [{ ...home.scoreLocations[0], usedInScore: false }] })[0].context).toContain('not included in score');
   });
+});
+
+it('separates evidence markers that overlap each other or the selected home', () => {
+  const points = spreadEvidencePoints([{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 100, y: 100 }], { x: 0, y: 0 });
+  expect(Math.hypot(points[0].x, points[0].y)).toBeGreaterThanOrEqual(36);
+  expect(Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y)).toBeGreaterThanOrEqual(36);
+  expect(points[2]).toEqual({ x: 100, y: 100 });
 });

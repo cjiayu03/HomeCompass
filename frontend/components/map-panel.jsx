@@ -135,7 +135,36 @@ export function MapPanel({ controlsTarget, cameraIntent, onCameraIntent, onAddre
   const inReach=anchors.length?homes.filter(home=>anchors.every(a=>{const d=distanceM(a,home);return d!=null&&d<=a.radius;})).length:0;
   const [localVisibleResourceTypes, setLocalVisibleResourceTypes] = useState(() => mapResourceTypes || ['silver_zone']);
   const visibleResourceTypes = controlledResourceTypes ?? localVisibleResourceTypes;
-  const evidenceLocations = useMemo(() => selectedEvidenceLocations(mapSelectedHome, places), [mapSelectedHome, places]);  const dengueSource = sourceStatus?.items?.find(source => source.resourceType === 'dengue_cluster');
+  const evidenceLocations = useMemo(() => selectedEvidenceLocations(mapSelectedHome, places), [mapSelectedHome, places]);
+  const [routeState, setRouteState] = useState({ key: '', routes: {}, loading: false });
+  const routeCache = useRef(new Map());
+  const routeKey = JSON.stringify([mapSelectedHome?.id, mapSelectedHome?.lat, mapSelectedHome?.lng, evidenceLocations.map(item => [item.id, item.lat, item.lng])]);
+  useEffect(() => {
+    if (!hasMapCoordinates(mapSelectedHome) || !evidenceLocations.length) {
+      setRouteState({ key: routeKey, routes: {}, loading: false });
+      return undefined;
+    }
+    const controller = new AbortController();
+    let active = true;
+    setRouteState({ key: routeKey, routes: {}, loading: true });
+    Promise.all(evidenceLocations.map(async item => {
+      const body = { start_lat: Number(mapSelectedHome.lat), start_lng: Number(mapSelectedHome.lng), end_lat: Number(item.lat), end_lng: Number(item.lng) };
+      const key = JSON.stringify(body);
+      try {
+        let route = routeCache.current.get(key);
+        if (!route) {
+          route = await requestJson('/api/v1/map/walking-route', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal });
+          if (!Array.isArray(route.coordinates) || route.coordinates.length < 2 || !route.coordinates.every(point => Array.isArray(point) && point.length === 2 && point.every(Number.isFinite))) throw new Error('Invalid route');
+          if (routeCache.current.size >= 100) routeCache.current.delete(routeCache.current.keys().next().value);
+          routeCache.current.set(key, route);
+        }
+        return [item.id, route];
+      } catch { return [item.id, null]; }
+    })).then(entries => { if (active) setRouteState({ key: routeKey, routes: Object.fromEntries(entries), loading: false }); });
+    return () => { active = false; controller.abort(); };
+  }, [routeKey]);
+  const routedEvidenceLocations = useMemo(() => evidenceLocations.map(item => ({ ...item, route: routeState.key === routeKey ? routeState.routes[item.id] : null })), [evidenceLocations, routeState, routeKey]);
+  const dengueSource = sourceStatus?.items?.find(source => source.resourceType === 'dengue_cluster');
   const denguePolicy = newestDenguePolicy(resourceState?.dengue, dengueSource?.dengue);
   const dengueNow = useDengueNow(denguePolicy?.validUntil);
   const currentDenguePolicy = evaluateDengueSnapshot(denguePolicy, dengueNow);
@@ -240,8 +269,8 @@ export function MapPanel({ controlsTarget, cameraIntent, onCameraIntent, onAddre
   return (
     <section className={cn('relative isolate z-0 h-[clamp(360px,50dvh,440px)] min-h-0 overflow-hidden rounded-xl border bg-secondary shadow-soft lg:h-full', className)} aria-label={mapMode === '3d' ? 'Movable 3D neighborhood map' : 'Movable OpenStreetMap view'}>
       <div className="absolute inset-0 z-0">{mapMode === '3d'
-        ? <MapBoundary onUnavailable={fallback}><Map3DView homes={homes} resources={currentResources} visibleResourceTypes={visibleResourceTypes} denguePolicy={denguePolicy} dengueNow={dengueNow} selectedHome={mapSelectedHome} evidenceLocations={evidenceLocations} hoveredHome={mapHoveredHome} anchors={anchors} onUnavailable={fallback} onSelect={onSelect} cameraIntent={activeCameraIntent} homeFocusRequest={activeCameraIntent.type === 'home' ? activeCameraIntent.request : 0} facilityFocus={facilityFocus} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} /></MapBoundary>
-        : <MapView homes={homes} resources={currentResources} visibleResourceTypes={visibleResourceTypes} denguePolicy={denguePolicy} dengueNow={dengueNow} selectedHome={mapSelectedHome} evidenceLocations={evidenceLocations} hoveredHome={mapHoveredHome} anchors={anchors} onSelect={onSelect} cameraIntent={activeCameraIntent} homeFocusRequest={activeCameraIntent.type === 'home' ? activeCameraIntent.request : 0} facilityFocus={facilityFocus} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} />}</div>
+        ? <MapBoundary onUnavailable={fallback}><Map3DView homes={homes} resources={currentResources} visibleResourceTypes={visibleResourceTypes} denguePolicy={denguePolicy} dengueNow={dengueNow} selectedHome={mapSelectedHome} evidenceLocations={routedEvidenceLocations} hoveredHome={mapHoveredHome} anchors={anchors} onUnavailable={fallback} onSelect={onSelect} cameraIntent={activeCameraIntent} homeFocusRequest={activeCameraIntent.type === 'home' ? activeCameraIntent.request : 0} facilityFocus={facilityFocus} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} /></MapBoundary>
+        : <MapView homes={homes} resources={currentResources} visibleResourceTypes={visibleResourceTypes} denguePolicy={denguePolicy} dengueNow={dengueNow} selectedHome={mapSelectedHome} evidenceLocations={routedEvidenceLocations} hoveredHome={mapHoveredHome} anchors={anchors} onSelect={onSelect} cameraIntent={activeCameraIntent} homeFocusRequest={activeCameraIntent.type === 'home' ? activeCameraIntent.request : 0} facilityFocus={facilityFocus} centerRequest={centerRequest} addressTarget={addressTarget} addressRequest={addressRequest} addressFocused={addressFocused} onViewportChange={refreshViewport} />}</div>
       {(unlocatedCount > 0 || visibleHomeLocationStatus || (mapSelectedHome && !addressTarget) || visibleResourceTypes.includes('dengue_cluster')) && <div data-testid="map-evidence-overlays" className="pointer-events-none absolute inset-x-3 bottom-3 z-10 flex max-h-[calc(100%-4rem)] flex-col gap-2 overflow-y-auto sm:max-h-none sm:flex-row sm:items-end sm:justify-between sm:overflow-visible">
         <div className="pointer-events-none flex min-w-0 flex-col items-start gap-2 sm:max-w-[min(24rem,calc(50%-0.5rem))]">
           {unlocatedCount > 0 && <p role="status" aria-label="Map location coverage" className="glass-card max-w-full rounded-lg px-3 py-2 text-xs leading-4 text-foreground shadow-soft">{mappedCount} of {homes.length} loaded records have map locations. {unlocatedCount} lack verified coordinates, so they cannot appear as pins yet.</p>}
@@ -251,7 +280,7 @@ export function MapPanel({ controlsTarget, cameraIntent, onCameraIntent, onAddre
             {visibleHomeLocationStatus.state === 'unavailable' && `No verified block location found for ${locationTarget.address}.`}
           </p>}
           {mapSelectedHome && !addressTarget && <details key={mapSelectedHome.id} data-testid="selected-home-map-summary" className="score-map-legend glass-card pointer-events-auto w-fit max-w-full rounded-lg px-3 py-2 text-xs">
-            <summary className="min-h-8 cursor-pointer font-semibold text-foreground">{evidenceLocations.length ? `${evidenceLocations.length} supporting location${evidenceLocations.length === 1 ? '' : 's'}` : 'Score locations'}</summary>
+            <summary className="min-h-8 cursor-pointer font-semibold text-foreground">{evidenceLocations.length ? `${evidenceLocations.length} supporting location${evidenceLocations.length === 1 ? '' : 's'}` : 'Score locations'}{evidenceLocations.length > 0 && (routeState.loading || routeState.key !== routeKey ? ' · Loading routes' : Object.values(routeState.routes).some(route => !route) ? ' · Routes unavailable' : '')}</summary>
             <div className="max-h-44 overflow-y-auto overscroll-contain"><p className="mb-2 text-muted-foreground">{mapSelectedHome.address}</p>
               {evidenceLocations.length ? <ul className="space-y-2">{evidenceLocations.map(item => <li key={item.id} className="flex gap-2"><span aria-hidden="true" className="mt-0.5 shrink-0" style={{ color: item.color }}>{createElement(mapLayerIcons[item.resourceType] || LocateFixed, { className: 'size-4' })}</span><div><p className="font-medium">{item.name}</p><p className="text-muted-foreground">{item.label} · {Number.isFinite(item.distanceM) ? `${Math.round(item.distanceM).toLocaleString()} m` : 'Distance unavailable'}</p><p className="text-muted-foreground">{item.context}</p></div></li>)}</ul> : <p className="text-muted-foreground">{Array.isArray(mapSelectedHome.scoreLocations) ? 'No mapped amenity evidence is available for this record.' : 'Reload results to see the locations supporting this score.'}</p>}
               <p className="mt-2 font-medium">Nearest places in enabled layers:</p>
@@ -264,7 +293,7 @@ export function MapPanel({ controlsTarget, cameraIntent, onCameraIntent, onAddre
                   <span>{name} · {resourceLabel(type)} · {Math.round(distance)} m{location ? ` · ${location}` : ''}</span>
                 </div>;
               }) : <p>Turn on facility layers in Map options to see places near this home.</p>}
-              <p className="mt-2 text-muted-foreground">Connections show straight-line distances, not walking routes.</p></div>
+              <p className="mt-2 text-muted-foreground">{routeState.loading ? 'Loading walking routes…' : Object.values(routeState.routes).some(route => !route) ? 'Some walking routes are unavailable.' : 'Paths show OneMap walking routes.'} Score distances remain straight-line. On the 2D map, overlapping markers are spaced apart and linked to their actual locations.</p></div>
           </details>}
         </div>
         {visibleResourceTypes.includes('dengue_cluster') && <div className="pointer-events-auto w-full max-w-[min(22rem,100%)] self-end sm:w-auto">
