@@ -4,7 +4,7 @@ The API uses Python 3.12, FastAPI and asyncpg. Email/password identities and has
 
 ## Local setup
 
-Install `backend/requirements.txt` in the project's Python environment and apply SQL migrations `001` through `013` in order. `/ready` reports migration readiness only after the full schema is present, including the cached scoring evidence tables. For a native local run, the backend loads the repository-root `.env` when `DATABASE_URL` has not already been exported, and maps the Compose-only `db`/`database` hostname to `127.0.0.1`. Explicit environment variables are left untouched. Start the local PostgreSQL service first, then run:
+Install `backend/requirements.txt` in the project's Python environment and apply SQL migrations `001` through `013` in order. `/ready` (also available as `/api/v1/ready` behind the frontend API proxy) reports migration readiness only after the full schema is present, including the cached scoring evidence tables. For a native local run, the backend loads the repository-root `.env` when `DATABASE_URL` has not already been exported, and maps the Compose-only `db`/`database` hostname to `127.0.0.1`. Explicit environment variables are left untouched. Start the local PostgreSQL service first, then run:
 
 ```bash
 cd backend

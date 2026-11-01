@@ -151,6 +151,13 @@ LEFT JOIN LATERAL (
 ) care_access ON TRUE
 """
 
+# Summary provenance needs source retrieval dates; keep this extra JSON field
+# out of the shared search/detail query contract.
+_SUMMARY_HOME_EVIDENCE_JOINS = _HOME_EVIDENCE_JOINS.replace(
+    "'sourceUrl', snapshot.source_url",
+    "'sourceUrl', snapshot.source_url, 'retrievedAt', snapshot.retrieved_at",
+)
+
 _DENGUE_HOME_JOINS = """
 LEFT JOIN latest_dengue_snapshot dengue_snapshot ON TRUE
 LEFT JOIN LATERAL (
@@ -946,6 +953,7 @@ async def health() -> dict:
 
 
 @app.get("/ready")
+@app.get("/api/v1/ready")
 async def ready() -> JSONResponse:
     snapshot = await readiness_snapshot()
     return JSONResponse(
@@ -1631,7 +1639,7 @@ async def record_summary(
                       care_access.location AS care_location,
                       s.source_id, s.source_version, s.source_url, s.retrieved_at
                FROM candidate_home h JOIN source_snapshot s ON s.id=h.source_snapshot_id
-               {_HOME_EVIDENCE_JOINS}
+               {_SUMMARY_HOME_EVIDENCE_JOINS}
                {_DENGUE_HOME_JOINS}
                WHERE h.id=$1""",
             home_id,
