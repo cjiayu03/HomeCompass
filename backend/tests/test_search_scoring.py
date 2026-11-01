@@ -149,7 +149,8 @@ def test_missing_geometry_stays_missing_and_low_coverage_score_is_null(monkeypat
     assert item["lng"] is None
     assert item["geocodeSource"] is None
     assert item["geocodedAt"] is None
-    assert item["risk"] == "Location needed for cluster check"
+    assert item["dengue"]["state"] == "source_unavailable"
+    assert item["risk"] == "NEA dengue cluster data unavailable"
     assert item["sourceSemantics"] == "historical_transaction"
     assert item["risks"] == ["Historical resale transaction; not a current listing"]
 

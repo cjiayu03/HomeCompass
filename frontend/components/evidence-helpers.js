@@ -1,4 +1,5 @@
 import { evaluateHome } from '@/lib/planning';
+import { evaluateDengueSnapshot } from '@/lib/dengue-status';
 
 export function candidateReasons(home, brief = {}) {
   const result = evaluateHome(home, brief);
@@ -26,6 +27,27 @@ export const sourceReviewDays = {
 };
 
 export function sourceFreshness(source, now = new Date()) {
+  if (source?.resourceType === 'dengue_cluster') {
+    const thresholdHours = 48;
+    if (!['valid', 'degraded'].includes(source.state)) {
+      return { state: 'unavailable', label: 'NEA cluster update unavailable', thresholdHours };
+    }
+    const checked = now instanceof Date ? now : new Date(now);
+    const policy = source.dengue || { state: 'unknown_date', usable: false };
+    const evaluated = evaluateDengueSnapshot(policy, checked.getTime());
+    const labels = {
+      source_unavailable: 'NEA cluster update unavailable',
+      unknown_date: 'NEA update date unknown',
+      future_date: 'NEA update date is invalid',
+      stale: 'NEA snapshot is stale; polygons hidden',
+      partial_coverage: 'Recent NEA snapshot; partial validation',
+      fresh: 'NEA snapshot within 48-hour display window',
+    };
+    const state = evaluated.state === 'fresh' ? 'within' : evaluated.state === 'stale' ? 'review' : evaluated.state;
+    const updated = evaluated.sourceUpdatedAt ? new Date(evaluated.sourceUpdatedAt) : null;
+    const ageHours = updated && Number.isFinite(updated.getTime()) ? Math.max(0, (checked - updated) / 3600000) : null;
+    return { state, label: labels[evaluated.state] || labels.unknown_date, ageHours, thresholdHours, sourceUpdatedAt: evaluated.sourceUpdatedAt || null, validUntil: evaluated.validUntil || null, reason: evaluated.reason };
+  }
   const thresholdDays = sourceReviewDays[source?.resourceType];
   if (!['valid', 'degraded'].includes(source?.state)) return { state: 'unavailable', label: 'No imported evidence', thresholdDays };
   const value = source.sourceUpdatedAt || source.version;

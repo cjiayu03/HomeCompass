@@ -7,6 +7,8 @@ import { EvidenceContext } from '@/components/evidence-context';
 import { candidateReasons } from '@/components/evidence-helpers';
 import { PlaceDistanceList } from '@/components/place-picker';
 import { DecisionSummary } from '@/components/decision-summary';
+import { DengueStatus, useDengueNow } from '@/components/dengue-status';
+import { evaluateHomeDengueStatus } from '@/lib/dengue-status';
 import { money } from '@/lib/utils';
 
 const text = value => value == null || value === '' ? 'Unavailable in this record' : String(value);
@@ -16,6 +18,8 @@ export function ComparisonView({ homes = [], onRemove, availableHomes = [], onAd
   const [secondId, setSecondId] = useState('');
   const [differences, setDifferences] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
+  const nextDengueExpiry = homes.map(home => home.dengue?.validUntil).filter(Boolean).sort()[0] || null;
+  useDengueNow(nextDengueExpiry);
   const first = homes.find(home => String(home.id) === firstId) || homes[0];
   const second = homes.find(home => String(home.id) === secondId && home.id !== first?.id) || homes.find(home => home.id !== first?.id);
   const orderedHomes = first && second ? [first, second, ...homes.filter(home => home.id !== first.id && home.id !== second.id)] : homes;
@@ -31,7 +35,7 @@ export function ComparisonView({ homes = [], onRemove, availableHomes = [], onAd
     { label: 'Childcare access', value: home => text(home.childcare) },
     { label: 'Care access', value: home => text(home.care) },
     { label: 'Saved place distances', value: home => JSON.stringify(home.placeDistances || []), render: home => home.placeDistances?.length ? <PlaceDistanceList distances={home.placeDistances} /> : 'No saved place distance evidence' },
-    { label: 'Dengue context', value: home => text(home.risk) },
+    { label: 'Dengue cluster status', value: home => evaluateHomeDengueStatus(home.dengue).label, render: home => <DengueStatus home={home} /> },
     { label: 'Trade-off or missing evidence', value: home => candidateReasons(home, brief).tradeoff },
     { label: 'Current availability', value: () => 'Unavailable; these are research records, not live listings' },
     { label: 'Evidence context', value: home => JSON.stringify([home.sourceSemantics, home.source, home.sourceUpdated, home.geocodeStatus, home.scoreDetails]), render: home => <EvidenceContext home={home} /> },

@@ -112,6 +112,7 @@ function successState(payload, data, previous) {
     retrievedAt: payload.retrievedAt || null,
     sourceSummary: payload.sourceSummary || [],
     warnings: payload.warnings || [],
+    dengue: payload.dengue || previous.dengue || null,
     error: null,
   };
 }
@@ -998,7 +999,8 @@ export function WorkspaceProvider({ children }) {
         layerParams.set('resource_type', type);
         return requestJson(`/api/v1/resources?${layerParams}`, { signal });
       }));
-      return { ...pages[0], features: pages.flatMap(page => requireResultArray(page, 'features')),
+      const denguePage = pages.find(page => page?.dengue);
+      return { ...pages[0], ...(denguePage ? { dengue: denguePage.dengue } : {}), features: pages.flatMap(page => requireResultArray(page, 'features')),
         hasMore: pages.some(page => page.hasMore === true), nextCursor: null,
         total: pages.reduce((sum, page) => sum + (Number.isFinite(page.total) ? page.total : page.features.length), 0) };
     },

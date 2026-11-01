@@ -305,6 +305,22 @@
 .leaflet-popup-content { margin: 14px 16px; min-width: 180px; }
 .leaflet-popup-content .map-cluster-members { max-height: 180px; overflow-y: auto; margin: 8px 0; padding-left: 18px; list-style: disc; }
 .leaflet-popup-content .map-cluster-members li { margin: 3px 0; }
+.map-dengue-popup { min-width: 200px; }
+.map-dengue-popup > strong { display: block; padding-right: 18px; font-size: 14px; line-height: 1.4; }
+.map-dengue-popup .map-cluster-facts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 16px; margin-top: 12px; }
+.map-dengue-popup .map-cluster-cases { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.03em; line-height: 1.2; }
+.map-cluster-alert { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; }
+.map-cluster-alert-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.map-dengue-popup .map-cluster-updated { margin: 8px 0 0; color: hsl(var(--muted-foreground)); font-size: 12px; }
+.map-cluster-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; margin-top: 12px; padding-top: 10px; border-top: 1px solid hsl(var(--border)); font-size: 12px; }
+.map-cluster-details summary { cursor: pointer; color: hsl(var(--muted-foreground)); }
+.map-cluster-details[open] { max-height: min(9rem, 22dvh); overflow-y: auto; }
+.map-cluster-details p { margin: 8px 0; color: hsl(var(--muted-foreground)); font-size: 12px; line-height: 1.5; }
+.map-cluster-details a, .map-cluster-footer > a { color: hsl(var(--primary)); text-decoration: underline; text-underline-offset: 3px; }
+@media (pointer: coarse) {
+  .map-cluster-details > summary, .dengue-map-legend summary { min-height: 44px; padding-block: 12px; }
+  .map-cluster-footer > a, .dengue-map-legend a { display: inline-flex; min-height: 44px; align-items: center; }
+}
 .leaflet-div-icon.map-resource-marker-icon { border: 0; background: transparent; }
 .map-resource-marker { display: grid; width: 28px; height: 28px; place-items: center; border: 2px solid var(--resource-color); border-radius: 999px; background: rgb(255 255 255 / .96); color: var(--resource-color); box-shadow: 0 2px 7px rgb(15 23 42 / .26); }
 .map-resource-marker svg { display: block; }
