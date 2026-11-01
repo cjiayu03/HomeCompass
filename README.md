@@ -13,8 +13,8 @@ HomeCompass is a Singapore home-research workspace built around historical HDB r
 - Compare and shortlist homes, save search criteria, and replay a past search against current data.
 - View an AI evidence summary for a home when the server-side Gemini integration is configured and enabled.
 - Keep account searches and decisions associated with the signed-in account.
-
-To try search history on the live site, sign in, open **Explore**, choose **More → Search presets and history**, then use **Replay with current data** on a history item. To try an AI summary, open a result’s **Details** and scroll to **AI evidence summary**. Summary generation is unavailable until the server has a Gemini API key and approved budget configuration.
+  
+**AI Summary is currently unavailable
 
 ## Technology
 
