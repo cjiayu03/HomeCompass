@@ -486,7 +486,7 @@ function syncResultNotice(result) {
 export function WorkspaceProvider({ children }) {
   const [hoveredHome, setHoveredHome] = useState(null);
   const auth = useAuth();
-  const { user, loading: authLoading, transitioning: authTransitioning = false, sessionVerified = true } = auth;
+  const { user, loading: authLoading, transitioning: authTransitioning = false, focusChecking = false, sessionVerified = true } = auth;
   const refreshSession = auth.refreshSession;
   const userId = user?.id || null;
   const targetWorkspaceOwner = accountWorkspaceOwnerKey(userId);
@@ -2161,34 +2161,36 @@ export function WorkspaceProvider({ children }) {
     });
   }
 
-  const exposedBrief = workspaceReady ? brief : defaultBrief;
-  const exposedHomes = workspaceReady ? homes : (fixtureMode ? fixtureHomes : []);
-  const exposedHomeState = workspaceReady ? homeState : initialState(fixtureMode ? 'fixture' : 'live');
-  const exposedPagination = workspaceReady ? pagination : {
+  // Keep the existing view stable during a passive focus check; all mutations remain gated by workspaceReady.
+  const workspaceDisplayReady = workspaceReady || (focusChecking && authTransitioning && !authLoading && hydrated && workspaceOwner === targetWorkspaceOwner && workspaceOwnerRef.current === targetWorkspaceOwner);
+  const exposedBrief = workspaceDisplayReady ? brief : defaultBrief;
+  const exposedHomes = workspaceDisplayReady ? homes : (fixtureMode ? fixtureHomes : []);
+  const exposedHomeState = workspaceDisplayReady ? homeState : initialState(fixtureMode ? 'fixture' : 'live');
+  const exposedPagination = workspaceDisplayReady ? pagination : {
     limit: HOME_PAGE_LIMIT,
     total: fixtureMode ? fixtureHomes.length : 0,
     nextCursor: null,
     hasMore: false,
   };
-  const exposedQuery = workspaceReady ? query : '';
-  const exposedBusy = workspaceReady ? busy : false;
-  const exposedShortlistIds = workspaceReady ? shortlistIds : [];
-  const exposedCompareIds = workspaceReady ? compareIds : [];
-  const exposedPlaces = workspaceReady ? places : [];
-  const exposedPlaceState = workspaceReady ? placeState : authenticatedPlaceState('idle');
-  const exposedHistory = workspaceReady ? history : [];
-  const exposedHistoryState = workspaceReady
+  const exposedQuery = workspaceDisplayReady ? query : '';
+  const exposedBusy = workspaceDisplayReady ? busy : false;
+  const exposedShortlistIds = workspaceDisplayReady ? shortlistIds : [];
+  const exposedCompareIds = workspaceDisplayReady ? compareIds : [];
+  const exposedPlaces = workspaceDisplayReady ? places : [];
+  const exposedPlaceState = workspaceDisplayReady ? placeState : authenticatedPlaceState('idle');
+  const exposedHistory = workspaceDisplayReady ? history : [];
+  const exposedHistoryState = workspaceDisplayReady
     ? historyState
     : initialHistoryState(!authLoading && !userId ? 'signed_out' : 'idle');
-  const exposedSavedSearches = workspaceReady ? savedSearches : [];
-  const exposedSavedSearchState = workspaceReady
+  const exposedSavedSearches = workspaceDisplayReady ? savedSearches : [];
+  const exposedSavedSearchState = workspaceDisplayReady
     ? savedSearchState
     : initialSavedSearchState(!authLoading && !userId ? 'signed_out' : 'idle');
-  const exposedLastSearchSnapshot = workspaceReady ? lastSearchSnapshot : null;
-  const exposedSyncState = workspaceReady ? syncState : 'local';
-  const exposedSyncResult = workspaceReady ? syncResult : null;
-  const exposedNotice = workspaceReady ? notice : null;
-  const exposedPendingPlaceCount = workspaceReady ? pendingLocalPlaceCount : 0;
+  const exposedLastSearchSnapshot = workspaceDisplayReady ? lastSearchSnapshot : null;
+  const exposedSyncState = workspaceDisplayReady ? syncState : 'local';
+  const exposedSyncResult = workspaceDisplayReady ? syncResult : null;
+  const exposedNotice = workspaceDisplayReady ? notice : null;
+  const exposedPendingPlaceCount = workspaceDisplayReady ? pendingLocalPlaceCount : 0;
   const setCurrentBrief = (nextValue) => { if (localDataClearedRef.current && userId && profileLoadState === 'ready') setProfileOwner(userId); localDataClearedRef.current = false; explicitSearchRequestedRef.current = true; setOwnerState(setBrief, nextValue); };
   const setCurrentHomes = (nextValue) => setOwnerState(setHomes, nextValue);
   const setCurrentQuery = (nextValue) => { localDataClearedRef.current = false; explicitSearchRequestedRef.current = true; setOwnerState(setQuery, nextValue); };
@@ -2200,10 +2202,10 @@ export function WorkspaceProvider({ children }) {
     setHoveredHome,
     brief: exposedBrief,
     setBrief: setCurrentBrief,
-    appliedBrief: workspaceReady ? appliedBrief : defaultBrief,
-    appliedQuery: workspaceReady ? appliedQuery : '',
-    appliedBounds: workspaceReady ? appliedBounds : null,
-    searchDirty: workspaceReady && (query !== appliedQuery || JSON.stringify(brief) !== JSON.stringify(appliedBrief)),
+    appliedBrief: workspaceDisplayReady ? appliedBrief : defaultBrief,
+    appliedQuery: workspaceDisplayReady ? appliedQuery : '',
+    appliedBounds: workspaceDisplayReady ? appliedBounds : null,
+    searchDirty: workspaceDisplayReady && (query !== appliedQuery || JSON.stringify(brief) !== JSON.stringify(appliedBrief)),
     homes: exposedHomes,
     setHomes: setCurrentHomes,
     homeState: exposedHomeState,
@@ -2233,11 +2235,11 @@ export function WorkspaceProvider({ children }) {
     busy: exposedBusy,
     shortlistIds: exposedShortlistIds,
     setShortlistIds: setCurrentShortlistIds,
-    shortlistHomes: workspaceReady ? shortlistHomes : [],
-    missingSavedIds: workspaceReady ? shortlistIds.filter(id => !decisionHomesById.has(String(id))) : [],
+    shortlistHomes: workspaceDisplayReady ? shortlistHomes : [],
+    missingSavedIds: workspaceDisplayReady ? shortlistIds.filter(id => !decisionHomesById.has(String(id))) : [],
     compareIds: exposedCompareIds,
     setCompareIds: setCurrentCompareIds,
-    selectedHomes: workspaceReady ? selectedHomes : [],
+    selectedHomes: workspaceDisplayReady ? selectedHomes : [],
     toggleShortlist,
     ensureSaved,
     reorderShortlist,
@@ -2247,9 +2249,9 @@ export function WorkspaceProvider({ children }) {
     resetSearch,
     searchBounds,
     clearLocalData,
-    profileSyncState: workspaceReady ? profileSyncState : { status: 'local', error: null },
+    profileSyncState: workspaceDisplayReady ? profileSyncState : { status: 'local', error: null },
     retryProfileSync,
-    profileLoadState: workspaceReady ? profileLoadState : userId ? 'loading' : 'signed_out',
+    profileLoadState: workspaceDisplayReady ? profileLoadState : userId ? 'loading' : 'signed_out',
     saveProfile,
     flash,
     places: exposedPlaces,

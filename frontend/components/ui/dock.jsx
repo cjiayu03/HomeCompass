@@ -9,6 +9,8 @@ import { useAppTheme } from '@/components/theme-provider';
 import { useAuth } from '@/components/auth-provider';
 import { useWorkspace } from '@/components/workspace-provider';
 import { HOME_SAVED_EVENT } from '@/lib/workspace-events';
+import { AssistantOrb } from '@/components/assistant-orb';
+import { useAssistantOpen } from '@/lib/assistant-state';
 import './dock.css';
 
 const destinations = [
@@ -78,6 +80,12 @@ export function Dock() {
   const { user, signOut, transitioning = false, sessionVerified = true } = useAuth();
   const { flash } = useWorkspace();
   const [signingOut, setSigningOut] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useAssistantOpen();
+  const assistantVisible = assistantOpen && ['/explore', '/shortlist'].includes(pathname);
+  function toggleAssistant() {
+    if (!['/explore', '/shortlist'].includes(pathname)) { setAssistantOpen(true); router.push('/explore'); return; }
+    setAssistantOpen(current => !current);
+  }
   const authPaused = transitioning || Boolean(user) && !sessionVerified;
   async function handleAuthAction() {
     if (signingOut || authPaused) return;
@@ -99,6 +107,7 @@ export function Dock() {
   return <nav className="dock-wrap" aria-label="Main navigation">
     <div id="homecompass-dock-panel" className="dock" role="group" aria-label="HomeCompass navigation and account actions">
       {destinations.map(({ href, label, icon }) => <DockLink key={href} href={href} label={label} icon={icon} celebrateSave={href === '/shortlist' && pathname === '/explore'} active={pathname === href || (href !== '/explore' && pathname.startsWith(`${href}/`))} />)}
+      <div className="dock-item"><button type="button" data-housing-assistant className={cn('dock-control dock-assistant', assistantVisible && 'dock-control--active')} onClick={toggleAssistant} aria-label={assistantVisible ? 'Close housing assistant' : 'Open housing assistant'} aria-expanded={assistantVisible} aria-controls={pathname === '/explore' && assistantOpen ? 'housing-assistant-panel' : undefined}><AssistantOrb active={assistantVisible} /><span className="dock-label">Ask AI</span></button></div>
       <span className="dock-divider" aria-hidden="true" />
       <div className="dock-item">
         <button type="button" className="dock-control" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label={theme === 'dark' ? 'Use light theme' : 'Use dark theme'}>

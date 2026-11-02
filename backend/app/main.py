@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 from . import database, recovery
 from .dengue import dengue_home_status, evaluate_dengue_snapshot, parse_dengue_timestamp
 from .ai import gemini_configuration_ready, interpret_query, summarize_record
+from .housing_chat import HousingChatRequest, housing_chat, stream_housing_chat
 from .source_text import source_label
 from .contracts import live_result_metadata
 from .database import (
@@ -1616,6 +1617,45 @@ def score_preview(request: ScoreRequest) -> dict:
     if any(value < 0 for value in request.weights.values()):
         raise HTTPException(status_code=422, detail={"code": "WEIGHT_RANGE", "message": "Criterion weights cannot be negative."})
     return weighted_score(request.criteria, request.weights)
+
+
+async def _housing_chat_context(request: HousingChatRequest):
+    options = await search_options()
+    # The public dataset, rather than client-supplied strings, owns model choices.
+    request = request.model_copy(update={'available_towns': options['towns'], 'available_flat_types': options['flatTypes']})
+    fields = (
+        'id', 'address', 'town', 'type', 'price', 'observedOn', 'floorAreaSqm', 'storeyRange',
+        'source', 'sourceUpdated', 'sourceSemantics', 'school', 'childcare', 'care', 'dengue',
+        'amenityDistancesM', 'pricePerSqm', 'leaseCommenceDate', 'remainingLeaseYears',
+        'remainingLeaseYearsEstimated', 'remainingLeaseEstimateAsOfYear', 'remainingLeaseEstimateMethod',
+    )
+    evidence = []
+    for home_id in dict.fromkeys(request.home_ids):
+        try:
+            home = await home_detail(home_id)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                continue
+            raise
+        evidence.append({field: home.get(field) for field in fields if field in home})
+    return request, evidence
+
+
+@app.post("/api/v1/ai/chat/stream")
+async def housing_chat_stream_endpoint(request: HousingChatRequest, http_request: Request, user: dict = Depends(require_active_user)):
+    from fastapi.responses import StreamingResponse
+    _get_ai_interpret_limiter().check(rate_limit_key(user, http_request))
+    request, evidence = await _housing_chat_context(request)
+    return StreamingResponse(stream_housing_chat(request, evidence), media_type='application/x-ndjson', headers={'Cache-Control': 'no-store, no-transform', 'X-Accel-Buffering': 'no'})
+
+
+@app.post("/api/v1/ai/chat")
+async def housing_chat_endpoint(request: HousingChatRequest, http_request: Request, response: Response, user: dict = Depends(require_active_user)) -> dict:
+    response.headers['Cache-Control'] = 'no-store'
+    _get_ai_interpret_limiter().check(rate_limit_key(user, http_request))
+    request, evidence = await _housing_chat_context(request)
+    result, model = await housing_chat(request, evidence)
+    return {**result.model_dump(mode='json'), 'provider': 'application' if model == 'application-guidance' else 'gemini', 'model': model, 'recordsUsed': len(evidence)}
 
 
 @app.post("/api/v1/ai/interpret")

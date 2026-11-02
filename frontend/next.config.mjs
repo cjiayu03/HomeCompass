@@ -18,6 +18,8 @@ if (backendOrigin) {
 
 const nextConfig = {
   reactStrictMode: true,
+  // Allow a bounded second model attempt when the first provider is unavailable.
+  experimental: { proxyTimeout: 90000 },
   transpilePackages: ['leaflet', 'react-leaflet'],
   async rewrites() {
     if (!backendOrigin) return [];

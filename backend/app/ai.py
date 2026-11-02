@@ -53,6 +53,13 @@ def _interaction_body(model: str, prompt: str, schema: dict, output_limit: int) 
     }
 
 
+def _gemini_model() -> str:
+    configured = os.getenv("GEMINI_MODEL", "").strip()
+    if configured:
+        return configured
+    return "gemini-3.5-flash-lite" if os.getenv("GEMINI_FREE_TIER", "").strip().lower() == "true" else "gemini-3.8-flash"
+
+
 def _provider_error_message(response: httpx.Response) -> str:
     try:
         payload = response.json()
@@ -146,13 +153,13 @@ async def _settle_usage(pool, reserve: Decimal, month, actual: Decimal | None) -
         )
 
 
-async def _generate_json(prompt: str, schema: dict, input_size_bytes: int) -> tuple[str, str]:
+async def _generate_json(prompt: str, schema: dict, input_size_bytes: int, *, model_override: str | None = None, timeout_seconds: float = 18.0, output_override: int | None = None) -> tuple[str, str]:
     key = os.getenv("GEMINI_API_KEY")
     if not is_configured_value(key):
         raise HTTPException(status_code=503, detail={"code": "AI_UNCONFIGURED", "message": "Gemini is disabled until a server-side API key is supplied."})
-    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+    model = model_override or _gemini_model()
     try:
-        output_limit = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "512"))
+        output_limit = output_override if output_override is not None else int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "512"))
     except ValueError as exc:
         raise HTTPException(status_code=503, detail={"code": "AI_OUTPUT_LIMIT_INVALID", "message": "Gemini output-token limit must be between 64 and 2048."}) from exc
     if not 64 <= output_limit <= 2048:
@@ -161,7 +168,7 @@ async def _generate_json(prompt: str, schema: dict, input_size_bytes: int) -> tu
     pool, reserve, _cap, month = await _reserve_usage(input_size_bytes * 2, output_limit)
     body = _interaction_body(model, prompt, schema, output_limit)
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(18.0, connect=4.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=4.0)) as client:
             response = await client.post(GEMINI_ENDPOINT, headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json=body)
         if response.status_code == 429:
             await _settle_usage(pool, reserve, month, None)

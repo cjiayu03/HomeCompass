@@ -103,3 +103,14 @@ def test_zero_budget_rejects_nonzero_rate_before_provider_request(monkeypatch):
     with pytest.raises(HTTPException) as error:
         asyncio.run(_reserve_usage(100, 100))
     assert error.value.detail['code'] == 'AI_BUDGET_INVALID'
+
+
+def test_model_defaults_to_lite_only_for_free_tier_and_respects_override(monkeypatch):
+    from app.ai import _gemini_model
+    monkeypatch.delenv('GEMINI_MODEL', raising=False)
+    monkeypatch.delenv('GEMINI_FREE_TIER', raising=False)
+    assert _gemini_model() == 'gemini-3.8-flash'
+    monkeypatch.setenv('GEMINI_FREE_TIER', 'true')
+    assert _gemini_model() == 'gemini-3.5-flash-lite'
+    monkeypatch.setenv('GEMINI_MODEL', 'custom-model')
+    assert _gemini_model() == 'custom-model'
