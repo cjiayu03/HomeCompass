@@ -10,6 +10,7 @@ import { dengueFeatureColor, evaluateDengueSnapshot, evaluateHomeDengueStatus, f
 import { mapResourcePopupContent } from '@/lib/map-resource-popup';
 
 vi.mock('@/components/workspace-provider', () => ({ useWorkspace: () => ({ brief: {}, appliedBrief: {}, setHoveredHome: () => {} }) }));
+vi.mock('@/components/auth-provider', () => ({ useAuth: () => ({ user: null, loading: false }) }));
 
 afterEach(() => {
   cleanup();

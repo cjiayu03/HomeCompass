@@ -2101,9 +2101,27 @@ async def search_map_address(
     payload: PlaceSuggestionRequest, request: Request, response: Response,
 ) -> dict:
     """Return a bounded public address list for moving the map camera."""
+    return await _public_map_address_lookup(payload, request, response, bucket="map-address")
+
+
+@app.post("/api/v1/map/home-location")
+async def locate_map_home(
+    payload: PlaceSuggestionRequest, request: Request, response: Response,
+) -> dict:
+    """Look up an unlocated home's address for a temporary map pin.
+
+    Hovering or selecting homes can send many lookups, so they use their own
+    rate-limit bucket and never consume the user's explicit address searches.
+    """
+    return await _public_map_address_lookup(payload, request, response, bucket="map-home")
+
+
+async def _public_map_address_lookup(
+    payload: PlaceSuggestionRequest, request: Request, response: Response, *, bucket: str,
+) -> dict:
     response.headers["Cache-Control"] = "no-store"
     try:
-        _get_address_search_limiter().check(f"map-address:{rate_limit_key(None, request)}")
+        _get_address_search_limiter().check(f"{bucket}:{rate_limit_key(None, request)}")
     except HTTPException as exc:
         raise HTTPException(
             status_code=exc.status_code,

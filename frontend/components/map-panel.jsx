@@ -78,7 +78,7 @@ export function MapPanel({ controlsTarget, cameraIntent, onCameraIntent, onAddre
         let candidate = homeLocationCache.current.get(cacheKey);
         if (!homeLocationCache.current.has(cacheKey)) {
           controller = new AbortController();
-          const response = await requestJson('/api/v1/map/address-search', {
+          const response = await requestJson('/api/v1/map/home-location', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ query: address }),
