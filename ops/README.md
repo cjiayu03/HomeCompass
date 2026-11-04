@@ -29,6 +29,10 @@ After the first deployment of migration `013`, refresh the home scoring cache on
 
 To refresh only NEA active dengue clusters, run `docker compose run --rm api python -m app.sources.data_gov_resources d_dbfabf16158d1b0e1c420627c0819168`. The importer records a publication timestamp only when data.gov.sg metadata before and after the export agree. A download does not make an old export current; the map hides it after the app's 48-hour freshness window. `FMEL_UPD_D` is a feature-record update date, not a case-report date. Check `/api/v1/sources` or the map legend for the source as-of time. After pulling code changes, rebuild the API with `docker compose up -d --build api` as described above.
 
+## Automatic OneMap token renewal in production
+
+The Linux production deployment uses `ops/onemap_token.py` with an hourly systemd user timer. It updates only `ONEMAP_ACCESS_TOKEN` in the server's private `.local/deploy/runtime.env` and restarts `homecompass-api.service` after rotation. The installation and monitoring commands are in [the production operations guide](tailscale/README.md#automatic-onemap-token-renewal). Renewal runs on the server independently of developer computers.
+
 ## Secrets and externally reachable deployments
 
 - `NEXT_PUBLIC_*` values are compiled into the browser JavaScript and are public configuration only. Never place a Gemini or data.gov.sg secret there.

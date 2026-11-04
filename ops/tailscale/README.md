@@ -51,3 +51,28 @@ with certificate verification enabled; the public housing endpoint reported 241,
 a temporary account registered successfully, retained a Secure/HttpOnly cookie and authenticated
 session, then was deleted. All three user services were active. A second updater run skipped
 the unchanged commit. No unrelated nginx changes were installed.
+
+## Automatic OneMap token renewal
+
+After deploying the renewal code, run this once **on the production Linux server as `ubuntu`, without sudo**:
+
+```bash
+python3 /home/ubuntu/sc2006/softwarelab/.local/deploy/current/ops/onemap_token.py install-production
+```
+
+Enter the registered OneMap email and password at the terminal prompts. The password is hidden. The installer requests a token, updates `ONEMAP_ACCESS_TOKEN` in `.local/deploy/runtime.env`, copies the standard-library-only helper into the stable `.local/deploy/bin/onemap_token.py`, and enables `homecompass-onemap-refresh.timer`. The first run applies the token immediately. Later runs check hourly and shortly after startup; missed calendar checks are caught up after downtime. Existing user lingering keeps the timer running after SSH logout and across reboots.
+
+The job renews when the provider's returned expiry is within six hours. It never logs the token or credentials. Account credentials are kept in `.local/deploy/onemap-refresh/credentials.json` with mode `0600` inside a `0700` directory; that server state is ignored by Git. Failed authentication preserves the old token. Runtime settings are replaced atomically, preserving unrelated values and release `.env` symlinks. The job takes the same `.local/deploy/update.lock` as deployment, so rotation and API restarts cannot overlap a release switch. Busy deployment locks defer the check to a later timer run.
+
+After rotation, only `homecompass-api.service` restarts. The helper waits for `http://127.0.0.1:8101/ready` before marking the token applied. A failed restart or readiness check stays pending, and the next timer run retries it without another login. A restart briefly interrupts API requests; selected OneMap address candidates may need to be selected again because their existing signatures depend on the provider token. Existing saved places and imported coordinates are retained.
+
+Verify or troubleshoot on the server:
+
+```bash
+systemctl --user list-timers homecompass-onemap-refresh.timer
+systemctl --user start homecompass-onemap-refresh.service
+journalctl --user -u homecompass-onemap-refresh.service -n 30 --no-pager
+python3 /home/ubuntu/sc2006/softwarelab/.local/deploy/bin/onemap_token.py status
+```
+
+To update the OneMap account credentials, run the installed helper with `setup --restart-api`. To replace an invalidated token before expiry, use `refresh --force --restart-api`. To remove the timer, use `uninstall-production`; the private credentials and last token are retained. Script updates require rerunning `install-production`, just like the installed deployment updater. For a different installation path, pass `--deploy-root /absolute/path/to/deploy` or set `HOMECOMPASS_DEPLOY_ROOT`.
