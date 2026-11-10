@@ -16,6 +16,10 @@ HomeCompass is a Singapore home-research workspace built around historical HDB r
   
 **AI Summary is currently unavailable
 
+## Gemini integration
+
+See [Gemini prompts](docs/GEMINI_PROMPTS.md) for the application's exact prompt templates, illustrative inputs and responses, response schemas, validation, and configuration requirements.
+
 ## How the home-fit score is calculated
 
 The **Source score** is a weighted average of up to four evidence components, each normalized to a 0–100 scale:
