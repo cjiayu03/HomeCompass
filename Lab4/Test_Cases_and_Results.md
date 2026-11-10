@@ -17,7 +17,7 @@ Every case is an automated pytest test whose ID matches this report:
 
 | Section | Subject | Test file | Cases |
 |---|---|---|---|
-| 1 | «control» `ScoringService` → `backend/app/scoring.py` | `backend/tests/test_lab4_scoring_blackbox.py` | 25 |
+| 1 | «control» `ScoringService` → `backend/app/scoring.py` | `backend/tests/test_lab4_scoring_blackbox.py` | 32 |
 | 2 | `RateLimiter.check` → `backend/app/rate_limit.py` | `backend/tests/test_lab4_rate_limiter_basis_path.py` | 9 |
 | 3 | `_public_map_address_items` → `backend/app/main.py` | `backend/tests/test_lab4_map_address_basis_path.py` | 12 |
 
@@ -79,16 +79,16 @@ Expected outputs come from the published scoring rule (README, "How the home-fit
 
 | Input | Boundary values tested (school target t = 1,500 m, budget b = 100) |
 |---|---|
-| distance | −0.1 (just below the minimum), 0 (minimum), 750 (nominal), 1,499 (t − 1), 1,500 (t), 1,501 (t + 1) |
-| target | 0 (edge of the invalid range) |
-| price | −1, 0, 99 (b − 1), 100 (b), 101 (b + 1), 200 (2b), 201 (2b + 1) |
-| budget | 0 (edge of the invalid range) |
+| distance | −0.1 (just below the minimum), 0 (minimum), 0.1 (just above the minimum), 750 (nominal), 1,499 (t − 1), 1,500 (t), 1,501 (t + 1) |
+| target | −0.1, 0, 0.1 (new cases use distance 0 to isolate target validity) |
+| price | −1, 0, 1, 99 (b − 1), 100 (b), 101 (b + 1), 199 (2b − 1), 200 (2b), 201 (2b + 1) |
+| budget | −1, 0, 1 (new cases use price 0 to isolate budget validity) |
 | coverage | 0.4975 (just below 50%), 0.5 (exactly 50%), 0.5025 (just above 50%) |
 
 ### 1.4 Keeping the number of cases small
 
 - Valid classes are combined in the same case where possible. For example, BB-01 covers EC1 and EC6, and BB-19 covers EC15 and EC18 with all four components at once.
-- Each invalid class has exactly one case, so a failure points to a single cause.
+- Invalid inputs are isolated so a failure points to a single cause. BB-27 and BB-31 add the negative side of the target and budget boundaries already tested at zero.
 - Boundary values are tested only where the specification has a boundary: zero, the target, the budget, twice the budget, and 50% coverage. Each gets the value just below, on and just above it.
 - The 50% coverage boundary is reached with weights 1/1/1/0.98. With equal weights, coverage can only be 0, 25, 50, 75 or 100%, so it could never land just either side of 50%.
 
@@ -125,6 +125,20 @@ Targets are school 1,500 m, childcare 2,000 m and care 2,000 m, unless stated ot
 | BB-25 | All evidence as BB-19; school weight −5, others 1 | EC21 | school weight 0; score (75 + 50 + 55) ÷ 3 = **60.0** | weight 0.0, contribution 0.0; score 60.0 | Pass |
 
 **Finding from BB-21 and BB-22.** The result rounds coverage to two decimal places, so 49.75% and 50.25% are both reported as 0.5 ("Coverage 50%"). The scoring decision is correct: one home has a score and the other is "Insufficient evidence". But a user could see "Coverage 50%" next to "Insufficient evidence". Showing one more decimal place, or rounding down, would remove the contradiction. This is a presentation issue, not a scoring defect, and it is recorded here rather than fixed.
+
+### 1.6 Boundary coverage additions (10 November 2026, SGT)
+
+BB-26 to BB-32 complete the missing sides of the boundaries identified in §1.3. The original BB-01 to BB-25 and all basis-path cases are unchanged.
+
+| ID | Test input | Boundary | Expected output | Actual output | Result |
+|---|---|---|---|---|---|
+| BB-26 | `score_distance(0.1, 1500)` | just above minimum distance | 100.0 after rounding | 100.0 | Pass |
+| BB-27 | `score_distance(0, -0.1)` | target just below zero | `None` | `None` | Pass |
+| BB-28 | `score_distance(0, 0.1)` | target just above zero | 100.0 | 100.0 | Pass |
+| BB-29 | `score_affordability(1, 100)` | price just above zero | 99.5 | 99.5 | Pass |
+| BB-30 | `score_affordability(199, 100)` | just below twice the budget | 0.5 | 0.5 | Pass |
+| BB-31 | `score_affordability(0, -1)` | budget just below zero | `None` | `None` | Pass |
+| BB-32 | `score_affordability(0, 1)` | budget just above zero | 100.0 | 100.0 | Pass |
 
 ## 2. Basis-path testing: `RateLimiter.check`
 
@@ -304,6 +318,8 @@ In BP2-12, `(…)×9` means the loop body runs nine times, returning to N4 each 
 BP2-3 adds no new edge, but it is still part of the basis: it is the zero-iteration path. Every looping path is this path plus one cycle through the loop body. With it, the 12 paths are linearly independent, matching V(G) = 12.
 
 ## 4. Execution summary
+
+The table below records the original run before the seven boundary cases were added. On 10 November 2026 (SGT), the three Lab 4 test files were rerun on base `b6ea252` with the boundary additions: **53 passed** (32 scoring cases and 21 basis-path cases). This is a focused rerun, not a new full backend-suite result.
 
 | Run | Command | Result |
 |---|---|---|
