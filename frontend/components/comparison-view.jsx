@@ -12,6 +12,7 @@ import { evaluateHomeDengueStatus } from '@/lib/dengue-status';
 import { money } from '@/lib/utils';
 import { ComparisonBrief } from '@/components/comparison-brief';
 import { HousingChat } from '@/components/housing-chat';
+import { ElderlyZoneStatus, elderlyZoneComparisonValue } from '@/components/elderly-zone-status';
 
 const text = value => value == null || value === '' ? 'Unavailable in this record' : String(value);
 
@@ -41,6 +42,8 @@ export function ComparisonView({ homes = [], onRemove, availableHomes = [], onAd
     { label: 'School access', value: home => text(home.school) },
     { label: 'Childcare access', value: home => text(home.childcare) },
     { label: 'Care access', value: home => text(home.care) },
+    { label: 'Silver Zone', value: home => elderlyZoneComparisonValue(home, 'silverZone'), render: home => <ElderlyZoneStatus home={home} kind="silverZone" /> },
+    { label: 'Dementia Go-To-Point', value: home => elderlyZoneComparisonValue(home, 'dementiaGtp'), render: home => <ElderlyZoneStatus home={home} kind="dementiaGtp" /> },
     { label: 'Saved place distances', value: home => JSON.stringify(home.placeDistances || []), render: home => home.placeDistances?.length ? <PlaceDistanceList distances={home.placeDistances} /> : 'No saved place distance evidence' },
     { label: 'Dengue cluster status', value: home => evaluateHomeDengueStatus(home.dengue).label, render: home => <DengueStatus home={home} /> },
     { label: 'Trade-off or missing evidence', value: home => candidateReasons(home, brief).tradeoff },

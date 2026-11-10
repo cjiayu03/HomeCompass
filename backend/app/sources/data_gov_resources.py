@@ -434,10 +434,10 @@ async def import_resource(
     rows, rejected = parse_resource_payload(source, payload)
     snapshot_id = uuid4()
     retrieved = datetime.now(timezone.utc)
-    # Dengue's dataset-level publication time applies to the complete export,
+    # These layers use dataset-level publication times for the complete export,
     # including an empty collection. Per-feature FMEL_UPD_D values describe
     # individual records and cannot establish national snapshot freshness.
-    if source.resource_type == "dengue_cluster":
+    if source.resource_type in {"dengue_cluster", "silver_zone", "dementia_gtp"}:
         updated = parse_dengue_timestamp(source_updated_at) if source_timestamp_verified else None
     else:
         updated = source_update_time(rows)
@@ -462,9 +462,9 @@ async def import_resource(
                             "geometry": "EPSG:4326 GeoJSON where published; address-only records remain unlocated",
                             "note": source.description,
                             **({"sourceTimestampProvenance": "data_gov_sg_metadata_bracketed_export_v1"}
-                               if source.resource_type == "dengue_cluster" and source_timestamp_verified and updated else {}),
+                               if source.resource_type in {"dengue_cluster", "silver_zone", "dementia_gtp"} and source_timestamp_verified and updated else {}),
                             **({"snapshotCompleteness": "complete_export" if status == "valid" else "partial_export"}
-                               if source.resource_type == "dengue_cluster" else {})}, ensure_ascii=False),
+                               if source.resource_type in {"dengue_cluster", "silver_zone", "dementia_gtp"} else {})}, ensure_ascii=False),
             )
             sql = """INSERT INTO neighbourhood_resource (id,source_snapshot_id,resource_type,name,geometry,status,attributes)
                      VALUES ($1,$2,$3,$4,CASE WHEN $5::text IS NULL THEN NULL ELSE ST_Force2D(ST_SetSRID(ST_GeomFromGeoJSON($5),4326)) END,$6,$7::jsonb)
@@ -511,14 +511,14 @@ async def run_import(source_ids: list[str] | None = None) -> list[dict[str, Any]
             for source in selected:
                 print(f"Fetching {source.dataset_id} ({source.resource_type})", file=sys.stderr, flush=True)
                 metadata_before = None
-                if source.resource_type == "dengue_cluster":
+                if source.resource_type in {"dengue_cluster", "silver_zone", "dementia_gtp"}:
                     try:
                         metadata_before = await get_dataset_metadata(client, source, api_key=api_key)
                     except (httpx.HTTPError, ValueError, KeyError, TypeError):
                         metadata_before = None
                 payload = await download_dataset(client, source, api_key=api_key)
                 publication_time = None
-                if source.resource_type == "dengue_cluster":
+                if source.resource_type in {"dengue_cluster", "silver_zone", "dementia_gtp"}:
                     try:
                         metadata_after = await get_dataset_metadata(client, source, api_key=api_key)
                     except (httpx.HTTPError, ValueError, KeyError, TypeError):

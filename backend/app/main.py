@@ -18,6 +18,10 @@ from pydantic import BaseModel, Field, ValidationError
 
 from . import database, recovery
 from .dengue import dengue_home_status, evaluate_dengue_snapshot, parse_dengue_timestamp
+from .elderly_zones import (
+    ELDERLY_SNAPSHOT_CTE, ELDERLY_HOME_JOINS, ELDERLY_HOME_SELECT,
+    SOURCES as ELDERLY_SOURCES, elderly_zone_status,
+)
 from .ai import gemini_configuration_ready, interpret_query, summarize_record
 from .housing_chat import HousingChatRequest, housing_chat, stream_housing_chat
 from .source_text import source_label
@@ -109,6 +113,8 @@ _LATEST_RESOURCE_CTE = f"""WITH latest_resource_sources AS (
     WHERE source_id='{_DENGUE_DATASET_ID}'
     ORDER BY retrieved_at DESC LIMIT 1
 )"""
+
+_LATEST_RESOURCE_CTE += ELDERLY_SNAPSHOT_CTE
 
 _HOME_EVIDENCE_JOINS = """
 LEFT JOIN LATERAL (
@@ -429,6 +435,15 @@ def _score_locations(record, score_details) -> list[dict]:
     return locations
 
 
+def _json_object(value):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    return value if isinstance(value, dict) else None
+
+
 def _home(record, score=None, *, now: datetime | None = None) -> dict:
     price_cents = record["price_observation_cents"]
     source_version = record["source_version"]
@@ -489,6 +504,13 @@ def _home(record, score=None, *, now: datetime | None = None) -> dict:
         },
         "risk": dengue["label"],
         "dengue": dengue,
+        "elderlyZones": {
+            kind: elderly_zone_status(
+                _json_object(_optional_record_value(record, f"{kind.lower()}_evidence")),
+                kind=kind, location_verified=location_verified, now=now,
+            )
+            for kind in ELDERLY_SOURCES
+        },
         "highlights": [],
         "risks": ["Historical resale transaction; not a current listing"],
         "floorAreaSqm": float(floor_area_sqm) if floor_area_sqm is not None else None,
@@ -871,6 +893,7 @@ LEFT JOIN LATERAL (
                     CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
                     h.place_distances, h.ranking_score,
                     {_DENGUE_HOME_SELECT},
+                    {ELDERLY_HOME_SELECT},
                     h.school_name, h.school_distance_m,
                     school_access.location AS school_location,
                     h.childcare_name, h.childcare_distance_m,
@@ -881,6 +904,7 @@ LEFT JOIN LATERAL (
              FROM page_homes h JOIN source_snapshot s ON s.id = h.source_snapshot_id
              {_HOME_EVIDENCE_JOINS}
              {_DENGUE_HOME_JOINS}
+               {ELDERLY_HOME_JOINS}
              ORDER BY h.ranking_score DESC NULLS LAST, h.observed_on DESC NULLS LAST, h.id"""
     async with pool.acquire() as connection:
         total_row = await connection.fetchrow(count_sql, *count_values)
@@ -1590,6 +1614,7 @@ async def home_detail(home_id: str) -> dict:
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_Y(h.geometry) END AS latitude,
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
                       {_DENGUE_HOME_SELECT},
+                    {ELDERLY_HOME_SELECT},
                       school_access.name AS school_name, school_access.distance_m AS school_distance_m,
                     school_access.location AS school_location,
                       childcare_access.name AS childcare_name, childcare_access.distance_m AS childcare_distance_m,
@@ -1600,6 +1625,7 @@ async def home_detail(home_id: str) -> dict:
                FROM candidate_home h JOIN source_snapshot s ON s.id=h.source_snapshot_id
                {_HOME_EVIDENCE_JOINS}
                {_DENGUE_HOME_JOINS}
+               {ELDERLY_HOME_JOINS}
                WHERE h.id=$1""",
             home_id,
         )
@@ -1686,6 +1712,7 @@ async def record_summary(
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_Y(h.geometry) END AS latitude,
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
                       {_DENGUE_HOME_SELECT},
+                    {ELDERLY_HOME_SELECT},
                       school_access.name AS school_name, school_access.distance_m AS school_distance_m,
                       school_access.location AS school_location,
                       childcare_access.name AS childcare_name, childcare_access.distance_m AS childcare_distance_m,
@@ -1696,6 +1723,7 @@ async def record_summary(
                FROM candidate_home h JOIN source_snapshot s ON s.id=h.source_snapshot_id
                {_SUMMARY_HOME_EVIDENCE_JOINS}
                {_DENGUE_HOME_JOINS}
+               {ELDERLY_HOME_JOINS}
                WHERE h.id=$1""",
             home_id,
         )
@@ -1839,6 +1867,7 @@ async def get_shortlist(user: dict = Depends(require_active_user)) -> dict:
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_Y(h.geometry) END AS latitude,
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
                       {_DENGUE_HOME_SELECT},
+                    {ELDERLY_HOME_SELECT},
                       school_access.name AS school_name, school_access.distance_m AS school_distance_m,
                     school_access.location AS school_location,
                       childcare_access.name AS childcare_name, childcare_access.distance_m AS childcare_distance_m,
@@ -1851,6 +1880,7 @@ async def get_shortlist(user: dict = Depends(require_active_user)) -> dict:
                JOIN source_snapshot s0 ON s0.id=h.source_snapshot_id
                {_HOME_EVIDENCE_JOINS}
                {_DENGUE_HOME_JOINS}
+               {ELDERLY_HOME_JOINS}
                WHERE s.user_id=$1 ORDER BY e.position""",
             user["id"],
         )
