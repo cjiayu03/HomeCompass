@@ -66,6 +66,13 @@ def _interaction_body(model: str, prompt: str, schema: dict, output_limit: int) 
     }
 
 
+def _gemini_model() -> str:
+    configured = os.getenv("GEMINI_MODEL", "").strip()
+    if configured:
+        return configured
+    return "gemini-3.5-flash-lite" if os.getenv("GEMINI_FREE_TIER", "").strip().lower() == "true" else "gemini-3.8-flash"
+
+
 def _provider_error_message(response: httpx.Response) -> str:
     try:
         payload = response.json()
@@ -95,14 +102,28 @@ def _monthly_cost(input_tokens: int, output_tokens: int) -> Decimal:
     return (Decimal(input_tokens) * input_price + Decimal(output_tokens) * output_price) / Decimal(1_000_000)
 
 
+def _configured_cap() -> Decimal:
+    value = os.getenv("GEMINI_MONTHLY_BUDGET_USD", "")
+    if not value:
+        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_UNCONFIGURED", "message": "Gemini is disabled until a monthly budget is configured."})
+    try:
+        cap = Decimal(value)
+    except InvalidOperation as exc:
+        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_INVALID", "message": "Gemini's monthly budget must be a non-negative dollar amount."}) from exc
+    if not cap.is_finite() or cap < 0:
+        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_INVALID", "message": "Gemini's monthly budget must be a non-negative dollar amount."})
+    input_rate = _monthly_cost(1_000_000, 0)
+    output_rate = _monthly_cost(0, 1_000_000)
+    if cap == 0 and (os.getenv("GEMINI_FREE_TIER", "").strip().lower() != "true" or input_rate != 0 or output_rate != 0):
+        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_INVALID", "message": "A zero budget requires explicit free-tier mode and zero input and output rates."})
+    return cap
+
+
 def gemini_configuration_ready() -> bool:
     if not is_configured_value(os.getenv("GEMINI_API_KEY")):
         return False
     try:
-        cap = Decimal(os.getenv("GEMINI_MONTHLY_BUDGET_USD", ""))
-        if not cap.is_finite() or cap <= 0:
-            return False
-        _monthly_cost(0, 0)
+        _configured_cap()
     except (InvalidOperation, HTTPException):
         return False
     return True
@@ -110,17 +131,9 @@ def gemini_configuration_ready() -> bool:
 
 async def _reserve_usage(input_upper_bound: int, output_limit: int) -> tuple[object, Decimal, Decimal, object]:
     key = os.getenv("GEMINI_API_KEY")
-    cap_value = os.getenv("GEMINI_MONTHLY_BUDGET_USD")
     if not is_configured_value(key):
         raise HTTPException(status_code=503, detail={"code": "AI_UNCONFIGURED", "message": "Gemini is disabled until a server-side API key is supplied."})
-    if not cap_value:
-        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_UNCONFIGURED", "message": "Gemini is disabled until the team sets a monthly spend cap."})
-    try:
-        cap = Decimal(cap_value)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_INVALID", "message": "The configured Gemini monthly cap must be a positive dollar amount."}) from exc
-    if not cap.is_finite() or cap <= 0:
-        raise HTTPException(status_code=503, detail={"code": "AI_BUDGET_INVALID", "message": "The configured Gemini monthly cap must be a positive dollar amount."})
+    cap = _configured_cap()
     reserve = _monthly_cost(input_upper_bound, output_limit)
     if reserve > cap:
         raise HTTPException(status_code=429, detail={"code": "AI_REQUEST_EXCEEDS_BUDGET", "message": "The configured monthly budget is too small for one bounded Gemini request."})
@@ -132,7 +145,7 @@ async def _reserve_usage(input_upper_bound: int, output_limit: int) -> tuple[obj
             await connection.execute("INSERT INTO ai_monthly_usage (month_start) VALUES ($1) ON CONFLICT DO NOTHING", month)
             accepted = await connection.fetchval(
                 """UPDATE ai_monthly_usage SET reserved_usd = reserved_usd + $1, request_count = request_count + 1, updated_at=now()
-                   WHERE month_start = $2 AND spent_usd + reserved_usd + $1 <= $3 RETURNING TRUE""",
+                   WHERE month_start = $2 AND ($3 = 0 OR spent_usd + reserved_usd + $1 <= $3) RETURNING TRUE""",
                 reserve,
                 month,
                 cap,
@@ -153,13 +166,13 @@ async def _settle_usage(pool, reserve: Decimal, month, actual: Decimal | None) -
         )
 
 
-async def _generate_json(prompt: str, schema: dict, input_size_bytes: int) -> tuple[str, str]:
+async def _generate_json(prompt: str, schema: dict, input_size_bytes: int, *, model_override: str | None = None, timeout_seconds: float = 18.0, output_override: int | None = None) -> tuple[str, str]:
     key = os.getenv("GEMINI_API_KEY")
     if not is_configured_value(key):
         raise HTTPException(status_code=503, detail={"code": "AI_UNCONFIGURED", "message": "Gemini is disabled until a server-side API key is supplied."})
-    model = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+    model = model_override or _gemini_model()
     try:
-        output_limit = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "512"))
+        output_limit = output_override if output_override is not None else int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "512"))
     except ValueError as exc:
         raise HTTPException(status_code=503, detail={"code": "AI_OUTPUT_LIMIT_INVALID", "message": "Gemini output-token limit must be between 64 and 2048."}) from exc
     if not 64 <= output_limit <= 2048:
@@ -168,7 +181,7 @@ async def _generate_json(prompt: str, schema: dict, input_size_bytes: int) -> tu
     pool, reserve, _cap, month = await _reserve_usage(input_size_bytes * 2, output_limit)
     body = _interaction_body(model, prompt, schema, output_limit)
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(18.0, connect=4.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_seconds, connect=4.0)) as client:
             response = await client.post(GEMINI_ENDPOINT, headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json=body)
         if response.status_code == 429:
             await _settle_usage(pool, reserve, month, None)
@@ -243,9 +256,13 @@ async def interpret_query(request: InterpretRequest) -> tuple[QueryInterpretatio
 
 async def summarize_record(evidence: dict) -> tuple[RecordSummary, str]:
     prompt = (
-        "Write a short, neutral overview of this one historical HDB resale transaction using only the JSON evidence below. "
-        "Do not infer whether a home is currently available, whether its price is affordable, nearby amenities, travel, risk, or suitability. "
-        "Each observation must cite one or more exact evidence_fields from the provided record. If the record lacks enough information, say so.\n\n"
+        "Write a short, neutral overview of this historical HDB resale transaction using only the JSON evidence below. "
+        "The access fields describe the nearest mapped service and a straight-line distance, not a walking route, travel time, "
+        "eligibility, opening status, or suitability. Repeat dengue status only as the supplied state and label; preserve its "
+        "freshness, coverage, and uncertainty. A no-active-cluster result is not proof of no dengue risk. The route_status field "
+        "explains whether a route was calculated; never invent a route or commute estimate. Do not imply current availability, "
+        "affordability, valuation, or recommendation. Each observation must cite exact evidence_fields present in the JSON. "
+        "If evidence is missing or unavailable, state that limitation instead of filling the gap.\n\n"
         f"Evidence JSON: {json.dumps(evidence, ensure_ascii=False, separators=(',', ':'))}"
     )
     try:

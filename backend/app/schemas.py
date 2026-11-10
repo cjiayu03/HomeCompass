@@ -261,6 +261,7 @@ def _validate_request_cursor(value: str | None, expected_keys: frozenset[str]):
 
 class SearchRequest(BaseModel):
     query: str = Field(default="", max_length=160)
+    distinct_blocks: bool = True
     budget: int | None = Field(default=None, ge=0, le=10_000_000)
     town: str | None = Field(default=None, max_length=80)
     towns: list[str] = Field(default_factory=list, max_length=30)
@@ -589,7 +590,10 @@ class QueryInterpretation(BaseModel):
 
 class SummaryObservation(BaseModel):
     text: str = Field(min_length=1, max_length=200)
-    evidence_fields: list[Literal["town", "flat_type", "transaction_month", "resale_price", "floor_area_sqm", "storey_range"]] = Field(min_length=1, max_length=3)
+    evidence_fields: list[Literal[
+        "town", "flat_type", "transaction_month", "resale_price", "floor_area_sqm", "storey_range",
+        "school_access", "childcare_access", "care_access", "dengue_status", "route_status",
+    ]] = Field(min_length=1, max_length=3)
 
 
 class RecordSummary(BaseModel):
@@ -601,6 +605,14 @@ class SearchHistoryRequest(BaseModel):
     mode: Literal["structured", "natural_language"]
     criteria: SearchRequest
     scoring_version: str | None = Field(default=None, max_length=60)
+    source_snapshot_ids: list[UUID] = Field(
+        default_factory=list, alias="sourceSnapshotIds", max_length=20
+    )
+
+    @field_validator("source_snapshot_ids")
+    @classmethod
+    def deduplicate_source_snapshot_ids(cls, values):
+        return list(dict.fromkeys(values))
 
 
 class SavedSearchPlaceConstraint(PlaceConstraint):

@@ -21,7 +21,8 @@ export const defaultBrief = {
   pinLabel: '',
   pinLocation: '',
   requirements: { budget: false },
-  priorityWeights: { school: 1, childcare: 1, care: 1, affordability: 1 },
+  // Must match DEFAULT_WEIGHTS in backend/app/scoring.py (checked by backend/tests/test_default_weights_sync.py).
+  priorityWeights: { school: 2, childcare: 2, care: 2, affordability: 1 },
 };
 
 export const navigation = [

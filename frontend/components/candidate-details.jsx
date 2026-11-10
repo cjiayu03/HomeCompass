@@ -1,25 +1,30 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Bookmark, Check, CheckCircle2, MapPin, Ruler, Layers, CalendarDays, Scale, X } from 'lucide-react';
+import { Bookmark, Check, CheckCircle2, MapPin, Ruler, Layers, CalendarDays, Scale, Sparkles, X } from 'lucide-react';
 import { MatchReasons } from '@/components/search-workbench';
 import { EvidenceContext } from '@/components/evidence-context';
 import { candidateReasons } from '@/components/evidence-helpers';
+import { useAuth } from '@/components/auth-provider';
 import { AreaProfile } from '@/components/area-profile';
 import { AffordabilityPlanner } from '@/components/affordability-planner';
 import { PlaceDistanceList } from '@/components/place-picker';
 import { Button } from '@/components/ui/button';
+import { requestAssistantSummary } from '@/lib/assistant-state';
 import { money } from '@/lib/utils';
 import { distanceM } from '@/lib/planning';
 import { mapLayers, nearbyFacilityTypes, resourceColors } from '@/lib/map-layers';
 import { mapLayerIcons } from '@/lib/map-layer-icons';
 import { dedupePointFeatures, facilityLocationLabel } from '@/lib/geo-cluster';
+import { DengueStatus } from '@/components/dengue-status';
+import { ElderlyZoneStatus } from '@/components/elderly-zone-status';
 
 function distanceLabel(meters) {
   return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`;
 }
 
 export function CandidateDetails({ home, homes = [], brief = {}, saved = false, selected = false, resources = [], resourceState, visibleResourceTypes = [], onToggleNearbyLayer, onEnableNearbyLayers, onShowFacilityOnMap, onRetryResources, onSave, onCompare, onLocate }) {
+  const { user, loading: authLoading } = useAuth();
   const nearbyFacilities = useMemo(() => {
     if (!home) return [];
     const enabled = new Set(visibleResourceTypes.filter(type => nearbyFacilityTypes.includes(type)));
@@ -34,6 +39,7 @@ export function CandidateDetails({ home, homes = [], brief = {}, saved = false, 
       .sort((left, right) => left.distance - right.distance);
   }, [home?.id, home?.lat, home?.lng, resources, visibleResourceTypes]);
   if (!home) return null;
+  const generateSummary = () => requestAssistantSummary(home, user.id);
   const reasons = candidateReasons(home, brief);
   const route = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${home.address}, Singapore`)}`;
   const activeNearbyTypes = nearbyFacilityTypes.filter(type => visibleResourceTypes.includes(type));
@@ -65,6 +71,19 @@ export function CandidateDetails({ home, homes = [], brief = {}, saved = false, 
     <section className="candidate-matches"><h3>What the loaded evidence supports</h3>{reasons.matches.length > 0 ? <ul>{reasons.matches.map(reason => <li key={reason}><CheckCircle2 aria-hidden="true" className="size-4" /><span>{reason}</span></li>)}</ul> : <p className="mt-2 text-muted-foreground">No verified matches to your criteria are available yet.</p>}<p className="candidate-tradeoff"><strong>Check before deciding</strong><span>{reasons.tradeoff}</span></p></section>
     <MatchReasons home={home} brief={brief} />
     <EvidenceContext home={home} />
+    <section className="rounded-xl border bg-card/60 p-4" aria-labelledby="ai-summary-heading">
+      <div className="flex items-start gap-3">
+        <Sparkles aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-primary" />
+        <div className="min-w-0 flex-1">
+          <h3 id="ai-summary-heading" className="font-semibold">AI evidence summary</h3>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">A short overview grounded in this historical transaction, sourced nearby services, and dated dengue status.</p>
+        </div>
+      </div>
+      {user ? <Button className="mt-3" variant="outline" onClick={generateSummary} disabled={authLoading}>
+        <Sparkles aria-hidden="true" className="size-4" />Generate summary
+      </Button> : authLoading ? <p className="mt-3 text-xs text-muted-foreground" role="status">Checking sign-in status…</p> : <p className="mt-3 text-xs text-muted-foreground"><a className="font-medium text-primary underline" href="/login">Sign in</a> to generate an AI summary.</p>}
+      <p className="mt-2 text-xs text-muted-foreground">Opens this record’s summary in the AI sidebar.</p>
+    </section>
     <PlaceDistanceList distances={home.placeDistances} />
     <section className="candidate-nearby mt-5 border-t pt-4" aria-labelledby="nearby-facilities-heading">
       <div className="flex items-start justify-between gap-3">
@@ -115,7 +134,15 @@ export function CandidateDetails({ home, homes = [], brief = {}, saved = false, 
       {nearbyFacilities.length > shownNearbyFacilities.length && <p className="mt-2 text-xs text-muted-foreground">Showing the {shownNearbyFacilities.length} closest loaded facilities.</p>}
       {activeNearbyTypes.length > 0 && <p className="mt-2 text-xs leading-5 text-muted-foreground">Distances are straight-line estimates. Results cover loaded map data and may be incomplete; a missing point does not confirm that no facility exists nearby.</p>}
     </section>
-    <section className="candidate-services"><h3>Access and services</h3><dl className="mt-3 space-y-3">{[['School', home.school], ['Childcare', home.childcare], ['Care', home.care], ['Dengue context', home.risk]].map(([label, value]) => <div key={label}><dt className="text-xs font-medium text-muted-foreground">{label}</dt><dd className="mt-1">{value || 'Unavailable in this record'}</dd></div>)}</dl><p className="mt-3 text-xs leading-6 text-muted-foreground">Distances describe straight-line proximity where verified coordinates are available. Travel times, accessible routes, service suitability, admissions and current vacancies are unavailable. Proximity does not guarantee admission.</p><div className="mt-3 flex flex-wrap gap-3"><a className="min-h-11 content-center text-primary underline" href="https://p1.placement.moe.gov.sg/" target="_blank" rel="noreferrer">Check official MOE registration guidance</a><a className="min-h-11 content-center text-primary underline" href={route} target="_blank" rel="noreferrer">Plan a route in Google Maps ↗</a></div><p className="text-xs text-muted-foreground">The route link shares only this recorded destination with Google Maps. Choose your origin there; saved personal locations are not added.</p></section>
+    <section className="candidate-services"><h3>Access and services</h3><dl className="mt-3 space-y-3">{[['School', home.school], ['Childcare', home.childcare], ['Care', home.care]].map(([label, value]) => <div key={label}><dt className="text-xs font-medium text-muted-foreground">{label}</dt><dd className="mt-1">{value || 'Unavailable in this record'}</dd></div>)}</dl><div className="mt-4 border-t pt-3"><p className="mb-2 text-xs font-medium text-muted-foreground">Dengue cluster status</p><DengueStatus home={home} /></div><p className="mt-3 text-xs leading-6 text-muted-foreground">Distances describe straight-line proximity where verified coordinates are available. Travel times, accessible routes, service suitability, admissions and current vacancies are unavailable. Proximity does not guarantee admission.</p><div className="mt-3 flex flex-wrap gap-3"><a className="min-h-11 content-center text-primary underline" href="https://p1.placement.moe.gov.sg/" target="_blank" rel="noreferrer">Check official MOE registration guidance</a><a className="min-h-11 content-center text-primary underline" href={route} target="_blank" rel="noreferrer">Plan a route in Google Maps ↗</a></div><p className="text-xs text-muted-foreground">The route link shares only this recorded destination with Google Maps. Choose your origin there; saved personal locations are not added.</p></section>
+    <section className="candidate-services">
+      <h3>Elderly-friendly surroundings</h3>
+      <dl className="mt-3 divide-y">
+        <div className="pb-3"><dt className="mb-1 text-xs font-medium text-muted-foreground">Silver Zone</dt><dd><ElderlyZoneStatus home={home} kind="silverZone" /></dd></div>
+        <div className="pt-3"><dt className="mb-1 text-xs font-medium text-muted-foreground">Dementia Go-To-Point</dt><dd><ElderlyZoneStatus home={home} kind="dementiaGtp" /></dd></div>
+      </dl>
+      <p className="mt-3 text-xs leading-5 text-muted-foreground">Geographic context only. These flags do not establish route accessibility, service availability or whether a home is safe.</p>
+    </section>
     <AreaProfile homes={homes} home={home} />
     <AffordabilityPlanner key={home.id} initialPrice={home.price} />
   </div>;

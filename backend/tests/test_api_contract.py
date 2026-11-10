@@ -67,6 +67,8 @@ class _Connection:
         raise AssertionError(f"Unexpected query: {sql}")
 
     async def fetchrow(self, sql, *values):
+        if "FROM source_snapshot WHERE source_id=$1" in sql:
+            return None
         if "FROM candidate_home" in sql:
             return {"total": 1, "geocoded": 1}
         if "FROM neighbourhood_resource" in sql:

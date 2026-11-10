@@ -402,6 +402,10 @@ be modified.
 
 - Search history, personal places, saved searches, and reruns are available
   from the workspace.
+- Search-history replay preserves the saved criteria, priority weights, and
+  place constraints. It runs against current source data and scoring; history
+  retains the source snapshot IDs and scoring policy version from the original
+  run for provenance.
 - Reruns show current source metadata and differences from prior runs.
 - Shortlist and compare views retain provenance and score-policy context.
 

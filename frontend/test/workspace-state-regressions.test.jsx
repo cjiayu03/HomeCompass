@@ -157,3 +157,18 @@ describe('search validation', () => {
     expect(briefValidationError({ ...defaultBrief, ...patch })).toMatch(expected);
   });
 });
+
+it('keeps the current view stable during a passive focus check but pauses searches', async () => {
+  const mounted = setup();
+  await waitFor(() => expect(workspace.homes).toEqual([first]));
+  auth.mockReturnValue({ user: null, loading: false, transitioning: true, sessionVerified: false, focusChecking: true });
+  mounted.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
+  expect(workspace.homes).toEqual([first]);
+  expect(workspace.workspaceReady).toBe(false);
+  let result;
+  await act(async () => { result = await workspace.applySearch('anything'); });
+  expect(result).toBeNull();
+  auth.mockReturnValue({ user: null, loading: false, transitioning: true, sessionVerified: false, focusChecking: false });
+  mounted.rerender(<WorkspaceProvider><Probe /></WorkspaceProvider>);
+  expect(workspace.homes).toEqual([]);
+});

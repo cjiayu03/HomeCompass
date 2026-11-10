@@ -19,6 +19,8 @@ class _PaginationConnection:
         self.resource_queries = []
 
     async def fetchrow(self, sql, *values):
+        if "FROM source_snapshot WHERE source_id=$1" in sql:
+            return None
         if "count(*) AS total" in sql and "FROM candidate_home h" in sql:
             bounds = _bounds_from_query(sql, values, "h.geometry")
             return {"total": sum(_inside(row, bounds) for row in self.homes)}
@@ -221,6 +223,14 @@ def test_home_pages_continue_in_observed_date_id_order_and_keep_total(monkeypatc
     }
     first_sql, first_values = connection.home_queries[0]
     assert "ORDER BY ranking_score DESC NULLS LAST, observed_on DESC NULLS LAST, id" in first_sql
+    assert "h.school_name, h.school_distance_m" in first_sql
+    assert "h.childcare_name, h.childcare_distance_m" in first_sql
+    assert "h.care_name, h.care_distance_m" in first_sql
+    assert "school_access.location AS school_location" in first_sql
+    assert "childcare_access.location AS childcare_location" in first_sql
+    assert "care_access.location AS care_location" in first_sql
+    assert "dengue_snapshot.id AS dengue_snapshot_id" in first_sql
+    assert "LEFT JOIN latest_dengue_snapshot dengue_snapshot ON TRUE" in first_sql
     assert _limit_from_query(first_sql, first_values) == 3
 
     second = _response(
@@ -391,3 +401,28 @@ def test_cursor_values_are_bound_parameters_not_sql_text(monkeypatch):
     sql, values = connection.home_queries[0]
     assert marker not in sql
     assert marker in values
+
+
+def test_resource_labels_are_readable_without_changing_cursor_keys(monkeypatch):
+    name = 'THK\ufffdActive Ageing Centre\ufffd@ Kaki Bukit'
+    connection = _PaginationConnection(resources=[
+        _resource_row('resource-a', 'dementia_gtp', name, 103.8, 1.3),
+        _resource_row('resource-b', 'dementia_gtp', name, 103.8, 1.3),
+    ])
+    response = _response(monkeypatch, connection, 'GET', '/api/v1/resources', params={'limit': 1})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['features'][0]['properties']['name'] == 'THK Active Ageing Centre @ Kaki Bukit'
+    assert decode_cursor(payload['nextCursor'])['name'] == name
+
+
+def test_score_cursor_is_bound_as_a_database_number(monkeypatch):
+    connection = _PaginationConnection(homes=[_home_row('home-after', date(2026, 4, 1))])
+    cursor = encode_cursor({'score': '97.3', 'observed_on': '2026-04-03', 'id': 'home-before'})
+    response = _response(monkeypatch, connection, 'GET', '/api/v1/homes', params={'cursor': cursor})
+    assert response.status_code == 200
+    sql, values = connection.home_queries[0]
+    score_param = re.search(r'ranking_score < \$(\d+)::double precision', sql)
+    bound_score = values[int(score_param.group(1)) - 1]
+    assert isinstance(bound_score, float)
+    assert bound_score == 97.3

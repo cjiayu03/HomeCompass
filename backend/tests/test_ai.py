@@ -61,3 +61,78 @@ def test_interpretation_drops_unmentioned_towns_when_explicit_names_are_present(
     assert result.filters.budget == 650000
     assert result.filters.flat_type == '4 ROOM'
     assert result.filters.query == text
+def test_zero_budget_requires_explicit_free_tier_and_zero_rates(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY', 'configured-for-test')
+    monkeypatch.setenv('GEMINI_MONTHLY_BUDGET_USD', '0')
+    monkeypatch.setenv('GEMINI_INPUT_USD_PER_MILLION', '0')
+    monkeypatch.setenv('GEMINI_OUTPUT_USD_PER_MILLION', '0')
+    monkeypatch.delenv('GEMINI_FREE_TIER', raising=False)
+    assert not gemini_configuration_ready()
+    monkeypatch.setenv('GEMINI_FREE_TIER', 'true')
+    assert gemini_configuration_ready()
+    monkeypatch.setenv('GEMINI_OUTPUT_USD_PER_MILLION', '1')
+    assert not gemini_configuration_ready()
+
+
+def test_free_tier_reserves_zero_even_with_earlier_paid_usage(monkeypatch):
+    import asyncio
+    from decimal import Decimal
+    from app import ai
+
+    class Transaction:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+    class Connection(Transaction):
+        def transaction(self): return Transaction()
+        async def execute(self, *args): pass
+        async def fetchval(self, query, reserve, month, cap):
+            assert '($3 = 0 OR spent_usd + reserved_usd + $1 <= $3)' in query
+            return cap == 0 and reserve == 0
+    class Pool:
+        def acquire(self): return Connection()
+
+    monkeypatch.setenv('GEMINI_API_KEY', 'configured-for-test')
+    monkeypatch.setenv('GEMINI_MONTHLY_BUDGET_USD', '0')
+    monkeypatch.setenv('GEMINI_FREE_TIER', 'true')
+    monkeypatch.setenv('GEMINI_INPUT_USD_PER_MILLION', '0')
+    monkeypatch.setenv('GEMINI_OUTPUT_USD_PER_MILLION', '0')
+    monkeypatch.setattr(ai, 'require_pool', lambda: Pool())
+    _, reserve, cap, _ = asyncio.run(ai._reserve_usage(100, 100))
+    assert reserve == cap == Decimal('0')
+
+
+def test_positive_budget_still_requires_valid_rates(monkeypatch):
+    monkeypatch.setenv('GEMINI_API_KEY', 'configured-for-test')
+    monkeypatch.setenv('GEMINI_MONTHLY_BUDGET_USD', '5')
+    monkeypatch.delenv('GEMINI_FREE_TIER', raising=False)
+    monkeypatch.setenv('GEMINI_INPUT_USD_PER_MILLION', '0.75')
+    monkeypatch.setenv('GEMINI_OUTPUT_USD_PER_MILLION', '3.75')
+    assert gemini_configuration_ready()
+    monkeypatch.setenv('GEMINI_OUTPUT_USD_PER_MILLION', '-1')
+    assert not gemini_configuration_ready()
+
+
+def test_zero_budget_rejects_nonzero_rate_before_provider_request(monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+    from app.ai import _reserve_usage
+
+    monkeypatch.setenv('GEMINI_API_KEY', 'configured-for-test')
+    monkeypatch.setenv('GEMINI_MONTHLY_BUDGET_USD', '0')
+    monkeypatch.setenv('GEMINI_FREE_TIER', 'true')
+    monkeypatch.setenv('GEMINI_INPUT_USD_PER_MILLION', '0')
+    monkeypatch.setenv('GEMINI_OUTPUT_USD_PER_MILLION', '0.01')
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(_reserve_usage(100, 100))
+    assert error.value.detail['code'] == 'AI_BUDGET_INVALID'
+
+
+def test_model_defaults_to_lite_only_for_free_tier_and_respects_override(monkeypatch):
+    from app.ai import _gemini_model
+    monkeypatch.delenv('GEMINI_MODEL', raising=False)
+    monkeypatch.delenv('GEMINI_FREE_TIER', raising=False)
+    assert _gemini_model() == 'gemini-3.8-flash'
+    monkeypatch.setenv('GEMINI_FREE_TIER', 'true')
+    assert _gemini_model() == 'gemini-3.5-flash-lite'
+    monkeypatch.setenv('GEMINI_MODEL', 'custom-model')
+    assert _gemini_model() == 'custom-model'

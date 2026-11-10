@@ -1,19 +1,21 @@
 'use client';
 
 import { useLayoutEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Check, Globe2, LockKeyhole, Settings2, Trash2 } from 'lucide-react';
+import { ArrowRight, Bookmark, LockKeyhole, MapPin, Scale, Trash2, UsersRound } from 'lucide-react';
 import { Alert } from '@/components/ui/alert';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { NumberTicker } from '@/components/ui/number-ticker';
 import { Input } from '@/components/ui/input';
 import { useWorkspace } from '@/components/workspace-provider';
 import { useAuth } from '@/components/auth-provider';
 import { PlaceManager } from '@/components/place-manager';
 import { requestJson } from '@/lib/api-client';
+import { defaultBrief } from '@/lib/data';
+import { money } from '@/lib/utils';
 
 function DeleteDialog({ open, onCancel, onConfirm, busy }) {
   return <AlertDialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onCancel(); }}><AlertDialogContent><AlertDialogHeader><div className="mb-2 grid size-10 place-items-center rounded-xl bg-destructive/10 text-destructive"><Trash2 className="size-4" /></div><AlertDialogTitle>Clear this local workspace?</AlertDialogTitle><AlertDialogDescription>This removes searches, preferences, saved choices, decision notes and viewing photos from this browser. Your account data stays on the server. Download any photos you want to keep first.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel asChild><Button variant="outline">Cancel</Button></AlertDialogCancel><AlertDialogAction asChild><Button variant="destructive" disabled={busy} onClick={onConfirm}>{busy ? 'Clearing…' : 'Clear workspace'}</Button></AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>;
@@ -35,7 +37,7 @@ function syncSectionCount(section) {
 }
 
 export default function AccountPage() {
-  const { shortlistIds, compareIds, clearLocalData, profileSyncState, retryProfileSync, flash, syncState, syncResult, syncGuestData, pendingLocalPlaceCount } = useWorkspace();
+  const { brief = defaultBrief, places = [], shortlistIds, compareIds, clearLocalData, profileSyncState, retryProfileSync, flash, syncState, syncResult, syncGuestData, pendingLocalPlaceCount } = useWorkspace();
   const { user, refreshSession, transitioning = false, sessionVerified = true } = useAuth();
   const ownerIdentity = user?.id ? `account:${user.id}` : 'guest';
   const accountActionsPaused = transitioning || !sessionVerified;
@@ -140,17 +142,45 @@ export default function AccountPage() {
     try { await refreshSession(); } finally { setSessionRetryBusy(false); }
   }
 
-  return <div className="workspace-canvas min-h-[calc(100dvh-4rem)]">
+  const household = [[brief.adults, 'adult', 'adults'], [brief.children, 'child', 'children'], [brief.olderAdults, 'older adult', 'older adults']]
+    .filter(([count]) => Number(count) > 0).map(([count, singular, plural]) => `${count} ${Number(count) === 1 ? singular : plural}`).join(', ');
+  const towns = brief.preferredTowns || [];
+  const preferenceRows = [
+    ['Household', household || 'Add your household'],
+    ['Budget', brief.budget ? `${money(brief.budget)}${brief.requirements?.budget === false ? ' preferred' : ' maximum'}` : 'No budget set'],
+    ['Preferred towns', towns.length ? towns.join(', ') : 'Open to all towns'],
+    ['Flat type', brief.preferredFlatType || 'Open to any flat type'],
+  ];
+  return <div className="account-page min-h-[calc(100dvh-4rem)]">
     <div className="container flex max-w-[1120px] flex-col gap-7 px-4 py-7 sm:px-6 sm:py-9 lg:px-8">
-      <div className="max-w-2xl"><div className="mb-3 flex items-center gap-2 text-xs font-semibold text-muted-foreground"><Settings2 className="size-3.5 text-primary" />Account</div><h1 className="font-display text-4xl font-semibold tracking-[-0.04em] sm:text-5xl">Your workspace, your settings.</h1><p className="mt-3 text-base leading-7 text-muted-foreground">Manage your password, personal places and browser data.</p></div>
+      <header className="account-heading">
+        <div><h1 className="font-display text-3xl font-semibold tracking-tight">Your household workspace</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">{towns.length ? `Planning your next home in ${towns.join(', ')}.` : 'Keep your home search centred on the people and places that matter.'}</p></div>
+        <Button asChild><Link href="/explore">Continue exploring<ArrowRight aria-hidden="true" className="size-4" /></Link></Button>
+      </header>
+      <div className="account-overview">
+        <section className="account-preferences" aria-labelledby="household-preferences-heading">
+          <div className="flex flex-wrap items-center justify-between gap-3"><h2 id="household-preferences-heading" className="text-lg font-semibold">Your search preferences</h2><Link href="/onboarding" className="account-edit-link">Edit preferences<ArrowRight aria-hidden="true" className="size-4" /></Link></div>
+          <dl className="account-preference-list">{preferenceRows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+          <p className="mt-4 flex items-start gap-2 text-xs leading-5 text-muted-foreground"><UsersRound aria-hidden="true" className="mt-0.5 size-4 shrink-0" />These preferences help you compare homes for your household. Update them as your plans change.</p>
+        </section>
+        <nav className="account-shortcuts" aria-label="Your housing research">
+          <h2 className="text-lg font-semibold">Pick up where you left off</h2>
+          {[
+            { href: '/shortlist', icon: Bookmark, title: 'Saved homes', description: shortlistIds.length ? `${shortlistIds.length} saved ${shortlistIds.length === 1 ? 'record' : 'records'} to revisit` : 'Save homes while you explore' },
+            { href: '/compare', icon: Scale, title: 'Your comparison', description: compareIds.length ? `${compareIds.length} ${compareIds.length === 1 ? 'home' : 'homes'} selected for comparison` : 'Choose homes to compare side by side' },
+            { href: '#household-places', icon: MapPin, title: 'Places that matter', description: places.length ? `${places.length} saved ${places.length === 1 ? 'place' : 'places'} for distance checks` : 'Add work, school or family addresses' },
+          ].map(({ href, icon: Icon, title, description }) => <Link key={href} href={href} className="account-shortcut"><Icon aria-hidden="true" className="size-5 text-primary" /><span><strong>{title}</strong>{' '}<span>{description}</span></span><ArrowRight aria-hidden="true" className="size-4 text-muted-foreground" /></Link>)}
+        </nav>
+      </div>
 
       <div className="grid gap-5">
 
         {user && !sessionVerified && <Alert tone="warning" className="flex-wrap items-center justify-between gap-3"><p>We couldn’t verify your session. Account changes are paused until we can confirm who is signed in.</p><Button variant="outline" size="sm" disabled={sessionRetryBusy || transitioning} onClick={retrySessionCheck}>{sessionRetryBusy ? 'Checking session…' : 'Retry session check'}</Button></Alert>}
 
         <Card>
-          <CardHeader><div className="flex items-start justify-between gap-4"><div><CardTitle>Account</CardTitle><p className="mt-1 text-sm text-muted-foreground">{user ? user.email : 'Sign in to sync saved source records across devices.'}</p></div><Badge variant="secondary">{user ? (accountActionsPaused ? 'Session not verified' : 'Signed in') : 'Guest'}</Badge></div></CardHeader>
-          <CardContent><div className="grid grid-cols-2 gap-3"><div className="glass-card rounded-xl p-4"><p className="font-display text-3xl font-semibold"><NumberTicker value={shortlistIds.length} /></p><p className="mt-1 text-xs text-muted-foreground">saved homes</p></div><div className="glass-card rounded-xl p-4"><p className="font-display text-3xl font-semibold"><NumberTicker value={compareIds.length} /></p><p className="mt-1 text-xs text-muted-foreground">in comparison</p></div></div><Alert tone="info" className="mt-4 text-xs leading-5">{user ? 'Your saved homes and decision notes can sync across devices. Viewing photos stay in this browser.' : 'Sign in to sync your saved homes and preferences. Guest choices remain in this browser.'}</Alert>
+          <CardHeader><div className="flex items-start justify-between gap-4"><div><CardTitle>Account and sync</CardTitle><p className="mt-1 text-sm text-muted-foreground">{user ? user.email : 'Sign in to sync saved source records across devices.'}</p></div><Badge variant="secondary">{user ? (accountActionsPaused ? 'Session not verified' : 'Signed in') : 'Guest'}</Badge></div></CardHeader>
+          <CardContent>
+            <div className="account-sync-summary"><p className="text-sm leading-6 text-muted-foreground">{user ? 'Your saved homes and decision notes can sync across devices. Viewing photos stay in this browser.' : 'You’re exploring as a guest. Your preferences and saved choices stay in this browser.'}</p>{!user && <Button asChild variant="outline"><Link href="/login?next=%2Faccount">Sign in to sync</Link></Button>}</div>
             {user && profileSyncState && <div role="status" className="mt-3 text-xs"><p>Preferences: {({local:'Saved in this browser',syncing:'Saving to account…',synced:'Saved to account',error:'Could not save to account'})[profileSyncState.status]}</p>{profileSyncState.error && <p className="mt-1 text-destructive">{profileSyncState.error.message || String(profileSyncState.error)}</p>}{profileSyncState.status==='error' && <Button variant="outline" size="sm" className="mt-2" disabled={accountActionsPaused} onClick={retryProfileSync}>Retry saving preferences</Button>}</div>}
             <details className="mt-3"><summary className="cursor-pointer text-sm font-semibold">Guest data transfer details</summary><Alert tone={syncState === 'error' ? 'warning' : syncState === 'synced' ? 'success' : 'info'} className="mt-3 flex-col text-xs leading-5">
               <p>Guest data sync: {syncState}.</p>
@@ -165,13 +195,13 @@ export default function AccountPage() {
         </Card>
       </div>
 
-      <fieldset className="contents" disabled={Boolean(user) && accountActionsPaused}><PlaceManager key={ownerIdentity} /></fieldset>
+      <fieldset id="household-places" className="account-places min-w-0" disabled={Boolean(user) && accountActionsPaused}><PlaceManager key={ownerIdentity} /></fieldset>
 
       {user && <Card><CardHeader><CardTitle>Change password</CardTitle><p className="text-sm text-muted-foreground">Choose a new password with at least 8 characters.</p></CardHeader><CardContent><form method="post" className="grid gap-4 sm:grid-cols-3" onSubmit={changePassword}><fieldset className="contents" disabled={accountActionsPaused || passwordBusy}><label className="flex flex-col gap-2"><span className="text-xs font-semibold">Current password</span><Input ref={currentPasswordRef} type={showPasswords ? 'text' : 'password'} maxLength={128} autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label><label className="flex flex-col gap-2"><span className="text-xs font-semibold">New password</span><Input type={showPasswords ? 'text' : 'password'} maxLength={128} autoComplete="new-password" minLength={8} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label><label className="flex flex-col gap-2"><span className="text-xs font-semibold">Confirm new password</span><Input type={showPasswords ? 'text' : 'password'} maxLength={128} autoComplete="new-password" minLength={8} ref={confirmPasswordRef} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required /></label><label className="flex items-center gap-2 text-sm sm:col-span-3"><input type="checkbox" checked={showPasswords} onChange={event=>setShowPasswords(event.target.checked)}/>Show passwords</label><div className="flex flex-wrap items-center gap-3 sm:col-span-3">{passwordMessage && <Alert tone={passwordMessage.tone} className="text-xs">{passwordMessage.text}</Alert>}<Button type="submit" disabled={passwordBusy}>{passwordBusy ? 'Updating…' : 'Update password'}</Button></div></fieldset></form></CardContent></Card>}
 
       <Card>
         <CardHeader><CardTitle>Data and privacy</CardTitle></CardHeader>
-        <CardContent className="grid gap-4 text-sm text-muted-foreground sm:grid-cols-2"><p className="flex gap-2"><LockKeyhole className="mt-0.5 size-4 shrink-0 text-primary" />You can change your password here or request a reset link from the sign-in page. Email delivery must be configured by the app operator.</p><p className="flex gap-2"><Globe2 className="mt-0.5 size-4 shrink-0 text-primary" />Government records are dated comparison evidence, not live listing availability.</p><p className="flex gap-2"><Check className="mt-0.5 size-4 shrink-0 text-primary" />OpenStreetMap tiles include visible attribution.</p><div className="flex items-center justify-between gap-4 sm:col-span-2"><div><p className="font-semibold text-foreground">Clear local data</p><p className="mt-1 text-xs">Remove searches, preferences, choices, decision notes and photos from this browser. Account data stays on the server.</p></div><Button variant="outline" onClick={() => setDeleteOpen(true)}>Clear this browser</Button></div>{user && <div className="flex items-center justify-between gap-4 border-t pt-4 sm:col-span-2"><div><p className="font-semibold text-destructive">Delete account and saved records</p><p className="mt-1 text-xs">This is separate from clearing this browser and cannot be undone.</p></div><Button variant="destructive" disabled={accountActionsPaused} onClick={() => setAccountDeleteOpen(true)}>Delete account</Button></div>}</CardContent>
+        <CardContent className="grid gap-4 text-sm text-muted-foreground sm:grid-cols-2"><p className="flex gap-2"><LockKeyhole aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-primary" />Viewing photos stay in this browser. Download any photos you want to keep before clearing your workspace.</p><p className="flex gap-2"><MapPin aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-primary" />Browser-only places stay on this device until you choose to upload them. Review any pending uploads in Account and sync.</p><div className="flex flex-wrap items-center justify-between gap-4 sm:col-span-2"><div><p className="font-semibold text-foreground">Clear local data</p><p className="mt-1 text-xs">Remove searches, preferences, choices, decision notes and photos from this browser. Account data stays on the server.</p></div><Button variant="outline" onClick={() => setDeleteOpen(true)}>Clear this browser</Button></div>{user && <div className="flex flex-wrap items-center justify-between gap-4 border-t pt-4 sm:col-span-2"><div><p className="font-semibold text-destructive">Delete account and saved records</p><p className="mt-1 text-xs">This is separate from clearing this browser and cannot be undone.</p></div><Button variant="destructive" disabled={accountActionsPaused} onClick={() => setAccountDeleteOpen(true)}>Delete account</Button></div>}</CardContent>
       </Card>
       <DeleteDialog busy={clearBusy} open={deleteOpen} onCancel={() => setDeleteOpen(false)} onConfirm={confirmDelete} />
       <AlertDialog open={placeUploadOpen} onOpenChange={setPlaceUploadOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Upload local personal places?</AlertDialogTitle><AlertDialogDescription>This sends {pendingLocalPlaceCount} saved {pendingLocalPlaceCount === 1 ? 'place' : 'places'} to your account, including its label, address, and coordinates. Nothing is uploaded until you confirm here.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel asChild><Button variant="outline" disabled={syncState === 'syncing'}>Cancel</Button></AlertDialogCancel><Button onClick={confirmPlaceUpload} disabled={accountActionsPaused || syncState === 'syncing'}>{syncState === 'syncing' ? 'Syncing…' : 'Confirm upload'}</Button></AlertDialogFooter></AlertDialogContent></AlertDialog>

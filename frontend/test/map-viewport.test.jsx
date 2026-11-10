@@ -47,6 +47,7 @@ function WorkspaceProbe() {
       resourceFeatures: workspace.resourceFeatures,
       resourceState: workspace.resourceState,
       homeState: workspace.homeState,
+      appliedDistinctBlocks: workspace.appliedDistinctBlocks,
       brief: workspace.brief,
       profileLoadState: workspace.profileLoadState,
     })}</output>
@@ -57,6 +58,7 @@ function WorkspaceProbe() {
     <button onClick={() => workspace.setMapResourceTypes([])}>Clear amenity layers</button>
     <button onClick={() => workspace.loadMoreHomes()}>Load more homes</button>
     <button onClick={() => workspace.applySearch('')}>Search homes</button>
+    <button onClick={() => workspace.applySearch('', workspace.appliedBrief, { interpret: false, distinctBlocks: false })}>Search all transactions</button>
   </>;
 }
 
@@ -299,4 +301,33 @@ it('loads enabled amenity layers independently and keeps availability after clea
   await waitFor(() => expect(state().resourceFeatures).toEqual([]));
   expect(state().resourceState.counts).toEqual(counts);
   expect(fetchMock.mock.calls.filter(([path]) => path.startsWith('/api/v1/resources'))).toHaveLength(3);
+});
+
+
+it('keeps the applied grouping mode with its data and next-page request', async () => {
+  const fetchMock = vi.fn((path, options = {}) => {
+    if (path === '/api/v1/search') {
+      const criteria = JSON.parse(options.body);
+      const isNext = Boolean(criteria.cursor);
+      return Promise.resolve(json({
+        items: isNext ? [secondHome] : [initialHome], distinctBlocks: criteria.distinct_blocks,
+        total: 2, hasMore: !isNext, nextCursor: isNext ? null : 'raw-next', ...metadata,
+      }));
+    }
+    return standardFetch(path);
+  });
+  const { state } = renderWorkspace(fetchMock);
+  await waitFor(() => expect(state().homeState.status).toBe('success'));
+  expect(state().appliedDistinctBlocks).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Search all transactions' }));
+  await waitFor(() => expect(state().appliedDistinctBlocks).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Load more homes' }));
+  await waitFor(() => expect(state().homes).toHaveLength(2));
+  expect(state().appliedDistinctBlocks).toBe(false);
+  const requests = fetchMock.mock.calls.filter(([path]) => path === '/api/v1/search').map(([, options]) => JSON.parse(options.body));
+  expect(requests).toHaveLength(2);
+  expect(requests[0].distinct_blocks).toBe(false);
+  expect(requests[1]).toMatchObject({ distinct_blocks: false, cursor: 'raw-next' });
+  fireEvent.click(screen.getByRole('button', { name: 'Search homes' }));
+  await waitFor(() => expect(state().appliedDistinctBlocks).toBe(true));
 });

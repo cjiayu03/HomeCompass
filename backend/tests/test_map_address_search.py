@@ -11,7 +11,7 @@ from app.rate_limit import RateLimiter
 TOKEN = "private-onemap-token"
 
 
-def request(payload, *, headers=None, cookies=None):
+def request(payload, *, headers=None, cookies=None, path="/api/v1/map/address-search"):
     async def send():
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=main.app),
@@ -19,7 +19,7 @@ def request(payload, *, headers=None, cookies=None):
             cookies=cookies or {},
         ) as client:
             return await client.post(
-                "/api/v1/map/address-search",
+                path,
                 json=payload,
                 headers=headers or {},
             )
@@ -215,6 +215,59 @@ def test_public_rate_limit_has_retry_after(monkeypatch):
     assert limited.status_code == 429
     assert limited.headers["retry-after"]
     assert limited.json()["detail"]["code"] == "RATE_LIMITED"
+
+
+def test_home_pin_lookups_do_not_consume_explicit_address_searches(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "address_search_limiter",
+        RateLimiter(max_requests=2, window_seconds=60),
+    )
+    monkeypatch.setenv("ONEMAP_ACCESS_TOKEN", TOKEN)
+
+    async def suggest(*_args):
+        return [{"address": "10 Example Road", "latitude": 1.3, "longitude": 103.85}]
+
+    monkeypatch.setattr(main, "search_address_candidates", suggest)
+    home_path = "/api/v1/map/home-location"
+    first, second = (request({"query": f"{block} Example Road"}, path=home_path) for block in (10, 11))
+    assert [first.status_code, second.status_code] == [200, 200]
+    assert first.json() == {
+        "items": [{"address": "10 Example Road", "latitude": 1.3, "longitude": 103.85, "provider": "OneMap"}],
+    }
+    assert request({"query": "12 Example Road"}, path=home_path).status_code == 429
+
+    explicit = request({"query": "Bishan"})
+    assert explicit.status_code == 200
+    assert explicit.json()["items"][0]["address"] == "10 Example Road"
+
+
+def test_explicit_address_searches_do_not_block_home_pin_lookups(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "address_search_limiter",
+        RateLimiter(max_requests=1, window_seconds=60),
+    )
+    monkeypatch.setenv("ONEMAP_ACCESS_TOKEN", TOKEN)
+
+    async def no_results(*_args):
+        return []
+
+    monkeypatch.setattr(main, "search_address_candidates", no_results)
+    assert request({"query": "Bishan"}).status_code == 200
+    assert request({"query": "Bishan"}).status_code == 429
+    assert request({"query": "10 Example Road"}, path="/api/v1/map/home-location").status_code == 200
+
+
+@pytest.mark.parametrize("payload", [{"query": "   "}, {"query": "x" * 161}, {}])
+def test_home_pin_lookup_rejects_invalid_queries_before_provider_call(monkeypatch, payload):
+    monkeypatch.setenv("ONEMAP_ACCESS_TOKEN", TOKEN)
+
+    async def unexpected(*_args):
+        raise AssertionError("provider must not be called")
+
+    monkeypatch.setattr(main, "search_address_candidates", unexpected)
+    assert request(payload, path="/api/v1/map/home-location").status_code == 422
 
 
 def test_stale_cookie_is_guest_only_with_an_allowed_origin(monkeypatch):

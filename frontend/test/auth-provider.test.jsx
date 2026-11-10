@@ -275,3 +275,22 @@ it('allows login when browser storage is unavailable and never stores account de
   expect(state().user).toEqual(accountA);
   expect(storage).toHaveBeenCalledWith('homecompass:auth-change', expect.not.stringContaining(accountA.email));
 });
+
+it('coalesces focus and visibility checks without cancelling the first session request', async () => {
+  const refreshed = deferred();
+  let calls = 0;
+  let signal;
+  vi.stubGlobal('fetch', vi.fn((path, options) => {
+    calls += 1;
+    if (calls === 1) return Promise.resolve(json({ user: accountA }));
+    signal = options.signal;
+    return refreshed.promise;
+  }));
+  mount();
+  await waitFor(() => expect(state().user).toEqual(accountA));
+  act(() => { fireEvent.focus(window); fireEvent(document, new Event('visibilitychange')); });
+  expect(calls).toBe(2);
+  expect(signal.aborted).toBe(false);
+  await act(async () => { refreshed.resolve(json({ user: accountA })); });
+  expect(state().transitioning).toBe(false);
+});

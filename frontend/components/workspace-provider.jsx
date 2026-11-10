@@ -12,7 +12,8 @@ import { HOME_SAVED_EVENT, COMPARISON_ADDED_EVENT } from '@/lib/workspace-events
 const WorkspaceContext = createContext(null);
 const priorityWeightKeys = Object.keys(defaultBrief.priorityWeights);
 const HOME_PAGE_LIMIT = 50;
-const RESOURCE_PAGE_LIMIT = 500;
+const RESOURCE_PAGE_LIMIT = 100;
+const RESOURCE_MAX_PAGES_PER_LAYER = 5;
 const GUEST_SNAPSHOT_STORAGE_KEY = 'homecompass.guest-sync-pending';
 const GUEST_SYNC_KEY_STORAGE_KEY = 'homecompass.guest-sync-key';
 const GUEST_SYNC_FINGERPRINT_STORAGE_KEY = 'homecompass.guest-sync-fingerprint';
@@ -112,6 +113,7 @@ function successState(payload, data, previous) {
     retrievedAt: payload.retrievedAt || null,
     sourceSummary: payload.sourceSummary || [],
     warnings: payload.warnings || [],
+    dengue: payload.dengue || previous.dengue || null,
     error: null,
   };
 }
@@ -484,7 +486,7 @@ function syncResultNotice(result) {
 export function WorkspaceProvider({ children }) {
   const [hoveredHome, setHoveredHome] = useState(null);
   const auth = useAuth();
-  const { user, loading: authLoading, transitioning: authTransitioning = false, sessionVerified = true } = auth;
+  const { user, loading: authLoading, transitioning: authTransitioning = false, focusChecking = false, sessionVerified = true } = auth;
   const refreshSession = auth.refreshSession;
   const userId = user?.id || null;
   const targetWorkspaceOwner = accountWorkspaceOwnerKey(userId);
@@ -955,7 +957,10 @@ export function WorkspaceProvider({ children }) {
         if (kind === 'home') homesRef.current = data;
       }
       if (kind === 'home') setPagination(pageState(payload, Array.isArray(payload.items) ? payload.items : data));
-      setState((current) => successState(payload, kind === 'source' ? data.items || [] : appliedData, current));
+      setState((current) => ({
+        ...successState(payload, kind === 'source' ? data.items || [] : appliedData, current),
+        ...(kind === 'home' ? { distinctBlocks: payload.distinctBlocks ?? payload.criteria?.distinct_blocks ?? true } : {}),
+      }));
       onSuccess?.(payload, data);
       return data;
     } catch (error) {
@@ -988,16 +993,31 @@ export function WorkspaceProvider({ children }) {
     const selectedTypes = [...mapResourceTypesRef.current];
     return runRequest('resource', async (signal) => {
       if (!selectedTypes.length) return { features: [], dataMode: 'live', hasMore: false };
-      // Bound each enabled layer independently so dense park/clinic data cannot
-      // consume the whole page and hide smaller community or health layers.
-      const pages = await Promise.all(selectedTypes.map(type => {
-        const layerParams = new URLSearchParams(params);
-        layerParams.set('resource_type', type);
-        return requestJson(`/api/v1/resources?${layerParams}`, { signal });
+      // Fetch smaller GeoJSON pages so complex polygons do not make one map
+      // request excessively large. Keep the previous 500-feature per-layer
+      // ceiling and follow the API cursor within that bound.
+      const pages = await Promise.all(selectedTypes.map(async type => {
+        const features = [];
+        let cursor = null;
+        let lastPage = null;
+        let hasMore = false;
+        for (let pageIndex = 0; pageIndex < RESOURCE_MAX_PAGES_PER_LAYER; pageIndex += 1) {
+          const layerParams = new URLSearchParams(params);
+          layerParams.set('resource_type', type);
+          layerParams.set('limit', String(RESOURCE_PAGE_LIMIT));
+          if (cursor) layerParams.set('cursor', cursor);
+          lastPage = await requestJson(`/api/v1/resources?${layerParams}`, { signal });
+          features.push(...requireResultArray(lastPage, 'features'));
+          cursor = lastPage.nextCursor || null;
+          hasMore = lastPage.hasMore === true && Boolean(cursor);
+          if (!hasMore) break;
+        }
+        return { ...lastPage, features, hasMore, nextCursor: hasMore ? cursor : null };
       }));
-      return { ...pages[0], features: pages.flatMap(page => requireResultArray(page, 'features')),
-        hasMore: pages.some(page => page.hasMore === true), nextCursor: null,
-        total: pages.reduce((sum, page) => sum + (Number.isFinite(page.total) ? page.total : page.features.length), 0) };
+      const denguePage = pages.find(page => page?.dengue);
+      const features = pages.flatMap(page => requireResultArray(page, 'features'));
+      return { ...pages[0], ...(denguePage ? { dengue: denguePage.dengue } : {}), features, count: features.length,
+        hasMore: pages.some(page => page.hasMore === true), nextCursor: null, total: features.length };
     },
       (payload) => requireResultArray(payload, 'features'), (payload) => {
         if (Array.isArray(payload.counts)) mapResourceCountsRef.current = payload.counts;
@@ -1164,6 +1184,7 @@ export function WorkspaceProvider({ children }) {
           mode: snapshot.mode,
           criteria: snapshot.criteria,
           scoring_version: snapshot.metadata.scorePolicyVersion,
+          sourceSnapshotIds: snapshot.sourceSnapshotIds,
         }),
       });
       if (!isCurrentOwner()) return;
@@ -1675,7 +1696,7 @@ export function WorkspaceProvider({ children }) {
     homesRef.current = results;
     setPagination({ limit: HOME_PAGE_LIMIT, total: results.length, nextCursor: null, hasMore: false });
     activeHomePageRequest.current = null;
-    setHomeState(fixtureState(results));
+    setHomeState({ ...fixtureState(results), distinctBlocks: options.distinctBlocks !== false });
     flash(results.length ? `${results.length} labelled fixture candidates found.` : 'No homes match every current filter. Adjust the filters to search again.', results.length ? 'info' : 'warning');
     return results;
   }
@@ -1790,6 +1811,7 @@ export function WorkspaceProvider({ children }) {
           const requestCriteria = {
             ...criteria,
             priority_weights: priorityWeights,
+            distinct_blocks: options.distinctBlocks !== false,
             place_constraints: serverPlaceConstraints,
             limit: HOME_PAGE_LIMIT,
             ...(cursor ? { cursor } : {}),
@@ -2139,34 +2161,36 @@ export function WorkspaceProvider({ children }) {
     });
   }
 
-  const exposedBrief = workspaceReady ? brief : defaultBrief;
-  const exposedHomes = workspaceReady ? homes : (fixtureMode ? fixtureHomes : []);
-  const exposedHomeState = workspaceReady ? homeState : initialState(fixtureMode ? 'fixture' : 'live');
-  const exposedPagination = workspaceReady ? pagination : {
+  // Keep the existing view stable during a passive focus check; all mutations remain gated by workspaceReady.
+  const workspaceDisplayReady = workspaceReady || (focusChecking && authTransitioning && !authLoading && hydrated && workspaceOwner === targetWorkspaceOwner && workspaceOwnerRef.current === targetWorkspaceOwner);
+  const exposedBrief = workspaceDisplayReady ? brief : defaultBrief;
+  const exposedHomes = workspaceDisplayReady ? homes : (fixtureMode ? fixtureHomes : []);
+  const exposedHomeState = workspaceDisplayReady ? homeState : initialState(fixtureMode ? 'fixture' : 'live');
+  const exposedPagination = workspaceDisplayReady ? pagination : {
     limit: HOME_PAGE_LIMIT,
     total: fixtureMode ? fixtureHomes.length : 0,
     nextCursor: null,
     hasMore: false,
   };
-  const exposedQuery = workspaceReady ? query : '';
-  const exposedBusy = workspaceReady ? busy : false;
-  const exposedShortlistIds = workspaceReady ? shortlistIds : [];
-  const exposedCompareIds = workspaceReady ? compareIds : [];
-  const exposedPlaces = workspaceReady ? places : [];
-  const exposedPlaceState = workspaceReady ? placeState : authenticatedPlaceState('idle');
-  const exposedHistory = workspaceReady ? history : [];
-  const exposedHistoryState = workspaceReady
+  const exposedQuery = workspaceDisplayReady ? query : '';
+  const exposedBusy = workspaceDisplayReady ? busy : false;
+  const exposedShortlistIds = workspaceDisplayReady ? shortlistIds : [];
+  const exposedCompareIds = workspaceDisplayReady ? compareIds : [];
+  const exposedPlaces = workspaceDisplayReady ? places : [];
+  const exposedPlaceState = workspaceDisplayReady ? placeState : authenticatedPlaceState('idle');
+  const exposedHistory = workspaceDisplayReady ? history : [];
+  const exposedHistoryState = workspaceDisplayReady
     ? historyState
     : initialHistoryState(!authLoading && !userId ? 'signed_out' : 'idle');
-  const exposedSavedSearches = workspaceReady ? savedSearches : [];
-  const exposedSavedSearchState = workspaceReady
+  const exposedSavedSearches = workspaceDisplayReady ? savedSearches : [];
+  const exposedSavedSearchState = workspaceDisplayReady
     ? savedSearchState
     : initialSavedSearchState(!authLoading && !userId ? 'signed_out' : 'idle');
-  const exposedLastSearchSnapshot = workspaceReady ? lastSearchSnapshot : null;
-  const exposedSyncState = workspaceReady ? syncState : 'local';
-  const exposedSyncResult = workspaceReady ? syncResult : null;
-  const exposedNotice = workspaceReady ? notice : null;
-  const exposedPendingPlaceCount = workspaceReady ? pendingLocalPlaceCount : 0;
+  const exposedLastSearchSnapshot = workspaceDisplayReady ? lastSearchSnapshot : null;
+  const exposedSyncState = workspaceDisplayReady ? syncState : 'local';
+  const exposedSyncResult = workspaceDisplayReady ? syncResult : null;
+  const exposedNotice = workspaceDisplayReady ? notice : null;
+  const exposedPendingPlaceCount = workspaceDisplayReady ? pendingLocalPlaceCount : 0;
   const setCurrentBrief = (nextValue) => { if (localDataClearedRef.current && userId && profileLoadState === 'ready') setProfileOwner(userId); localDataClearedRef.current = false; explicitSearchRequestedRef.current = true; setOwnerState(setBrief, nextValue); };
   const setCurrentHomes = (nextValue) => setOwnerState(setHomes, nextValue);
   const setCurrentQuery = (nextValue) => { localDataClearedRef.current = false; explicitSearchRequestedRef.current = true; setOwnerState(setQuery, nextValue); };
@@ -2178,13 +2202,14 @@ export function WorkspaceProvider({ children }) {
     setHoveredHome,
     brief: exposedBrief,
     setBrief: setCurrentBrief,
-    appliedBrief: workspaceReady ? appliedBrief : defaultBrief,
-    appliedQuery: workspaceReady ? appliedQuery : '',
-    appliedBounds: workspaceReady ? appliedBounds : null,
-    searchDirty: workspaceReady && (query !== appliedQuery || JSON.stringify(brief) !== JSON.stringify(appliedBrief)),
+    appliedBrief: workspaceDisplayReady ? appliedBrief : defaultBrief,
+    appliedQuery: workspaceDisplayReady ? appliedQuery : '',
+    appliedBounds: workspaceDisplayReady ? appliedBounds : null,
+    searchDirty: workspaceDisplayReady && (query !== appliedQuery || JSON.stringify(brief) !== JSON.stringify(appliedBrief)),
     homes: exposedHomes,
     setHomes: setCurrentHomes,
     homeState: exposedHomeState,
+    appliedDistinctBlocks: exposedHomeState.distinctBlocks !== false,
     pagination: exposedPagination,
     loadMoreHomes,
     resourceFeatures,
@@ -2210,11 +2235,11 @@ export function WorkspaceProvider({ children }) {
     busy: exposedBusy,
     shortlistIds: exposedShortlistIds,
     setShortlistIds: setCurrentShortlistIds,
-    shortlistHomes: workspaceReady ? shortlistHomes : [],
-    missingSavedIds: workspaceReady ? shortlistIds.filter(id => !decisionHomesById.has(String(id))) : [],
+    shortlistHomes: workspaceDisplayReady ? shortlistHomes : [],
+    missingSavedIds: workspaceDisplayReady ? shortlistIds.filter(id => !decisionHomesById.has(String(id))) : [],
     compareIds: exposedCompareIds,
     setCompareIds: setCurrentCompareIds,
-    selectedHomes: workspaceReady ? selectedHomes : [],
+    selectedHomes: workspaceDisplayReady ? selectedHomes : [],
     toggleShortlist,
     ensureSaved,
     reorderShortlist,
@@ -2224,9 +2249,9 @@ export function WorkspaceProvider({ children }) {
     resetSearch,
     searchBounds,
     clearLocalData,
-    profileSyncState: workspaceReady ? profileSyncState : { status: 'local', error: null },
+    profileSyncState: workspaceDisplayReady ? profileSyncState : { status: 'local', error: null },
     retryProfileSync,
-    profileLoadState: workspaceReady ? profileLoadState : userId ? 'loading' : 'signed_out',
+    profileLoadState: workspaceDisplayReady ? profileLoadState : userId ? 'loading' : 'signed_out',
     saveProfile,
     flash,
     places: exposedPlaces,

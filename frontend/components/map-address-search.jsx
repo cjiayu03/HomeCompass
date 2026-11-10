@@ -20,6 +20,7 @@ function searchErrorMessage(error) {
 const initialState = { status: 'idle', items: [] };
 
 export function MapAddressSearch({ selectedAddress, onSelect, onClear, optionsOpen = false, onSearchStart }) {
+  const [expanded, setExpanded] = useState(false);
   const [query, setQuery] = useState('');
   const [state, setState] = useState(initialState);
   const activeRequest = useRef(null);
@@ -84,11 +85,12 @@ export function MapAddressSearch({ selectedAddress, onSelect, onClear, optionsOp
 
   function submit(event) {
     event.preventDefault();
+    if (!expanded && !query) { setExpanded(true); inputRef.current?.focus(); return; }
     void runSearch();
   }
 
   function handleKeyDown(event) {
-    if (event.key !== 'Escape' || state.status === 'idle') return;
+    if (event.key !== 'Escape') return;
     event.preventDefault();
     event.stopPropagation();
     dismissResults();
@@ -102,12 +104,13 @@ export function MapAddressSearch({ selectedAddress, onSelect, onClear, optionsOp
     inputRef.current?.focus({ preventScroll: true });
   }
 
-  return <div className="map-address-search" onKeyDown={handleKeyDown}>
-    <form onSubmit={submit} role="search" aria-label="Find an address on the map" className="map-address-form flex gap-1 rounded-xl border bg-background/95 p-1 shadow-md backdrop-blur">
+  return <div className="map-address-search" data-expanded={expanded || Boolean(query) || state.status !== 'idle'} onKeyDown={handleKeyDown} onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setExpanded(false); }}>
+    <form onSubmit={submit} role="search" aria-label="Find an address on the map" className="map-address-form">
       <label htmlFor="map-address-input" className="sr-only">Find an address or postal code</label>
       <input
         ref={inputRef}
         id="map-address-input"
+        onFocus={() => setExpanded(true)}
         type="search"
         maxLength={160}
         autoComplete="off"
@@ -118,13 +121,13 @@ export function MapAddressSearch({ selectedAddress, onSelect, onClear, optionsOp
           setQuery(event.target.value);
           setState(initialState);
         }}
-        className="h-10 min-w-0 flex-1 rounded-lg bg-transparent px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="map-address-input"
       />
       {query && <button type="button" aria-label="Clear address search input" onClick={() => { invalidate(); setQuery(''); setState(initialState); inputRef.current?.focus(); }} className="grid h-10 w-9 shrink-0 place-items-center rounded-lg hover:bg-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
         <X aria-hidden="true" className="size-4" />
       </button>}
-      <button type="submit" aria-label="Search map addresses" disabled={state.status === 'loading'} className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground disabled:opacity-50">
-        <Search aria-hidden="true" className="size-4" />
+      <button type="submit" aria-label="Search map addresses" disabled={state.status === 'loading'} className="map-address-submit">
+        <Search aria-hidden="true" className="size-4" /><span className="map-address-compact-label">Find address</span>
       </button>
     </form>
 
