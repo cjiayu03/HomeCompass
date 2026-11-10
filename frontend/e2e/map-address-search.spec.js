@@ -60,6 +60,9 @@ async function installApiRoutes(page, { addressResults = [candidate], onAddressS
       }
       return route.fulfill({ json: { items: addressResults } });
     }
+    if (path === '/api/v1/map/home-location') {
+      return route.fulfill({ json: { items: [] } });
+    }
 
     let payload;
     if (path === '/api/v1/auth/session') {
@@ -139,7 +142,7 @@ test('guest address search moves the real 2D camera, can recenter, and does not 
   const unrelatedWrites = [];
   page.on('request', (request) => {
     const path = new URL(request.url()).pathname;
-    if (request.method() !== 'GET' && path.startsWith('/api/v1/') && path !== '/api/v1/map/address-search') {
+    if (request.method() !== 'GET' && path.startsWith('/api/v1/') && !['/api/v1/map/address-search', '/api/v1/map/home-location'].includes(path)) {
       unrelatedWrites.push({ method: request.method(), path });
     }
   });

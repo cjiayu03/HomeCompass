@@ -14,12 +14,14 @@ import hashlib
 from html.parser import HTMLParser
 import io
 import json
+import math
 import os
 import re
 import sys
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
@@ -28,7 +30,10 @@ from uuid import uuid4
 import asyncpg
 import httpx
 
+from ..source_text import source_label
+
 from ..local_env import load_local_project_env
+from ..dengue import parse_dengue_timestamp
 from .data_gov_sg import DATASET_API_ROOT, MAX_DOWNLOAD_BYTES, _safe_download_url
 
 
@@ -66,7 +71,11 @@ SOURCES: tuple[SourceDefinition, ...] = (
     SourceDefinition("d_44cfe12f2858ae503a093dfc075a28be", "childcare_fees", "csv", ("CENTRE_NAME", "NAME")),
     SourceDefinition("d_253a7e348279bf0a87666a71f7ea2e67", "childcare_charges", "csv", ("CENTRE_NAME", "NAME")),
     SourceDefinition("d_abf023b38d9bc451484e3d67b562bc5c", "school_zone", "geojson", ("NAME", "SCHOOL", "DESCRIPTION"), description="LTA school-zone polygons, not school point locations."),
-    SourceDefinition("d_dbfabf16158d1b0e1c420627c0819168", "dengue_cluster", "geojson", ("LOCALITY", "NAME", "CLUSTER_NAME")),
+    SourceDefinition(
+        "d_dbfabf16158d1b0e1c420627c0819168", "dengue_cluster", "geojson", ("LOCALITY", "NAME", "CLUSTER_NAME"),
+        description=("NEA active intervention-area polygons. Snapshot time comes from the data.gov.sg dataset "
+                     "publication timestamp; FMEL_UPD_D is a per-feature record update time, not a case report date."),
+    ),
 )
 
 _BY_ID = {source.dataset_id: source for source in SOURCES}
@@ -161,7 +170,7 @@ def _unpack(payload: bytes, expected: str) -> bytes:
         return archive.read(candidates[0])
 
 
-def _read_geojson(payload: bytes) -> list[tuple[str, str | None, dict[str, Any], str | None]]:
+def _read_geojson(payload: bytes, *, strict_features: bool = False) -> list[tuple[str, str | None, dict[str, Any], str | None]]:
     data = json.loads(_unpack(payload, ".geojson").decode("utf-8-sig", errors="strict"))
     if not isinstance(data, dict) or data.get("type") != "FeatureCollection" or not isinstance(data.get("features"), list):
         raise ValueError("Expected a GeoJSON FeatureCollection.")
@@ -170,12 +179,16 @@ def _read_geojson(payload: bytes) -> list[tuple[str, str | None, dict[str, Any],
     rows: list[tuple[str, str | None, dict[str, Any], str | None]] = []
     for feature in data["features"]:
         if not isinstance(feature, dict) or feature.get("type") != "Feature":
+            if strict_features:
+                rows.append(("", None, {}, None))
             continue
         properties = feature.get("properties") or {}
         geometry = feature.get("geometry")
         if not isinstance(properties, dict) or not isinstance(geometry, dict) or geometry.get("type") not in {
             "Point", "MultiPoint", "LineString", "MultiLineString", "Polygon", "MultiPolygon", "GeometryCollection",
         }:
+            if strict_features:
+                rows.append(("", None, {}, None))
             continue
         rows.append(("", json.dumps(geometry, ensure_ascii=False, separators=(",", ":")), _public_attributes(_flatten_description(properties)), None))
     return rows
@@ -196,10 +209,18 @@ def _read_csv(payload: bytes) -> list[tuple[str, str | None, dict[str, Any], str
 
 
 def parse_resource_payload(source: SourceDefinition, payload: bytes) -> tuple[list[tuple[str, str | None, dict[str, Any], str | None]], int]:
-    raw_rows = _read_geojson(payload) if source.format == "geojson" else _read_csv(payload)
+    is_dengue = source.resource_type == "dengue_cluster"
+    raw_rows = _read_geojson(payload, strict_features=is_dengue) if source.format == "geojson" else _read_csv(payload)
     rows: list[tuple[str, str | None, dict[str, Any], str | None]] = []
     rejected = 0
     for _, geometry, attributes, _ in raw_rows:
+        if is_dengue:
+            locality = _pick(attributes, source.name_fields)
+            case_count = _dengue_case_count(_pick(attributes, ("CASE_SIZE",)))
+            if not locality or case_count is None or not _valid_dengue_polygon(geometry):
+                rejected += 1
+                continue
+            attributes = {**attributes, "CASE_SIZE": case_count}
         name = _pick(attributes, source.name_fields)
         if name and source.resource_type == "hdb_building":
             name = f"HDB block {name}"
@@ -223,10 +244,81 @@ def parse_resource_payload(source: SourceDefinition, payload: bytes) -> tuple[li
         row_hash = hashlib.sha256(f"{source.dataset_id}|{stable_key}|{stable}|{geometry or ''}".encode("utf-8")).hexdigest()[:40]
         status = _pick(attributes, source.status_fields)
         rows.append((f"{source.resource_type}-{row_hash}", geometry, attributes, str(status) if status is not None else None))
-        rows[-1] = (rows[-1][0], rows[-1][1], {**attributes, "_source_name": str(name)}, rows[-1][3])
-    if not rows:
+        rows[-1] = (rows[-1][0], rows[-1][1], {**attributes, "_source_name": source_label(str(name))}, rows[-1][3])
+    if not rows and not (is_dengue and not raw_rows):
         raise ValueError("No valid source records were found; the previous layer was left untouched.")
     return rows, rejected
+
+
+def _dengue_case_count(value: Any) -> int | None:
+    """Normalize published case counts and reject ambiguous values."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        count = Decimal(str(value).strip())
+    except (InvalidOperation, AttributeError, ValueError):
+        return None
+    if not count.is_finite() or count != count.to_integral_value() or count < 2:
+        return None
+    return int(count)
+
+
+def _valid_dengue_polygon(geometry_json: str | None) -> bool:
+    """Check the published Polygon/MultiPolygon structure before promotion."""
+    if not geometry_json:
+        return False
+    try:
+        geometry = json.loads(geometry_json, parse_constant=lambda _value: None)
+    except (TypeError, ValueError):
+        return False
+    kind = geometry.get("type") if isinstance(geometry, dict) else None
+    coordinates = geometry.get("coordinates") if isinstance(geometry, dict) else None
+    if kind == "Polygon":
+        polygons = [coordinates]
+    elif kind == "MultiPolygon":
+        polygons = coordinates
+    else:
+        return False
+    if not isinstance(polygons, list) or not polygons:
+        return False
+    for polygon in polygons:
+        if not isinstance(polygon, list) or not polygon:
+            return False
+        for ring in polygon:
+            if not isinstance(ring, list) or len(ring) < 4:
+                return False
+            points: list[tuple[float, float]] = []
+            for position in ring:
+                if not isinstance(position, list) or len(position) < 2:
+                    return False
+                x, y = position[:2]
+                if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in (x, y)):
+                    return False
+                if not (-180 <= x <= 180 and -90 <= y <= 90):
+                    return False
+                if (isinstance(x, float) and not math.isfinite(x)) or (isinstance(y, float) and not math.isfinite(y)):
+                    return False
+                points.append((x, y))
+            if points[0] != points[-1]:
+                return False
+    return True
+
+
+async def _discard_invalid_dengue_geometries(connection: asyncpg.Connection, rows: list[tuple[str, str | None, dict[str, Any], str | None]]) -> tuple[list[tuple[str, str | None, dict[str, Any], str | None]], int]:
+    """Use PostGIS topology checks before a dengue snapshot can be complete."""
+    invalid_indices: set[int] = set()
+    geocoded = [(index, row[1]) for index, row in enumerate(rows) if row[1] is not None]
+    for offset in range(0, len(geocoded), 500):
+        batch = geocoded[offset:offset + 500]
+        invalid = await connection.fetch(
+            """SELECT candidate.ord
+               FROM unnest($1::text[]) WITH ORDINALITY AS candidate(geojson, ord)
+               WHERE NOT ST_IsValid(ST_Force2D(ST_SetSRID(ST_GeomFromGeoJSON(candidate.geojson),4326)))""",
+            [geometry for _, geometry in batch],
+        )
+        invalid_indices.update(batch[int(row["ord"]) - 1][0] for row in invalid)
+    accepted = [row for index, row in enumerate(rows) if index not in invalid_indices]
+    return accepted, len(invalid_indices)
 
 
 def source_update_time(rows: list[tuple[str, str | None, dict[str, Any], str | None]]) -> datetime | None:
@@ -244,6 +336,38 @@ def source_update_time(rows: list[tuple[str, str | None, dict[str, Any], str | N
             except ValueError:
                 continue
     return max(values) if values else None
+
+
+async def get_dataset_metadata(client: httpx.AsyncClient, source: SourceDefinition, *, api_key: str | None = None) -> dict[str, Any] | None:
+    """Read only the data.gov.sg metadata fields needed for provenance."""
+    url = f"https://api-production.data.gov.sg/v2/public/api/datasets/{source.dataset_id}/metadata"
+    headers = {"User-Agent": "HomeCompass/1.0", "Accept": "application/json"}
+    if api_key:
+        headers["x-api-key"] = api_key
+    response = await _control_request(client, url, headers)
+    body = response.json()
+    if not isinstance(body, dict) or body.get("code") != 0 or not isinstance(body.get("data"), dict):
+        return None
+    data = body["data"]
+    return {
+        "datasetId": data.get("datasetId"),
+        "format": data.get("format"),
+        "lastUpdatedAt": parse_dengue_timestamp(data.get("lastUpdatedAt")),
+    }
+
+
+def verified_dataset_publication_time(source: SourceDefinition, before: dict[str, Any] | None, after: dict[str, Any] | None) -> datetime | None:
+    """Trust publication metadata only when it brackets the exact export."""
+    if not before or not after:
+        return None
+    for metadata in (before, after):
+        if metadata.get("datasetId") != source.dataset_id or str(metadata.get("format", "")).lower() != source.format.lower():
+            return None
+        if metadata.get("lastUpdatedAt") is None:
+            return None
+    if before["lastUpdatedAt"] != after["lastUpdatedAt"]:
+        return None
+    return before["lastUpdatedAt"]
 
 
 async def _control_request(client: httpx.AsyncClient, url: str, headers: dict[str, str]) -> httpx.Response:
@@ -299,16 +423,35 @@ async def download_dataset(client: httpx.AsyncClient, source: SourceDefinition, 
     return b"".join(chunks)
 
 
-async def import_resource(pool: asyncpg.Pool, source: SourceDefinition, payload: bytes) -> dict[str, Any]:
+async def import_resource(
+    pool: asyncpg.Pool,
+    source: SourceDefinition,
+    payload: bytes,
+    *,
+    source_updated_at: datetime | None = None,
+    source_timestamp_verified: bool = False,
+) -> dict[str, Any]:
     rows, rejected = parse_resource_payload(source, payload)
     snapshot_id = uuid4()
     retrieved = datetime.now(timezone.utc)
-    updated = source_update_time(rows)
+    # These layers use dataset-level publication times for the complete export,
+    # including an empty collection. Per-feature FMEL_UPD_D values describe
+    # individual records and cannot establish national snapshot freshness.
+    if source.resource_type in {"dengue_cluster", "silver_zone", "dementia_gtp"}:
+        updated = parse_dengue_timestamp(source_updated_at) if source_timestamp_verified else None
+    else:
+        updated = source_update_time(rows)
     checksum = hashlib.sha256(payload).hexdigest()
     status = "degraded" if rejected else "valid"
     inserted = 0
     async with pool.acquire() as connection:
         async with connection.transaction():
+            if source.resource_type == "dengue_cluster" and rows:
+                rows, invalid_geometry_count = await _discard_invalid_dengue_geometries(connection, rows)
+                rejected += invalid_geometry_count
+                if not rows:
+                    raise ValueError("No valid dengue cluster polygons were found; the previous layer was left untouched.")
+                status = "degraded" if rejected else "valid"
             await connection.execute(
                 """INSERT INTO source_snapshot (id, source_id, source_url, source_version, content_hash, source_updated_at,
                    retrieved_at, geometry_srid, row_count, rejected_count, status, validation_report)
@@ -317,7 +460,11 @@ async def import_resource(pool: asyncpg.Pool, source: SourceDefinition, payload:
                 retrieved, rejected,
                 json.dumps({"schema": "data.gov.sg-resource/v1", "resourceType": source.resource_type,
                             "geometry": "EPSG:4326 GeoJSON where published; address-only records remain unlocated",
-                            "note": source.description}, ensure_ascii=False),
+                            "note": source.description,
+                            **({"sourceTimestampProvenance": "data_gov_sg_metadata_bracketed_export_v1"}
+                               if source.resource_type in {"dengue_cluster", "silver_zone", "dementia_gtp"} and source_timestamp_verified and updated else {}),
+                            **({"snapshotCompleteness": "complete_export" if status == "valid" else "partial_export"}
+                               if source.resource_type in {"dengue_cluster", "silver_zone", "dementia_gtp"} else {})}, ensure_ascii=False),
             )
             sql = """INSERT INTO neighbourhood_resource (id,source_snapshot_id,resource_type,name,geometry,status,attributes)
                      VALUES ($1,$2,$3,$4,CASE WHEN $5::text IS NULL THEN NULL ELSE ST_Force2D(ST_SetSRID(ST_GeomFromGeoJSON($5),4326)) END,$6,$7::jsonb)
@@ -354,14 +501,35 @@ async def run_import(source_ids: list[str] | None = None) -> list[dict[str, Any]
     dsn = database_url.replace("postgresql+asyncpg://", "postgresql://", 1).replace("postgresql+psycopg://", "postgresql://", 1)
     selected = [_BY_ID[source_id] for source_id in source_ids] if source_ids else list(SOURCES)
     api_key = os.getenv("DATA_GOV_SG_API_KEY") or None
-    async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10), follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(60, connect=10), follow_redirects=True,
+        headers={"User-Agent": "HomeCompass/1.0", "Accept": "application/json"},
+    ) as client:
         pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3, command_timeout=900)
         try:
             outcomes = []
             for source in selected:
                 print(f"Fetching {source.dataset_id} ({source.resource_type})", file=sys.stderr, flush=True)
+                metadata_before = None
+                if source.resource_type in {"dengue_cluster", "silver_zone", "dementia_gtp"}:
+                    try:
+                        metadata_before = await get_dataset_metadata(client, source, api_key=api_key)
+                    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+                        metadata_before = None
                 payload = await download_dataset(client, source, api_key=api_key)
-                outcome = await import_resource(pool, source, payload)
+                publication_time = None
+                if source.resource_type in {"dengue_cluster", "silver_zone", "dementia_gtp"}:
+                    try:
+                        metadata_after = await get_dataset_metadata(client, source, api_key=api_key)
+                    except (httpx.HTTPError, ValueError, KeyError, TypeError):
+                        metadata_after = None
+                    publication_time = verified_dataset_publication_time(source, metadata_before, metadata_after)
+                    # A missing or changed catalog timestamp leaves the new
+                    # snapshot unknown; retrieval never revives downloaded data.
+                outcome = await import_resource(
+                    pool, source, payload, source_updated_at=publication_time,
+                    source_timestamp_verified=publication_time is not None,
+                )
                 outcomes.append(outcome)
                 print(f"Imported {source.dataset_id}: {outcome['rows']:,} rows ({outcome['state']})", file=sys.stderr, flush=True)
                 # Free anonymous catalogue quota is deliberately used serially.

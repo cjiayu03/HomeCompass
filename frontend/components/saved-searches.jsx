@@ -121,9 +121,9 @@ function HistoryRow({ entry, resumeSearch }) {
     <div className="min-w-0">
       <h3 className="truncate text-sm font-semibold">{query}</h3>
       <p className="mt-1 text-xs text-muted-foreground">{entry.mode === 'natural_language' ? 'Phrase search' : 'Structured search'} · Budget {Number.isFinite(criteria.budget) ? new Intl.NumberFormat('en-SG', { style: 'currency', currency: 'SGD', maximumFractionDigits: 0 }).format(criteria.budget) : 'not set'}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{snapshots.length} source {snapshots.length === 1 ? 'snapshot' : 'snapshots'} · Policy version {entry.scoringVersion || 'not available'}</p>
+      <p className="mt-1 text-xs text-muted-foreground">Original run: {snapshots.length} source {snapshots.length === 1 ? 'snapshot' : 'snapshots'} · scoring policy {entry.scoringVersion || 'not available'}</p>
     </div>
-    <div className="flex shrink-0 flex-col gap-2"><time className="text-xs text-muted-foreground">{formatDate(entry.createdAt)}</time><Button variant="outline" size="sm" onClick={()=>resumeSearch(entry)}>Resume search</Button></div>
+    <div className="flex shrink-0 flex-col gap-2"><time className="text-xs text-muted-foreground">{formatDate(entry.createdAt)}</time><Button variant="outline" size="sm" onClick={()=>resumeSearch(entry)}>Replay with current data</Button></div>
   </article>;
 }
 
@@ -151,7 +151,7 @@ export function SavedDecisionSections({ onEdit, onApplied } = {}) {
     const repaired=editableCriteria(criteria);
     if((repaired.place_constraints?.length||0)!==(criteria.place_constraints?.length||0)){editSearch(entry);return;}
     setResumeBusy(true);
-    try{const result=await applySearch(criteria.query||'',briefFromCriteria(brief,criteria), { interpret: false });if(result!=null){onApplied?.();router.replace('/explore');}}finally{setResumeBusy(false);}
+    try{const result=await applySearch(criteria.query||'',briefFromCriteria(brief,criteria), { interpret: false });if(result!=null){flash?.('Search replayed with its saved filters and current source data and scoring. The original source snapshots remain recorded in history.','info');onApplied?.();router.replace('/explore');}}finally{setResumeBusy(false);}
   }
   const loading = savedSearchState.status === 'idle' || savedSearchState.status === 'loading';
   const signedOut = savedSearchState.status === 'signed_out';
@@ -162,7 +162,7 @@ export function SavedDecisionSections({ onEdit, onApplied } = {}) {
 
   return <div className="grid gap-5 lg:grid-cols-2">
     <Card>
-      <CardHeader><div className="flex items-center gap-2"><Clock3 className="size-4 text-primary" /><CardTitle>Search history</CardTitle></div><p className="text-sm text-muted-foreground">A record of searches and the source snapshots available at the time.</p></CardHeader>
+      <CardHeader><div className="flex items-center gap-2"><Clock3 className="size-4 text-primary" /><CardTitle>Search history</CardTitle></div><p className="text-sm text-muted-foreground">History keeps each run’s filters and source snapshots. Replay keeps those filters and uses current source data and scoring.</p></CardHeader>
       <CardContent>
         {historySignedOut
           ? <p className="text-sm text-muted-foreground">Sign in to view account search history.</p>

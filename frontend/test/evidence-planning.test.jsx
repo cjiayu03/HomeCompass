@@ -15,10 +15,12 @@ describe('evidence planning', () => {
     expect(chart.ticks).toHaveLength(3);
   });
   it('uses source-specific review limits and never treats a recent fetch as fresh source evidence', () => {
-    const record = { state: 'valid', resourceType: 'dengue_cluster', sourceUpdatedAt: '2026-10-01', retrievedAt: '2026-10-28' };
-    expect(sourceFreshness(record, new Date('2026-10-28')).state).toBe('review');
+    const sourceUpdatedAt = '2026-10-27T12:00:00+00:00';
+    const record = { state: 'valid', resourceType: 'dengue_cluster', sourceUpdatedAt: '2026-10-01', retrievedAt: '2026-10-28', dengue: { state: 'fresh', usable: true, sourceUpdatedAt, validUntil: '2026-10-29T12:00:00+00:00' } };
+    expect(sourceFreshness(record, new Date('2026-10-28T12:00:00Z')).state).toBe('within');
+    expect(sourceFreshness(record, new Date('2026-10-29T12:00:00.001Z')).state).toBe('review');
     expect(sourceFreshness({ ...record, resourceType: 'hdb_property' }, new Date('2026-10-28')).state).toBe('within');
-    expect(sourceFreshness({ ...record, sourceUpdatedAt: null }).state).toBe('unknown');
+    expect(sourceFreshness({ ...record, dengue: undefined }).state).toBe('unknown_date');
     expect(sourceFreshness({ ...record, state: 'not_imported' }).state).toBe('unavailable');
   });
   it('describes only loaded historical records and groups repeated blocks', () => {

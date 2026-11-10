@@ -30,6 +30,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [transitioning, setTransitioning] = useState(false);
+  const [focusChecking, setFocusChecking] = useState(false);
   const [sessionVerified, setSessionVerified] = useState(false);
   const verifiedRef = useRef(false);
   const userRef = useRef(null);
@@ -148,10 +149,16 @@ export function AuthProvider({ children }) {
       } catch { return null; }
     };
     const onFocus = () => {
-      if (document.visibilityState === 'visible') reconcileSession();
+      // Browsers commonly emit both events for one return to the tab. Keep
+      // the in-flight check instead of aborting and restarting it.
+      if (document.visibilityState === 'visible' && !sessionReadRef.current && !remoteTransitions.size && !pendingMutationsRef.current) {
+        setFocusChecking(true);
+        reconcileSession().finally(() => { if (mountedRef.current) setFocusChecking(false); });
+      }
     };
     const onStorage = (event) => {
       if (event.key !== AUTH_CHANGE_KEY) return;
+      setFocusChecking(false);
       const change = readChange(event.newValue);
       if (change?.phase === 'start' && Date.now() - change.at < 30_000) {
         startRemoteTransition(change);
@@ -180,6 +187,7 @@ export function AuthProvider({ children }) {
   }, [beginTransition, endTransition, invalidateSessionRead, refreshSession]);
 
   const mutateSession = useCallback((path, credentials) => {
+    setFocusChecking(false);
     const interruptedSessionRead = Boolean(sessionReadRef.current);
     const previouslyVerified = verifiedRef.current;
     updateVerification(false);
@@ -226,7 +234,7 @@ export function AuthProvider({ children }) {
   const signUp = useCallback(credentials => mutateSession('/api/v1/auth/register', credentials), [mutateSession]);
   const signOut = useCallback(() => mutateSession('/api/v1/auth/logout'), [mutateSession]);
 
-  const value = useMemo(() => ({ user, loading, transitioning, sessionVerified, signIn, signUp, signOut, refreshSession }), [user, loading, transitioning, sessionVerified, signIn, signUp, signOut, refreshSession]);
+  const value = useMemo(() => ({ user, loading, transitioning, focusChecking, sessionVerified, signIn, signUp, signOut, refreshSession }), [user, loading, transitioning, focusChecking, sessionVerified, signIn, signUp, signOut, refreshSession]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

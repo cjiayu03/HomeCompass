@@ -1,17 +1,20 @@
 'use client';
 
-import { resourceColors, resourceLabel } from '@/lib/map-layers';
+import { mapFeatureRevision, resourceColors, resourceLabel } from '@/lib/map-layers';
+import { spreadEvidencePoints } from '@/lib/score-locations';
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Circle, CircleMarker, GeoJSON, MapContainer, Marker, Popup, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Circle, CircleMarker, GeoJSON, MapContainer, Marker, Popup, Polyline, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
-import { clusterPointFeatures, facilityLocationLabel } from '@/lib/geo-cluster';
+import { clusterPointFeatures } from '@/lib/geo-cluster';
 import { MapViewportListener } from '@/components/map-viewport-listener';
 import { money } from '@/lib/utils';
 import { isMapAddressCandidate } from '@/lib/map-address-search';
 import { hasMapCoordinates } from '@/lib/map-coordinates';
 import { facilityClusterRadius, selectedHomeZoom } from '@/lib/map-zoom';
 import { mapLayerClusterMarkup, mapLayerMarkerMarkup } from '@/lib/map-layer-icons';
+import { dengueFeatureColor, filterCurrentDengueFeatures } from '@/lib/dengue-status';
+import { mapResourcePopupContent } from '@/lib/map-resource-popup';
 
 const markerIconCache = new Map();
 const resourceMarkerIconCache = new Map();
@@ -60,38 +63,6 @@ function zoomIntoCluster(map, feature) {
   else map.flyTo([latitude, longitude], zoom, { duration: 0.5 });
 }
 
-function resourcePopupContent(feature) {
-  const properties = feature?.properties || {};
-  const popup = document.createElement('div');
-  const name = document.createElement('strong');
-  name.textContent = properties.name || 'Unnamed facility';
-  popup.appendChild(name);
-  const type = document.createElement('p');
-  type.textContent = resourceLabel(properties.resourceType);
-  popup.appendChild(type);
-  const location = facilityLocationLabel(feature);
-  if (location) {
-    const address = document.createElement('p');
-    address.textContent = location;
-    popup.appendChild(address);
-  }
-  const date = document.createElement('small');
-  date.textContent = `Source date: ${properties.sourceVersion || 'not reported'}`;
-  popup.appendChild(date);
-  try {
-    const source = new URL(properties.sourceUrl);
-    if (source.protocol === 'https:' && source.hostname.endsWith('data.gov.sg')) {
-      const link = document.createElement('a');
-      link.href = source.href;
-      link.target = '_blank';
-      link.rel = 'noreferrer';
-      link.textContent = 'Open official source';
-      popup.appendChild(link);
-    }
-  } catch { /* Source links are optional and must never be rendered as raw HTML. */ }
-  return popup;
-}
-
 function FocusResource({ facilityFocus }) {
   const map = useMap();
   useEffect(() => {
@@ -119,7 +90,7 @@ function FocusResource({ facilityFocus }) {
     else map.flyTo(center, zoom, { duration: 0.55 });
     const popup = L.popup({ autoPan: true, maxWidth: 280 })
       .setLatLng([latitude, longitude])
-      .setContent(resourcePopupContent(feature))
+      .setContent(mapResourcePopupContent(feature))
       .openOn(map);
     return () => popup.remove();
   }, [facilityFocus?.request, facilityFocus?.feature, map]);
@@ -133,8 +104,9 @@ const mapAddressIcon = L.divIcon({
   iconAnchor: [16, 38],
 });
 
-function FlyToSelected({ home, request, addressFocused }) {
+function FlyToSelected({ home, locations = [], request, addressFocused }) {
   const map = useMap();
+  const locationCoordinates = JSON.stringify(locations.map(item => [Number(item.lat), Number(item.lng)]));
   useEffect(() => {
     map.closePopup();
     if (!hasMapCoordinates(home) || addressFocused) return;
@@ -144,6 +116,14 @@ function FlyToSelected({ home, request, addressFocused }) {
     const size = map.getSize();
     // A narrow phone panel must be collapsed before there is room to inspect the map.
     if (size.x - leftInset - rightInset < 160) return;
+    const coordinates = JSON.parse(locationCoordinates);
+    if (coordinates.length) {
+      map.fitBounds(L.latLngBounds([[home.lat, home.lng], ...coordinates]), {
+        paddingTopLeft: [leftInset + 48, 70], paddingBottomRight: [rightInset + 48, 100], maxZoom: 16,
+        animate: !window.matchMedia('(prefers-reduced-motion: reduce)').matches, duration: .35,
+      });
+      return;
+    }
     const zoom = selectedHomeZoom(map.getZoom());
     const visibleCenterX = (leftInset + size.x - rightInset) / 2;
     const targetPoint = map.project([Number(home.lat), Number(home.lng)], zoom);
@@ -151,7 +131,7 @@ function FlyToSelected({ home, request, addressFocused }) {
     const center = [shiftedCenter.lat, shiftedCenter.lng];
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) map.setView(center, zoom, { animate: false });
     else map.flyTo(center, zoom, { duration: 0.65 });
-  }, [home?.id, home?.lat, home?.lng, request, addressFocused, map]);
+  }, [home?.id, home?.lat, home?.lng, request, addressFocused, locationCoordinates, map]);
   return null;
 }
 
@@ -273,7 +253,7 @@ function readViewport(map) {
   };
 }
 
-function ResourceFeatures({ features, visibleTypes }) {
+function ResourceFeatures({ features, visibleTypes, denguePolicy, dengueNow }) {
   const map = useMap();
   const [viewport, setViewport] = useState(() => readViewport(map));
   const updateViewport = useCallback(() => setViewport(readViewport(map)), [map]);
@@ -288,18 +268,39 @@ function ResourceFeatures({ features, visibleTypes }) {
       : (0.02 * clusterRadius / 48) / (2 ** Math.max(viewport.zoom - 11, 0));
   }, [viewport]);
   const mapped = useMemo(() => clusterPointFeatures(
-    (Array.isArray(features) ? features : []).filter((feature) => feature?.geometry && visibleTypes.includes(feature.properties?.resourceType)),
+    filterCurrentDengueFeatures(features, denguePolicy, dengueNow)
+      .filter((feature) => feature?.geometry && visibleTypes.includes(feature.properties?.resourceType)),
     { cellSize },
-  ), [features, visibleTypes, cellSize]);
+  ), [features, visibleTypes, cellSize, denguePolicy, dengueNow]);
   const collection = useMemo(() => ({ type: 'FeatureCollection', features: mapped }), [mapped]);
-  const renderKey = useMemo(() => JSON.stringify(mapped), [mapped]);
+  const renderKey = useMemo(() => mapFeatureRevision(mapped), [mapped]);
   const style = (feature) => {
     const type = feature?.properties?.resourceType;
-    const color = resourceColors[type] || '#718096';
-    return { color, weight: type === 'dengue_cluster' ? 2 : 1.25, opacity: 0.8, fillColor: color, fillOpacity: type === 'dengue_cluster' ? 0.14 : 0.08, dashArray: type === 'school_zone' ? '4 5' : undefined };
+    const color = type === 'dengue_cluster' ? dengueFeatureColor(feature) : resourceColors[type] || '#718096';
+    return { color, weight: type === 'dengue_cluster' ? 2 : 1.25, opacity: 0.88, fillColor: color, fillOpacity: type === 'dengue_cluster' ? 0.18 : 0.08, dashArray: type === 'school_zone' ? '4 5' : undefined };
   };
   const onEachFeature = (feature, layer) => {
     const properties = feature?.properties || {};
+    if (!properties.cluster) {
+      const content = mapResourcePopupContent(feature);
+      if (properties.resourceType === 'dengue_cluster') {
+        const popupLayout = () => ({
+          maxHeight: Math.max(120, map.getSize().y - 360),
+          autoPanPaddingTopLeft: [12, 128],
+          autoPanPaddingBottomRight: [12, map.getSize().x < 640 ? 172 : 24],
+        });
+        layer.bindPopup(content, popupLayout());
+        content.addEventListener('toggle', () => {
+          const popup = layer.getPopup();
+          if (!popup || !popup.isOpen()) return;
+          const focused = content.contains(document.activeElement) ? document.activeElement : null;
+          Object.assign(popup.options, popupLayout());
+          popup.update();
+          focused?.focus({ preventScroll: true });
+        }, true);
+      } else layer.bindPopup(content);
+      return;
+    }
     const popup = document.createElement('div');
     const name = document.createElement('strong');
     name.textContent = properties.cluster ? `${properties.count} nearby facilities` : properties.name || 'Source feature';
@@ -326,23 +327,7 @@ function ResourceFeatures({ features, visibleTypes }) {
         popup.appendChild(hint);
       }
     }
-    const type = document.createElement('p');
-    type.textContent = resourceLabel(properties.resourceType);
-    popup.appendChild(type);
-    const date = document.createElement('small');
-    date.textContent = `Source date: ${properties.sourceVersion || 'not reported'}`;
-    popup.appendChild(date);
-    try {
-      const source = new URL(properties.sourceUrl);
-      if (source.protocol === 'https:' && source.hostname.endsWith('data.gov.sg')) {
-        const link = document.createElement('a');
-        link.href = source.href;
-        link.target = '_blank';
-        link.rel = 'noreferrer';
-        link.textContent = 'Open official source';
-        popup.appendChild(link);
-      }
-    } catch { /* A source link is optional; never put upstream strings into HTML. */ }
+    popup.appendChild(mapResourcePopupContent(feature, { includeTitle: false }));
     layer.bindPopup(popup);
     if (properties.cluster) layer.on('click', () => zoomIntoCluster(map, feature));
   };
@@ -368,12 +353,46 @@ function ResourceFeatures({ features, visibleTypes }) {
 }
 
 const MemoResourceFeatures = memo(ResourceFeatures);
+function EvidencePoint({ item, position }) {
+  const evidenceIcon = useMemo(() => L.divIcon({
+    className: 'map-resource-marker-icon score-evidence-marker',
+    html: mapLayerMarkerMarkup(item.resourceType),
+    iconSize: [28, 28], iconAnchor: [14, 14], popupAnchor: [0, -13],
+  }), [item.resourceType]);
+  return <Marker position={position} icon={evidenceIcon} title={`${item.label}: ${item.name}`} alt={`${item.label}: ${item.name}`}>
+    <Tooltip direction="top" offset={[0, -10]} opacity={1} className="score-location-label"><strong>{item.name}</strong><br />{item.label}{Number.isFinite(item.distanceM) && <> · {Math.round(item.distanceM).toLocaleString()} m</>}</Tooltip>
+    <Popup><strong>{item.name}</strong><br />{item.context}<br />{Number.isFinite(item.distanceM) ? `${Math.round(item.distanceM).toLocaleString()} m straight-line` : 'Distance unavailable'}{item.sourceVersion && <><br />Source: {item.sourceVersion}</>}</Popup>
+  </Marker>;
+}
+
+function EvidenceMarkers({ home, locations }) {
+  const map = useMap();
+  const [revision, setRevision] = useState(0);
+  const update = useCallback(() => setRevision(value => value + 1), []);
+  useMapEvents({ zoomend: update, moveend: update, resize: update });
+  const positions = useMemo(() => {
+    const points = locations.map(item => map.latLngToLayerPoint([Number(item.lat), Number(item.lng)]));
+    const homePoint = map.latLngToLayerPoint([Number(home.lat), Number(home.lng)]);
+    return spreadEvidencePoints(points, homePoint).map(point => map.layerPointToLatLng(point));
+  }, [map, home.lat, home.lng, locations, revision]);
+  return locations.map((item, index) => {
+    const actual = [Number(item.lat), Number(item.lng)];
+    const position = positions[index];
+    const route = item.route?.coordinates?.map(([lng, lat]) => [lat, lng]);
+    return <Fragment key={item.id}>
+      {route?.length >= 2 && <><Polyline positions={route} interactive={false} pathOptions={{ color: '#ffffff', weight: 8, opacity: 1 }} /><Polyline positions={route} interactive={false} pathOptions={{ className: 'score-evidence-connection', color: item.color, weight: 4.5, opacity: 1 }} /></>}
+      {map.latLngToLayerPoint(actual).distanceTo(map.latLngToLayerPoint(position)) > 1 && <Polyline positions={[actual, position]} interactive={false} pathOptions={{ color: item.color, weight: 1.5, opacity: .8, dashArray: '2 3' }} />}
+      <EvidencePoint item={item} position={position} />
+    </Fragment>;
+  });
+}
+
 const HomeMarker = memo(function HomeMarker({ home, selected, hovered, onSelect }) {
   const events = useMemo(() => ({ click: () => onSelect(home) }), [onSelect, home]);
   return <Marker title={home.address} alt={`Map marker for ${home.address}`} position={[home.lat, home.lng]} icon={makeMarkerIcon(selected, hovered)} zIndexOffset={selected ? 2000 : hovered ? 1000 : 0} eventHandlers={events} />;
 });
 
-export default memo(function MapView({ homes, resources = [], visibleResourceTypes = [], selectedHome, hoveredHome, anchors=[], onSelect, cameraIntent, homeFocusRequest = 0, facilityFocus, centerRequest, addressTarget, addressRequest, addressFocused = false, onViewportChange }) {
+export default memo(function MapView({ homes, resources = [], visibleResourceTypes = [], denguePolicy, dengueNow = Date.now(), selectedHome, evidenceLocations = [], hoveredHome, anchors=[], onSelect, cameraIntent, homeFocusRequest = 0, facilityFocus, centerRequest, addressTarget, addressRequest, addressFocused = false, onViewportChange }) {
   const mappedHomes = useMemo(() => homes.filter(hasMapCoordinates), [homes]);
   const markerHomes = useMemo(() => {
     const byId = new Map(mappedHomes.map((home) => [String(home.id), home]));
@@ -385,8 +404,9 @@ export default memo(function MapView({ homes, resources = [], visibleResourceTyp
   const tileUrl = process.env.NEXT_PUBLIC_MAP_TILE_URL || 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
   return <MapContainer center={[1.3521, 103.8198]} zoom={11} scrollWheelZoom zoomControl className="h-full min-h-0 w-full">
     <TileLayer attribution="&copy; OpenStreetMap contributors" url={tileUrl} />
-    <ResizeMap/><MapViewportListener onBoundsChange={onViewportChange} /><FitHomes homes={mappedHomes} selectedHome={selectedHome} addressTarget={addressTarget} /><FlyToSelected home={selectedHome} request={homeFocusRequest} addressFocused={addressFocused} /><FocusResource facilityFocus={facilityFocus} /><FlyToAddress target={addressTarget} request={addressRequest} focused={addressFocused} /><ResetSingapore request={centerRequest} cameraIntent={cameraIntent} /><MemoResourceFeatures features={resources} visibleTypes={visibleResourceTypes} /><HoverPreview home={hoveredHome} selectedHome={selectedHome} addressTarget={addressTarget} />
+    <ResizeMap/><MapViewportListener onBoundsChange={onViewportChange} /><FitHomes homes={mappedHomes} selectedHome={selectedHome} addressTarget={addressTarget} /><FlyToSelected locations={evidenceLocations} home={selectedHome} request={homeFocusRequest} addressFocused={addressFocused} /><FocusResource facilityFocus={facilityFocus} /><FlyToAddress target={addressTarget} request={addressRequest} focused={addressFocused} /><ResetSingapore request={centerRequest} cameraIntent={cameraIntent} /><MemoResourceFeatures features={resources} visibleTypes={visibleResourceTypes} denguePolicy={denguePolicy} dengueNow={dengueNow} /><HoverPreview home={hoveredHome} selectedHome={selectedHome} addressTarget={addressTarget} />
     {anchors.map((anchor,i)=><Circle key={anchor.id} center={[anchor.lat,anchor.lng]} radius={anchor.radius} pathOptions={{color:['#42624f','#627f90','#8a7898'][i%3],fillOpacity:0.08,weight:2,dashArray:'5 5'}}><Popup>{anchor.label}: {anchor.radius.toLocaleString()} m straight-line reach</Popup></Circle>)}
+    {hasMapCoordinates(selectedHome) && <EvidenceMarkers home={selectedHome} locations={evidenceLocations} />}
     {markerHomes.map(home => <HomeMarker key={home.id} home={home} selected={home.id === selectedHome?.id} hovered={home.id === hoveredHome?.id} onSelect={onSelect} />)}
     <AddressMarker target={addressTarget} />
   </MapContainer>;

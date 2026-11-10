@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { Download, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { evaluateHomeDengueStatus, formatDengueTime } from '@/lib/dengue-status';
+import { useDengueNow } from '@/components/dengue-status';
 import { money } from '@/lib/utils';
 import { summarizeHouseholdAges } from '@/lib/household';
 
@@ -63,6 +65,17 @@ function evidenceEntries(home) {
   ];
 }
 
+function dengueSummaryLabel(home) {
+  const status = evaluateHomeDengueStatus(home.dengue);
+  const sourceAt = formatDengueTime(status.sourceUpdatedAt);
+  const validUntil = formatDengueTime(status.validUntil);
+  return [
+    status.label,
+    sourceAt ? `NEA snapshot as of ${sourceAt} SGT` : null,
+    validUntil ? `status window ends ${validUntil} SGT` : null,
+  ].filter(Boolean).join(' · ');
+}
+
 function distanceEntries(home) {
   if (!home.placeDistances?.length) return [['Saved place distances', 'No distance evidence recorded']];
   return home.placeDistances.map(distance => [`Distance to ${distance.label || distance.placeId || 'saved place'}`, `${distance.method === 'straight-line' && Number.isFinite(Number(distance.distanceM)) && distance.distanceM != null ? `${Math.round(Number(distance.distanceM))} m straight-line estimate` : 'Distance unavailable; method unverified'}${distance.maximumDistanceM != null ? ` · target maximum ${distance.maximumDistanceM} m` : ''}. Travel time and route unavailable.`]);
@@ -86,7 +99,7 @@ function summaryBody(homes, brief, decisions, photos, includePhotos) {
       ['Storey range', home.storeyRange || 'Unavailable'],
       ['Remaining lease', home.remainingLeaseYears != null ? `${home.remainingLeaseYears} years (estimate)` : 'Unavailable'],
       ['School access', home.school || 'Unavailable'], ['Childcare access', home.childcare || 'Unavailable'],
-      ['Care access', home.care || 'Unavailable'], ['Dengue context', home.risk || 'Unavailable'],
+      ['Care access', home.care || 'Unavailable'], ['Dengue cluster status', dengueSummaryLabel(home)],
       ...ratings.map((rating, index) => [`${rating.name || `Household member ${index + 1}`} rating`, `${rating.score ?? 'Unavailable'} / 5`]),
     ];
     return `<article class="summary-home"><header><p class="eyebrow">${escapeHtml(home.town || 'Town unavailable')} · ${escapeHtml(home.type || 'Flat type unavailable')}</p><h3>${escapeHtml(home.address || 'Saved candidate')}</h3></header>${definitionList(facts)}<section><h4>Evidence and source coverage</h4>${definitionList(evidenceEntries(home))}</section><section><h4>Private place distance context</h4>${definitionList(distanceEntries(home))}</section>${textSection('Pros', decision.pros)}${textSection('Trade-offs', decision.cons)}${textSection('Household notes', decision.notes)}<section><h4>Viewing checklist: ${completed} of ${checks.length} complete</h4><ul>${checks.map(([key, checked]) => `<li>${checked === true ? 'Complete' : 'To check'}: ${escapeHtml(decision.checklistLabels?.[key] || titleCase(key))}</li>`).join('')}</ul></section>${viewingPhotos.length ? `<section><h4>Viewing photos (included by your choice)</h4><div class="summary-photos">${viewingPhotos.map(photo => `<figure><img src="${escapeHtml(photo.dataUrl)}" alt="${escapeHtml(photo.name || 'Viewing photo')}"/><figcaption>${escapeHtml(photo.name || 'Viewing photo')}</figcaption></figure>`).join('')}</div></section>` : ''}</article>`;
@@ -104,6 +117,8 @@ export function standaloneHtml(homes = [], brief = {}, decisions = {}, photos = 
 
 export function DecisionSummary({ homes = [], brief = {}, decisions = {}, photos = {} }) {
   const [includePhotos, setIncludePhotos] = useState(false);
+  const nextDengueExpiry = homes.map(home => home.dengue?.validUntil).filter(Boolean).sort()[0] || null;
+  useDengueNow(nextDengueExpiry);
   const hasPhotos = homes.some(home => (photos?.[home.id] || []).some(safePhoto));
   function downloadHtml() {
     const blob = new Blob([standaloneHtml(homes, brief, decisions, photos, includePhotos)], { type: 'text/html;charset=utf-8' });

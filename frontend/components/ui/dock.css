@@ -66,3 +66,6 @@
 .dock-save-glint { position: absolute; top: -25%; left: 0; width: 46%; height: 150%; opacity: 0; background: linear-gradient(90deg, transparent, hsl(var(--primary) / .12) 22%, rgb(255 255 255 / .85) 50%, hsl(var(--primary) / .16) 78%, transparent); }
 .dock-control > .dock-save-sparkle { position: absolute; top: 2px; right: 9px; width: 17px; height: 17px; opacity: 0; color: hsl(var(--primary)); pointer-events: none; }
 @media (prefers-reduced-motion: reduce), (forced-colors: active) { .dock-save-sheen, .dock-save-sparkle { display: none; } }
+
+.dock-assistant .assistant-orb { width: 23px; height: 23px; }
+@media (max-width: 767px) { .dock-control { width: clamp(38px, calc((100vw - 60px) / 7), 49px); } .dock { gap: 1px; } .dock-assistant .assistant-orb { width: 22px; height: 22px; } }

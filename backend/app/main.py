@@ -14,10 +14,17 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from . import database, recovery
+from .dengue import dengue_home_status, evaluate_dengue_snapshot, parse_dengue_timestamp
+from .elderly_zones import (
+    ELDERLY_SNAPSHOT_CTE, ELDERLY_HOME_JOINS, ELDERLY_HOME_SELECT,
+    SOURCES as ELDERLY_SOURCES, elderly_zone_status,
+)
 from .ai import gemini_configuration_ready, interpret_query, summarize_record
+from .housing_chat import HousingChatRequest, housing_chat, stream_housing_chat
+from .source_text import source_label
 from .contracts import live_result_metadata
 from .database import (
     close_pool,
@@ -30,6 +37,7 @@ from .database import (
 )
 from .domain import weighted_score
 from .onemap import OneMapProviderError, search_address_candidates
+from .walking_routes import walking_route
 from .pagination import MAX_CURSOR_LENGTH, decode_cursor, encode_cursor
 from .local_auth import (
     hash_password,
@@ -94,37 +102,112 @@ _ALLOWED_ORIGINS = tuple(
 if "*" in _ALLOWED_ORIGINS:
     raise RuntimeError("CORS_ORIGINS must contain explicit origins when credentials are enabled.")
 
-_LATEST_RESOURCE_CTE = """WITH latest_resource_sources AS (
+_DENGUE_DATASET_ID = "d_dbfabf16158d1b0e1c420627c0819168"
+_LATEST_RESOURCE_CTE = f"""WITH latest_resource_sources AS (
     SELECT DISTINCT ON (source_id) id FROM source_snapshot
     WHERE status IN ('valid','degraded') ORDER BY source_id,retrieved_at DESC
+), latest_dengue_snapshot AS MATERIALIZED (
+    SELECT id, source_id, source_url, source_version, source_updated_at, retrieved_at,
+           row_count, rejected_count, status, validation_report
+    FROM source_snapshot
+    WHERE source_id='{_DENGUE_DATASET_ID}'
+    ORDER BY retrieved_at DESC LIMIT 1
 )"""
+
+_LATEST_RESOURCE_CTE += ELDERLY_SNAPSHOT_CTE
 
 _HOME_EVIDENCE_JOINS = """
 LEFT JOIN LATERAL (
-  SELECT r.name, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
+  SELECT r.name, jsonb_build_object(
+    'id', r.id::text, 'name', r.name, 'resourceType', r.resource_type,
+    'lat', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_Y(r.geometry) END,
+    'lng', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_X(r.geometry) END,
+    'sourceId', snapshot.source_id, 'sourceVersion', snapshot.source_version,
+    'sourceUrl', snapshot.source_url, 'retrievedAt', snapshot.retrieved_at
+  ) AS location, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
   FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
+  JOIN source_snapshot snapshot ON snapshot.id=r.source_snapshot_id
   WHERE r.resource_type='moe_school' AND r.geometry IS NOT NULL AND h.geometry IS NOT NULL
   ORDER BY h.geometry::geography <-> r.geometry::geography LIMIT 1
 ) school_access ON TRUE
 LEFT JOIN LATERAL (
-  SELECT r.name, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
+  SELECT r.name, jsonb_build_object(
+    'id', r.id::text, 'name', r.name, 'resourceType', r.resource_type,
+    'lat', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_Y(r.geometry) END,
+    'lng', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_X(r.geometry) END,
+    'sourceId', snapshot.source_id, 'sourceVersion', snapshot.source_version,
+    'sourceUrl', snapshot.source_url, 'retrievedAt', snapshot.retrieved_at
+  ) AS location, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
   FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
+  JOIN source_snapshot snapshot ON snapshot.id=r.source_snapshot_id
   WHERE r.resource_type IN ('childcare','kindergarten') AND r.geometry IS NOT NULL AND h.geometry IS NOT NULL
   ORDER BY h.geometry::geography <-> r.geometry::geography LIMIT 1
 ) childcare_access ON TRUE
 LEFT JOIN LATERAL (
-  SELECT r.name, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
+  SELECT r.name, jsonb_build_object(
+    'id', r.id::text, 'name', r.name, 'resourceType', r.resource_type,
+    'lat', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_Y(r.geometry) END,
+    'lng', CASE WHEN ST_GeometryType(r.geometry)='ST_Point' THEN ST_X(r.geometry) END,
+    'sourceId', snapshot.source_id, 'sourceVersion', snapshot.source_version,
+    'sourceUrl', snapshot.source_url, 'retrievedAt', snapshot.retrieved_at
+  ) AS location, ST_Distance(h.geometry::geography,r.geometry::geography) AS distance_m
   FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
+  JOIN source_snapshot snapshot ON snapshot.id=r.source_snapshot_id
   WHERE r.resource_type IN ('chas_clinic','dementia_gtp') AND r.geometry IS NOT NULL AND h.geometry IS NOT NULL
   ORDER BY h.geometry::geography <-> r.geometry::geography LIMIT 1
 ) care_access ON TRUE
+"""
+
+# Summary provenance needs source retrieval dates; keep this extra JSON field
+# out of the shared search/detail query contract.
+_SUMMARY_HOME_EVIDENCE_JOINS = _HOME_EVIDENCE_JOINS.replace(
+    "'sourceUrl', snapshot.source_url",
+    "'sourceUrl', snapshot.source_url, 'retrievedAt', snapshot.retrieved_at",
+)
+
+_DENGUE_HOME_JOINS = """
+LEFT JOIN latest_dengue_snapshot dengue_snapshot ON TRUE
+LEFT JOIN LATERAL (
+  SELECT r.id, r.name AS locality,
+         CASE WHEN r.attributes->>'CASE_SIZE' ~ '^[0-9]+$'
+                   AND length(r.attributes->>'CASE_SIZE') <= 9
+              THEN (r.attributes->>'CASE_SIZE')::integer ELSE NULL END AS case_count,
+         r.attributes->>'FMEL_UPD_D' AS feature_updated_at
+  FROM neighbourhood_resource r
+  WHERE r.resource_type='dengue_cluster'
+    AND r.source_snapshot_id=dengue_snapshot.id
+    AND r.geometry IS NOT NULL
+    AND h.geometry IS NOT NULL
+    AND h.geocode_status='resolved'
+    AND h.geometry_source='onemap'
+    AND ST_Intersects(h.geometry,r.geometry)
+  ORDER BY case_count DESC NULLS LAST, r.name, r.id
+  LIMIT 1
+) dengue_match ON TRUE
+"""
+
+_DENGUE_HOME_SELECT = """
+dengue_snapshot.id AS dengue_snapshot_id,
+dengue_snapshot.source_id AS dengue_source_id,
+dengue_snapshot.source_url AS dengue_source_url,
+dengue_snapshot.source_version AS dengue_source_version,
+dengue_snapshot.source_updated_at AS dengue_source_updated_at,
+dengue_snapshot.retrieved_at AS dengue_retrieved_at,
+dengue_snapshot.row_count AS dengue_row_count,
+dengue_snapshot.rejected_count AS dengue_rejected_count,
+dengue_snapshot.status AS dengue_snapshot_status,
+dengue_snapshot.validation_report AS dengue_validation_report,
+dengue_match.id AS dengue_cluster_id,
+dengue_match.locality AS dengue_locality,
+dengue_match.case_count AS dengue_case_count,
+dengue_match.feature_updated_at AS dengue_feature_updated_at
 """
 
 
 def _distance_label(record, name_key: str, distance_key: str, pending: str) -> str:
     if record["latitude"] is None:
         return "Home location is not matched yet"
-    name = record[name_key]
+    name = source_label(record[name_key])
     distance = record[distance_key]
     if name is None or distance is None:
         return pending
@@ -282,7 +365,86 @@ def _score_home(record, *, budget_cents=None, weights=None, distance_targets=Non
     return score_home_evidence(evidence, weights, targets)
 
 
-def _home(record, score=None) -> dict:
+def _dengue_snapshot_from_record(record) -> dict | None:
+    snapshot_id = _optional_record_value(record, "dengue_snapshot_id")
+    if snapshot_id is None:
+        return None
+    return {
+        "id": snapshot_id,
+        "source_id": _optional_record_value(record, "dengue_source_id"),
+        "source_url": _optional_record_value(record, "dengue_source_url"),
+        "source_version": _optional_record_value(record, "dengue_source_version"),
+        "source_updated_at": _optional_record_value(record, "dengue_source_updated_at"),
+        "retrieved_at": _optional_record_value(record, "dengue_retrieved_at"),
+        "row_count": _optional_record_value(record, "dengue_row_count"),
+        "rejected_count": _optional_record_value(record, "dengue_rejected_count"),
+        "status": _optional_record_value(record, "dengue_snapshot_status"),
+        "validation_report": _optional_record_value(record, "dengue_validation_report"),
+    }
+
+
+def _dengue_match_from_record(record) -> dict | None:
+    cluster_id = _optional_record_value(record, "dengue_cluster_id")
+    if cluster_id is None:
+        return None
+    return {
+        "id": cluster_id,
+        "locality": _optional_record_value(record, "dengue_locality"),
+        "case_count": _optional_record_value(record, "dengue_case_count"),
+        "feature_updated_at": _optional_record_value(record, "dengue_feature_updated_at"),
+    }
+
+
+def _dengue_resource_snapshot(connection_row) -> dict | None:
+    if connection_row is None:
+        return None
+    return {
+        "source_id": _optional_record_value(connection_row, "source_id"),
+        "source_url": _optional_record_value(connection_row, "source_url"),
+        "source_version": _optional_record_value(connection_row, "source_version"),
+        "source_updated_at": _optional_record_value(connection_row, "source_updated_at"),
+        "retrieved_at": _optional_record_value(connection_row, "retrieved_at"),
+        "row_count": _optional_record_value(connection_row, "row_count"),
+        "rejected_count": _optional_record_value(connection_row, "rejected_count"),
+        "status": _optional_record_value(connection_row, "status"),
+        "validation_report": _optional_record_value(connection_row, "validation_report"),
+    }
+
+
+def _score_locations(record, score_details) -> list[dict]:
+    components = {item["name"]: item for item in score_details["components"]}
+    locations = []
+    for name in ("school", "childcare", "care"):
+        location = _optional_record_value(record, f"{name}_location")
+        if isinstance(location, str):
+            location = json.loads(location)
+        if not isinstance(location, dict) or location.get("id") is None:
+            continue
+        component = components.get(name, {})
+        distance = _optional_record_value(record, f"{name}_distance_m")
+        locations.append({
+            **location,
+            "name": source_label(location.get("name")),
+            "component": name,
+            "distanceM": float(distance) if distance is not None else None,
+            "usedInScore": score_details["score"] is not None
+                and component.get("normalizedValue") is not None
+                and component.get("weight", 0) > 0,
+            "contribution": component.get("contribution"),
+        })
+    return locations
+
+
+def _json_object(value):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return None
+    return value if isinstance(value, dict) else None
+
+
+def _home(record, score=None, *, now: datetime | None = None) -> dict:
     price_cents = record["price_observation_cents"]
     source_version = record["source_version"]
     floor_area_sqm = record["floor_area_sqm"]
@@ -298,6 +460,18 @@ def _home(record, score=None) -> dict:
         else None
     )
     score_details = score if score is not None else _score_home(record, weights=DEFAULT_WEIGHTS)
+    location_verified = (
+        record["latitude"] is not None
+        and record["longitude"] is not None
+        and _optional_record_value(record, "geocode_status") == "resolved"
+        and _optional_record_value(record, "geometry_source") == "onemap"
+    )
+    dengue = dengue_home_status(
+        _dengue_snapshot_from_record(record),
+        location_verified=location_verified,
+        match=_dengue_match_from_record(record) if location_verified else None,
+        now=now,
+    )
     return {
         "id": record["id"],
         "address": record["address"],
@@ -322,12 +496,21 @@ def _home(record, score=None) -> dict:
         "school": _distance_label(record, "school_name", "school_distance_m", "No geocoded school in the current source snapshot"),
         "childcare": _distance_label(record, "childcare_name", "childcare_distance_m", "No geocoded childcare location in the current source snapshot"),
         "care": _distance_label(record, "care_name", "care_distance_m", "No geocoded clinic or care point in the current source snapshot"),
+        "scoreLocations": _score_locations(record, score_details),
         "amenityDistancesM": {
             name: float(value) if value is not None else None
             for name in ('school', 'childcare', 'care')
             for value in [_optional_record_value(record, f'{name}_distance_m')]
         },
-        "risk": "Location needed for cluster check" if record["latitude"] is None else "Inside a published active dengue-cluster polygon" if record["in_dengue_cluster"] else "No published cluster overlap",
+        "risk": dengue["label"],
+        "dengue": dengue,
+        "elderlyZones": {
+            kind: elderly_zone_status(
+                _json_object(_optional_record_value(record, f"{kind.lower()}_evidence")),
+                kind=kind, location_verified=location_verified, now=now,
+            )
+            for kind in ELDERLY_SOURCES
+        },
         "highlights": [],
         "risks": ["Historical resale transaction; not a current listing"],
         "floorAreaSqm": float(floor_area_sqm) if floor_area_sqm is not None else None,
@@ -576,6 +759,9 @@ LEFT JOIN LATERAL (
 
     where = f"WHERE {' AND '.join(predicates)}" if predicates else ""
     count_values = list(values)
+    count_from = f"candidate_home h {place_joins} {where}"
+    if request.distinct_blocks:
+        count_from = f"(SELECT h.town, h.address FROM {count_from} GROUP BY h.town, h.address) matching_blocks"
     count_sql = _LATEST_RESOURCE_CTE + location_cte + place_cte + f""", active_cache AS (
              SELECT state.generation_id
              FROM home_scoring_evidence_state state
@@ -587,10 +773,13 @@ LEFT JOIN LATERAL (
                AND state.resource_snapshot_ids = COALESCE((
                  SELECT array_agg(id ORDER BY id) FROM latest_resource_sources
                ), '{{}}'::uuid[])
-         ) SELECT count(*) AS total, (SELECT generation_id FROM active_cache) AS generation_id
-             FROM candidate_home h
-             {place_joins}
-             {where}"""
+         ) SELECT count(*) AS total, (SELECT generation_id FROM active_cache) AS generation_id,
+             (SELECT COALESCE(jsonb_agg(snapshot_id::text ORDER BY snapshot_id), '[]'::jsonb)
+              FROM (SELECT DISTINCT source_snapshot_id AS snapshot_id FROM candidate_home
+                    UNION SELECT id AS snapshot_id FROM latest_resource_sources
+                    UNION SELECT id AS snapshot_id FROM latest_dengue_snapshot
+                    ORDER BY snapshot_id LIMIT 20) search_sources) AS source_snapshot_ids
+             FROM {count_from}"""
 
     scoring_weights = priority_weights if priority_weights is not None else request.priority_weights
     scoring_weights = scoring_weights or DEFAULT_WEIGHTS
@@ -640,7 +829,7 @@ LEFT JOIN LATERAL (
         score = cursor.get("score")
         observed_on = date.fromisoformat(cursor["observed_on"]) if cursor["observed_on"] else None
         if score is not None:
-            values.append(score)
+            values.append(float(score))
             score_param = len(values)
         values.extend([observed_on, cursor["id"]])
         observed_on_param = len(values) - 1
@@ -659,10 +848,20 @@ LEFT JOIN LATERAL (
         )
     values.append(request.limit + 1)
     limit_placeholder = len(values)
+    block_cte = ""
+    page_source = "ranked_homes"
+    if request.distinct_blocks:
+        # Choose the best matching transaction for each block before applying
+        # the page cursor, so older sales cannot consume an entire result page.
+        block_cte = """, block_homes AS MATERIALIZED (
+             SELECT DISTINCT ON (town, address) * FROM ranked_homes
+             ORDER BY town, address, ranking_score DESC NULLS LAST,
+                      observed_on DESC NULLS LAST, id
+         )"""
+        page_source = "block_homes"
     sql = _LATEST_RESOURCE_CTE + location_cte + place_cte + f""", evidence_homes AS MATERIALIZED (
-             SELECT h.*, evidence.school_name, evidence.school_distance_m,
-                    evidence.childcare_name, evidence.childcare_distance_m,
-                    evidence.care_name, evidence.care_distance_m,
+             SELECT h.id, h.town, h.address, h.price_observation_cents, h.observed_on,
+                    evidence.school_distance_m, evidence.childcare_distance_m, evidence.care_distance_m,
                     {place_distances_select}
              FROM candidate_home h {place_joins}
              LEFT JOIN home_scoring_evidence evidence
@@ -676,24 +875,36 @@ LEFT JOIN LATERAL (
              FROM evidence_homes
          ), ranked_homes AS MATERIALIZED (
              SELECT normalized_homes.*, {score_expression} AS ranking_score FROM normalized_homes
-         ), page_homes AS MATERIALIZED (
-             SELECT * FROM ranked_homes {cursor_filter}
+         ){block_cte}, selected_homes AS MATERIALIZED (
+             SELECT * FROM {page_source} {cursor_filter}
              ORDER BY ranking_score DESC NULLS LAST, observed_on DESC NULLS LAST, id LIMIT ${limit_placeholder}
+         ), page_homes AS MATERIALIZED (
+             SELECT original.*, selected.place_distances, selected.ranking_score,
+                    evidence.school_name, selected.school_distance_m,
+                    evidence.childcare_name, selected.childcare_distance_m,
+                    evidence.care_name, selected.care_distance_m
+             FROM selected_homes selected JOIN candidate_home original ON original.id = selected.id
+             LEFT JOIN home_scoring_evidence evidence
+               ON evidence.generation_id = ${cache_generation_param}::uuid AND evidence.home_id = selected.id
          ) SELECT h.id, h.address, h.town, h.flat_type, h.price_observation_cents, h.observed_on,
                     h.source_semantics, h.floor_area_sqm, h.storey_range, h.lease_commence_year,
                     h.geocode_status, h.geometry_source, h.geocoded_at,
                     CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_Y(h.geometry) END AS latitude,
                     CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
-                    h.place_distances, h.school_name, h.school_distance_m,
-                    h.childcare_name, h.childcare_distance_m, h.care_name, h.care_distance_m,
-                    CASE WHEN h.geometry IS NULL THEN FALSE ELSE EXISTS (
-                      SELECT 1 FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
-                      WHERE r.resource_type='dengue_cluster' AND r.geometry IS NOT NULL AND ST_Intersects(h.geometry,r.geometry)
-                    ) END AS in_dengue_cluster,
-                    h.ranking_score,
+                    h.place_distances, h.ranking_score,
+                    {_DENGUE_HOME_SELECT},
+                    {ELDERLY_HOME_SELECT},
+                    h.school_name, h.school_distance_m,
+                    school_access.location AS school_location,
+                    h.childcare_name, h.childcare_distance_m,
+                    childcare_access.location AS childcare_location,
+                    h.care_name, h.care_distance_m,
+                    care_access.location AS care_location,
                     s.id AS source_snapshot_id, s.source_id, s.source_version, s.retrieved_at
              FROM page_homes h JOIN source_snapshot s ON s.id = h.source_snapshot_id
-             {place_joins}
+             {_HOME_EVIDENCE_JOINS}
+             {_DENGUE_HOME_JOINS}
+               {ELDERLY_HOME_JOINS}
              ORDER BY h.ranking_score DESC NULLS LAST, h.observed_on DESC NULLS LAST, h.id"""
     async with pool.acquire() as connection:
         total_row = await connection.fetchrow(count_sql, *count_values)
@@ -701,6 +912,14 @@ LEFT JOIN LATERAL (
             active_generation = total_row["generation_id"]
         except (KeyError, IndexError, TypeError):
             active_generation = None
+        try:
+            source_snapshot_ids = total_row["source_snapshot_ids"]
+        except (KeyError, IndexError, TypeError):
+            source_snapshot_ids = None
+        if isinstance(source_snapshot_ids, str):
+            source_snapshot_ids = json.loads(source_snapshot_ids)
+        if not isinstance(source_snapshot_ids, list):
+            source_snapshot_ids = None
         values[cache_generation_param - 1] = active_generation
         rows = await connection.fetch(sql, *values)
     total = int(total_row["total"] or 0)
@@ -751,7 +970,9 @@ LEFT JOIN LATERAL (
         total,
         next_cursor,
         has_more,
-        _result_source_snapshot_ids(rows),
+        [str(snapshot_id) for snapshot_id in source_snapshot_ids]
+        if source_snapshot_ids is not None
+        else _result_source_snapshot_ids(rows),
         active_generation is not None,
     )
 
@@ -772,6 +993,7 @@ async def health() -> dict:
 
 
 @app.get("/ready")
+@app.get("/api/v1/ready")
 async def ready() -> JSONResponse:
     snapshot = await readiness_snapshot()
     return JSONResponse(
@@ -1006,6 +1228,9 @@ async def source_status() -> dict:
     registry.update({source.dataset_id: {"resourceType": source.resource_type, "url": source.url} for source in RESOURCE_SOURCES})
     sources = [{**registry.get(source_id, {}), **snapshots.get(source_id, {"sourceId": source_id, "state": "not_imported", "rows": 0, "rejected": 0}), "sourceId": source_id}
                for source_id in registry]
+    for source in sources:
+        if source.get("resourceType") == "dengue_cluster":
+            source["dengue"] = evaluate_dengue_snapshot(source, now=datetime.now(timezone.utc))
     onemap_snapshot = snapshots.get("onemap_geocoding")
     sources.append({**(onemap_snapshot or {}), "sourceId": "onemap", "resourceType": "geocoding_and_routing", "url": "https://www.onemap.gov.sg/apidocs/",
                     "state": onemap_snapshot["state"] if onemap_snapshot else "needs_credentials" if not os.getenv("ONEMAP_ACCESS_TOKEN") else "configured",
@@ -1038,8 +1263,18 @@ async def resources(
     supported = {source.resource_type for source in RESOURCE_SOURCES}
     if request.resource_type and (invalid := set(request.resource_type) - supported):
         raise HTTPException(status_code=422, detail={"code": "UNKNOWN_RESOURCE_TYPE", "types": sorted(invalid)})
-    values: list[object] = [request.resource_type or []]
+    checked_at = datetime.now(timezone.utc)
+    async with pool.acquire() as connection:
+        dengue_row = await connection.fetchrow(
+            """SELECT source_id, source_url, source_version, source_updated_at, retrieved_at,
+                      row_count, rejected_count, status, validation_report
+               FROM source_snapshot WHERE source_id=$1 ORDER BY retrieved_at DESC LIMIT 1""",
+            _DENGUE_DATASET_ID,
+        )
+    dengue_map_status = evaluate_dengue_snapshot(_dengue_resource_snapshot(dengue_row), now=checked_at)
+    values: list[object] = [request.resource_type or [], dengue_map_status["usable"]]
     resource_filter = "(cardinality($1::text[]) = 0 OR r.resource_type = ANY($1::text[]))"
+    dengue_filter = " AND (r.resource_type <> 'dengue_cluster' OR $2::boolean IS TRUE)"
     bounds_filter = ""
     if request.bounds is not None:
         values.extend([
@@ -1064,17 +1299,17 @@ async def resources(
     limit_param = len(values)
     location_filter = "TRUE" if request.include_unlocated and request.bounds is None else "r.geometry IS NOT NULL"
     sql = f"""WITH latest AS (
-                  SELECT DISTINCT ON (source_id) id, source_id, source_url, source_version, retrieved_at, status
+                  SELECT DISTINCT ON (source_id) id, source_id, source_url, source_version, source_updated_at, retrieved_at, status
                   FROM source_snapshot WHERE status IN ('valid','degraded')
                   ORDER BY source_id, retrieved_at DESC
                 )
                 SELECT r.id, r.resource_type, r.name, r.status, r.attributes,
                        CASE WHEN r.geometry IS NULL THEN NULL ELSE ST_AsGeoJSON(r.geometry) END AS geometry,
-                       s.source_id, s.source_url, s.source_version, s.retrieved_at,
+                       s.source_id, s.source_url, s.source_version, s.source_updated_at, s.retrieved_at,
                        location_source.source_id AS location_source_id, location_source.retrieved_at AS location_retrieved_at
                 FROM neighbourhood_resource r JOIN latest s ON s.id=r.source_snapshot_id
                 LEFT JOIN source_snapshot location_source ON location_source.id=r.location_source_snapshot_id
-                WHERE {resource_filter} AND {location_filter}{bounds_filter}{cursor_filter}
+                WHERE {resource_filter} AND {location_filter}{dengue_filter}{bounds_filter}{cursor_filter}
                 ORDER BY r.resource_type, r.name, r.id LIMIT ${limit_param}"""
     count_sql = """WITH latest AS (
                      SELECT DISTINCT ON (source_id) id, source_id FROM source_snapshot
@@ -1083,10 +1318,11 @@ async def resources(
                    SELECT r.resource_type, count(*) AS total,
                           count(*) FILTER (WHERE r.geometry IS NULL) AS unlocated
                    FROM neighbourhood_resource r JOIN latest s ON s.id=r.source_snapshot_id
+                   WHERE r.resource_type <> 'dengue_cluster' OR $1::boolean IS TRUE
                    GROUP BY r.resource_type ORDER BY r.resource_type"""
     async with pool.acquire() as connection:
         rows = await connection.fetch(sql, *values)
-        counts = await connection.fetch(count_sql)
+        counts = await connection.fetch(count_sql, dengue_map_status["usable"])
     has_more = len(rows) > request.limit
     rows = rows[:request.limit]
     next_cursor = None
@@ -1100,20 +1336,44 @@ async def resources(
     features = []
     for row in rows:
         geometry = json.loads(row["geometry"]) if row["geometry"] else None
+        attributes = row["attributes"]
+        if isinstance(attributes, str):
+            try:
+                attributes = json.loads(attributes)
+            except ValueError:
+                attributes = {}
+        if not isinstance(attributes, dict):
+            attributes = {}
+        properties = {"name": row["name"], "resourceType": row["resource_type"], "status": row["status"],
+                      "attributes": attributes, "sourceId": row["source_id"], "sourceUrl": row["source_url"],
+                      "sourceVersion": row["source_version"], "sourceUpdatedAt": _optional_record_value(row, "source_updated_at").isoformat() if _optional_record_value(row, "source_updated_at") else None,
+                      "retrievedAt": row["retrieved_at"].isoformat(),
+                      "locationSourceId": row["location_source_id"], "locationRetrievedAt": row["location_retrieved_at"].isoformat() if row["location_retrieved_at"] else None}
+        if row["resource_type"] == "dengue_cluster":
+            raw_count = attributes.get("CASE_SIZE")
+            case_count = raw_count if isinstance(raw_count, int) and not isinstance(raw_count, bool) and raw_count >= 2 else None
+            if case_count is None and isinstance(raw_count, str) and raw_count.isdigit() and int(raw_count) >= 2:
+                case_count = int(raw_count)
+            feature_updated = parse_dengue_timestamp(attributes.get("FMEL_UPD_D"), feature_timestamp=True)
+            properties.update({
+                "caseCount": case_count,
+                "alertLevel": "red" if case_count is not None and case_count >= 10 else "yellow" if case_count is not None else None,
+                "categoryLabel": "High-risk cluster (10 or more cases)" if case_count is not None and case_count >= 10 else "High-risk cluster (fewer than 10 cases)" if case_count is not None else None,
+                "recordUpdatedAt": feature_updated.isoformat() if feature_updated else None,
+            })
         features.append({"type": "Feature", "id": row["id"], "geometry": geometry,
-                         "properties": {"name": row["name"], "resourceType": row["resource_type"], "status": row["status"],
-                                        "attributes": row["attributes"], "sourceId": row["source_id"], "sourceUrl": row["source_url"],
-                                        "sourceVersion": row["source_version"], "retrievedAt": row["retrieved_at"].isoformat(),
-                                        "locationSourceId": row["location_source_id"], "locationRetrievedAt": row["location_retrieved_at"].isoformat() if row["location_retrieved_at"] else None}})
+                         "properties": {**properties, "name": source_label(row["name"])}})
     return {"type": "FeatureCollection", "features": features, "count": len(features),
             "truncated": has_more, "nextCursor": next_cursor, "hasMore": has_more,
             "counts": [{"resourceType": row["resource_type"], "total": row["total"], "unlocated": row["unlocated"]} for row in counts],
+            "dengue": dengue_map_status,
             **live_result_metadata(_source_summary(rows))}
 
 
 @app.get("/api/v1/homes")
 async def homes(
     query: str = "",
+    distinct_blocks: bool = True,
     budget: int | None = None,
     town: str | None = None,
     bounds: str | None = None,
@@ -1125,6 +1385,7 @@ async def homes(
     request = _validated_query_model(
         SearchRequest,
         query=query,
+        distinct_blocks=distinct_blocks,
         budget=budget,
         town=town,
         bounds=bounds,
@@ -1140,6 +1401,7 @@ async def homes(
     if not score_ranking_available:
         limitations.append("Fit ranking is temporarily unavailable until the scoring evidence cache is refreshed.")
     return {"items": results, "count": len(results), "total": total, "nextCursor": next_cursor, "hasMore": has_more,
+            "distinctBlocks": request.distinct_blocks,
             "scoreRankingAvailable": score_ranking_available,
             "sourceStatus": {"hdb": {"state": "database-snapshot", "datasetId": HDB_RESALE_DATASET_ID}},
             "limitations": limitations, **live_result_metadata(source_summary, limitations)}
@@ -1210,6 +1472,7 @@ async def search(
         "nextCursor": next_cursor,
         "hasMore": has_more,
         "criteria": request.model_dump(),
+        "distinctBlocks": request.distinct_blocks,
         "sourceStatus": {"hdb": {"state": "database-snapshot", "datasetId": HDB_RESALE_DATASET_ID}},
         "sourceSnapshotIds": source_snapshot_ids,
         "unappliedCriteria": unsupported,
@@ -1350,16 +1613,19 @@ async def home_detail(home_id: str) -> dict:
                       h.geocode_status, h.geometry_source, h.geocoded_at,
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_Y(h.geometry) END AS latitude,
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
+                      {_DENGUE_HOME_SELECT},
+                    {ELDERLY_HOME_SELECT},
                       school_access.name AS school_name, school_access.distance_m AS school_distance_m,
+                    school_access.location AS school_location,
                       childcare_access.name AS childcare_name, childcare_access.distance_m AS childcare_distance_m,
+                    childcare_access.location AS childcare_location,
                       care_access.name AS care_name, care_access.distance_m AS care_distance_m,
-                      CASE WHEN h.geometry IS NULL THEN FALSE ELSE EXISTS (
-                        SELECT 1 FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
-                        WHERE r.resource_type='dengue_cluster' AND r.geometry IS NOT NULL AND ST_Intersects(h.geometry,r.geometry)
-                      ) END AS in_dengue_cluster,
+                    care_access.location AS care_location,
                       s.source_id, s.source_version, s.retrieved_at
                FROM candidate_home h JOIN source_snapshot s ON s.id=h.source_snapshot_id
                {_HOME_EVIDENCE_JOINS}
+               {_DENGUE_HOME_JOINS}
+               {ELDERLY_HOME_JOINS}
                WHERE h.id=$1""",
             home_id,
         )
@@ -1379,6 +1645,45 @@ def score_preview(request: ScoreRequest) -> dict:
     return weighted_score(request.criteria, request.weights)
 
 
+async def _housing_chat_context(request: HousingChatRequest):
+    options = await search_options()
+    # The public dataset, rather than client-supplied strings, owns model choices.
+    request = request.model_copy(update={'available_towns': options['towns'], 'available_flat_types': options['flatTypes']})
+    fields = (
+        'id', 'address', 'town', 'type', 'price', 'observedOn', 'floorAreaSqm', 'storeyRange',
+        'source', 'sourceUpdated', 'sourceSemantics', 'school', 'childcare', 'care', 'dengue',
+        'amenityDistancesM', 'pricePerSqm', 'leaseCommenceDate', 'remainingLeaseYears',
+        'remainingLeaseYearsEstimated', 'remainingLeaseEstimateAsOfYear', 'remainingLeaseEstimateMethod',
+    )
+    evidence = []
+    for home_id in dict.fromkeys(request.home_ids):
+        try:
+            home = await home_detail(home_id)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                continue
+            raise
+        evidence.append({field: home.get(field) for field in fields if field in home})
+    return request, evidence
+
+
+@app.post("/api/v1/ai/chat/stream")
+async def housing_chat_stream_endpoint(request: HousingChatRequest, http_request: Request, user: dict = Depends(require_active_user)):
+    from fastapi.responses import StreamingResponse
+    _get_ai_interpret_limiter().check(rate_limit_key(user, http_request))
+    request, evidence = await _housing_chat_context(request)
+    return StreamingResponse(stream_housing_chat(request, evidence), media_type='application/x-ndjson', headers={'Cache-Control': 'no-store, no-transform', 'X-Accel-Buffering': 'no'})
+
+
+@app.post("/api/v1/ai/chat")
+async def housing_chat_endpoint(request: HousingChatRequest, http_request: Request, response: Response, user: dict = Depends(require_active_user)) -> dict:
+    response.headers['Cache-Control'] = 'no-store'
+    _get_ai_interpret_limiter().check(rate_limit_key(user, http_request))
+    request, evidence = await _housing_chat_context(request)
+    result, model = await housing_chat(request, evidence)
+    return {**result.model_dump(mode='json'), 'provider': 'application' if model == 'application-guidance' else 'gemini', 'model': model, 'recordsUsed': len(evidence)}
+
+
 @app.post("/api/v1/ai/interpret")
 async def interpret(
     request: InterpretRequest,
@@ -1392,28 +1697,88 @@ async def interpret(
 
 
 @app.post("/api/v1/ai/summaries/{home_id}")
-async def record_summary(home_id: str, user: dict = Depends(require_active_user)) -> dict:
+async def record_summary(
+    home_id: str,
+    http_request: Request,
+    user: dict = Depends(require_active_user),
+) -> dict:
+    _get_ai_interpret_limiter().check(rate_limit_key(user, http_request))
     pool = require_pool()
     async with pool.acquire() as connection:
         row = await connection.fetchrow(
-            """SELECT h.id, h.town, h.flat_type, h.price_observation_cents, h.observed_on,
-                      h.floor_area_sqm, h.storey_range, s.source_id, s.source_version, s.source_url
-               FROM candidate_home h JOIN source_snapshot s ON s.id=h.source_snapshot_id WHERE h.id=$1""",
+            _LATEST_RESOURCE_CTE + f""" SELECT h.id, h.address, h.town, h.flat_type, h.price_observation_cents, h.observed_on,
+                      h.source_semantics, h.floor_area_sqm, h.storey_range, h.lease_commence_year,
+                      h.geocode_status, h.geometry_source, h.geocoded_at,
+                      CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_Y(h.geometry) END AS latitude,
+                      CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
+                      {_DENGUE_HOME_SELECT},
+                    {ELDERLY_HOME_SELECT},
+                      school_access.name AS school_name, school_access.distance_m AS school_distance_m,
+                      school_access.location AS school_location,
+                      childcare_access.name AS childcare_name, childcare_access.distance_m AS childcare_distance_m,
+                      childcare_access.location AS childcare_location,
+                      care_access.name AS care_name, care_access.distance_m AS care_distance_m,
+                      care_access.location AS care_location,
+                      s.source_id, s.source_version, s.source_url, s.retrieved_at
+               FROM candidate_home h JOIN source_snapshot s ON s.id=h.source_snapshot_id
+               {_SUMMARY_HOME_EVIDENCE_JOINS}
+               {_DENGUE_HOME_JOINS}
+               {ELDERLY_HOME_JOINS}
+               WHERE h.id=$1""",
             home_id,
         )
     if row is None:
         raise HTTPException(status_code=404, detail={"code": "HOME_NOT_FOUND", "message": "No imported transaction record was found."})
-    evidence = {"town": row["town"], "flat_type": row["flat_type"],
-                "transaction_month": row["observed_on"].strftime("%Y-%m") if row["observed_on"] else None,
-                "resale_price": f"SGD {row['price_observation_cents'] / 100:,.2f}" if row["price_observation_cents"] is not None else None,
-                "floor_area_sqm": float(row["floor_area_sqm"]) if row["floor_area_sqm"] is not None else None,
-                "storey_range": row["storey_range"]}
+    home = _home(row)
+    amenities = {item["component"]: item for item in home["scoreLocations"]}
+
+    def access_evidence(component: str) -> dict:
+        location = amenities.get(component)
+        if location is None:
+            return {"state": "unavailable", "message": home[component]}
+        return {
+            "state": "available",
+            "name": location.get("name"),
+            "distanceM": location.get("distanceM"),
+            "distanceMethod": "straight-line",
+            "source": {
+                "id": location.get("sourceId"),
+                "version": location.get("sourceVersion"),
+                "retrievedAt": location.get("retrievedAt"),
+                "url": location.get("sourceUrl"),
+            },
+        }
+
+    evidence = {
+        "town": row["town"],
+        "flat_type": row["flat_type"],
+        "transaction_month": row["observed_on"].strftime("%Y-%m") if row["observed_on"] else None,
+        "resale_price": f"SGD {row['price_observation_cents'] / 100:,.2f}" if row["price_observation_cents"] is not None else None,
+        "floor_area_sqm": float(row["floor_area_sqm"]) if row["floor_area_sqm"] is not None else None,
+        "storey_range": row["storey_range"],
+        "school_access": access_evidence("school"),
+        "childcare_access": access_evidence("childcare"),
+        "care_access": access_evidence("care"),
+        "dengue_status": {
+            key: home["dengue"].get(key)
+            for key in (
+                "state", "label", "severity", "coverage", "caseCount", "locality",
+                "sourceUpdatedAt", "checkedAt", "validUntil", "featureUpdatedAt", "sourceUrl", "reason",
+            )
+            if home["dengue"].get(key) is not None
+        },
+        "route_status": {
+            "state": "not_calculated",
+            "reason": "A route requires a user-selected origin; this summary request has no origin.",
+        },
+    }
     evidence = {key: value for key, value in evidence.items() if value is not None}
     result, model = await summarize_record(evidence)
     return {"homeId": home_id, "overview": result.overview,
             "observations": [item.model_dump() for item in result.observations],
-            "source": {"datasetId": row["source_id"], "datasetVersion": row["source_version"], "url": row["source_url"]},
-            "limitations": ["Historical transaction evidence only; this is not a current listing.", "No score, amenity distance, route, or suitability claim is included."],
+            "evidence": evidence,
+            "source": {"datasetId": row["source_id"], "datasetVersion": row["source_version"], "retrievedAt": row["retrieved_at"].isoformat() if row["retrieved_at"] else None, "url": row["source_url"]},
+            "limitations": ["Historical transaction evidence only; this is not a current listing.", "Service distances are straight-line proximity, not routes or travel times.", "No route was calculated because no origin was supplied.", "Dengue status reflects the dated source state and does not establish absence of risk."],
             "provider": "gemini", "model": model, "storedByProvider": False}
 
 
@@ -1501,18 +1866,21 @@ async def get_shortlist(user: dict = Depends(require_active_user)) -> dict:
                       h.geocode_status, h.geometry_source, h.geocoded_at,
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_Y(h.geometry) END AS latitude,
                       CASE WHEN h.geometry IS NULL THEN NULL ELSE ST_X(h.geometry) END AS longitude,
+                      {_DENGUE_HOME_SELECT},
+                    {ELDERLY_HOME_SELECT},
                       school_access.name AS school_name, school_access.distance_m AS school_distance_m,
+                    school_access.location AS school_location,
                       childcare_access.name AS childcare_name, childcare_access.distance_m AS childcare_distance_m,
+                    childcare_access.location AS childcare_location,
                       care_access.name AS care_name, care_access.distance_m AS care_distance_m,
-                      CASE WHEN h.geometry IS NULL THEN FALSE ELSE EXISTS (
-                        SELECT 1 FROM neighbourhood_resource r JOIN latest_resource_sources latest ON latest.id=r.source_snapshot_id
-                        WHERE r.resource_type='dengue_cluster' AND r.geometry IS NOT NULL AND ST_Intersects(h.geometry,r.geometry)
-                      ) END AS in_dengue_cluster,
+                    care_access.location AS care_location,
                       s0.source_id, s0.source_version, s0.retrieved_at
                FROM shortlist s JOIN shortlist_entry e ON e.shortlist_id=s.id
                JOIN candidate_home h ON h.id=e.candidate_home_id
                JOIN source_snapshot s0 ON s0.id=h.source_snapshot_id
                {_HOME_EVIDENCE_JOINS}
+               {_DENGUE_HOME_JOINS}
+               {ELDERLY_HOME_JOINS}
                WHERE s.user_id=$1 ORDER BY e.position""",
             user["id"],
         )
@@ -1631,11 +1999,10 @@ async def save_history(request: SearchHistoryRequest, user: dict = Depends(requi
     pool = require_pool()
     history_id = uuid4()
     criteria = request.criteria.model_dump(exclude_none=True)
+    snapshot_ids = [str(snapshot_id) for snapshot_id in request.source_snapshot_ids]
     async with pool.acquire() as connection:
         async with connection.transaction():
             await ensure_user(connection, user)
-            snapshots = await connection.fetch("SELECT id FROM source_snapshot WHERE status IN ('valid','degraded') ORDER BY retrieved_at DESC LIMIT 20")
-            snapshot_ids = [str(row["id"]) for row in snapshots]
             await connection.execute(
                 """INSERT INTO search_history (id,user_id,mode,criteria,source_snapshot_ids,scoring_version)
                    VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6)""",
@@ -1738,14 +2105,53 @@ def _public_map_address_items(candidates, provider_token: str) -> list[dict[str,
     return items
 
 
+class WalkingRouteRequest(BaseModel):
+    start_lat: float = Field(ge=1, le=2, allow_inf_nan=False)
+    start_lng: float = Field(ge=103, le=105, allow_inf_nan=False)
+    end_lat: float = Field(ge=1, le=2, allow_inf_nan=False)
+    end_lng: float = Field(ge=103, le=105, allow_inf_nan=False)
+
+
+@app.post("/api/v1/map/walking-route")
+async def map_walking_route(payload: WalkingRouteRequest, request: Request, response: Response) -> dict:
+    response.headers['Cache-Control'] = 'no-store'
+    _get_address_search_limiter().check(f"map-route:{rate_limit_key(None, request)}")
+    token = os.getenv('ONEMAP_ACCESS_TOKEN', '').strip()
+    if not is_configured_value(token):
+        raise HTTPException(status_code=503, detail={'code': 'ONEMAP_UNCONFIGURED', 'message': 'Walking routes are not configured.'})
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            return await walking_route(client, token, (payload.start_lat, payload.start_lng), (payload.end_lat, payload.end_lng))
+    except Exception:
+        raise HTTPException(status_code=502, detail={'code': 'ROUTE_UNAVAILABLE', 'message': 'Walking route is unavailable.'}) from None
+
+
 @app.post("/api/v1/map/address-search")
 async def search_map_address(
     payload: PlaceSuggestionRequest, request: Request, response: Response,
 ) -> dict:
     """Return a bounded public address list for moving the map camera."""
+    return await _public_map_address_lookup(payload, request, response, bucket="map-address")
+
+
+@app.post("/api/v1/map/home-location")
+async def locate_map_home(
+    payload: PlaceSuggestionRequest, request: Request, response: Response,
+) -> dict:
+    """Look up an unlocated home's address for a temporary map pin.
+
+    Hovering or selecting homes can send many lookups, so they use their own
+    rate-limit bucket and never consume the user's explicit address searches.
+    """
+    return await _public_map_address_lookup(payload, request, response, bucket="map-home")
+
+
+async def _public_map_address_lookup(
+    payload: PlaceSuggestionRequest, request: Request, response: Response, *, bucket: str,
+) -> dict:
     response.headers["Cache-Control"] = "no-store"
     try:
-        _get_address_search_limiter().check(f"map-address:{rate_limit_key(None, request)}")
+        _get_address_search_limiter().check(f"{bucket}:{rate_limit_key(None, request)}")
     except HTTPException as exc:
         raise HTTPException(
             status_code=exc.status_code,
