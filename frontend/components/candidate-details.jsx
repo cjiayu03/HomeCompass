@@ -17,6 +17,7 @@ import { mapLayers, nearbyFacilityTypes, resourceColors } from '@/lib/map-layers
 import { mapLayerIcons } from '@/lib/map-layer-icons';
 import { dedupePointFeatures, facilityLocationLabel } from '@/lib/geo-cluster';
 import { DengueStatus } from '@/components/dengue-status';
+import { ElderlyZoneStatus } from '@/components/elderly-zone-status';
 
 function distanceLabel(meters) {
   return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`;
@@ -134,6 +135,14 @@ export function CandidateDetails({ home, homes = [], brief = {}, saved = false, 
       {activeNearbyTypes.length > 0 && <p className="mt-2 text-xs leading-5 text-muted-foreground">Distances are straight-line estimates. Results cover loaded map data and may be incomplete; a missing point does not confirm that no facility exists nearby.</p>}
     </section>
     <section className="candidate-services"><h3>Access and services</h3><dl className="mt-3 space-y-3">{[['School', home.school], ['Childcare', home.childcare], ['Care', home.care]].map(([label, value]) => <div key={label}><dt className="text-xs font-medium text-muted-foreground">{label}</dt><dd className="mt-1">{value || 'Unavailable in this record'}</dd></div>)}</dl><div className="mt-4 border-t pt-3"><p className="mb-2 text-xs font-medium text-muted-foreground">Dengue cluster status</p><DengueStatus home={home} /></div><p className="mt-3 text-xs leading-6 text-muted-foreground">Distances describe straight-line proximity where verified coordinates are available. Travel times, accessible routes, service suitability, admissions and current vacancies are unavailable. Proximity does not guarantee admission.</p><div className="mt-3 flex flex-wrap gap-3"><a className="min-h-11 content-center text-primary underline" href="https://p1.placement.moe.gov.sg/" target="_blank" rel="noreferrer">Check official MOE registration guidance</a><a className="min-h-11 content-center text-primary underline" href={route} target="_blank" rel="noreferrer">Plan a route in Google Maps ↗</a></div><p className="text-xs text-muted-foreground">The route link shares only this recorded destination with Google Maps. Choose your origin there; saved personal locations are not added.</p></section>
+    <section className="candidate-services">
+      <h3>Elderly-friendly surroundings</h3>
+      <dl className="mt-3 divide-y">
+        <div className="pb-3"><dt className="mb-1 text-xs font-medium text-muted-foreground">Silver Zone</dt><dd><ElderlyZoneStatus home={home} kind="silverZone" /></dd></div>
+        <div className="pt-3"><dt className="mb-1 text-xs font-medium text-muted-foreground">Dementia Go-To-Point</dt><dd><ElderlyZoneStatus home={home} kind="dementiaGtp" /></dd></div>
+      </dl>
+      <p className="mt-3 text-xs leading-5 text-muted-foreground">Geographic context only. These flags do not establish route accessibility, service availability or whether a home is safe.</p>
+    </section>
     <AreaProfile homes={homes} home={home} />
     <AffordabilityPlanner key={home.id} initialPrice={home.price} />
   </div>;
