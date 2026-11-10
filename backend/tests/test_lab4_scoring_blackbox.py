@@ -27,6 +27,9 @@ TARGETS = {"school": 1_500, "childcare": 2_000, "care": 2_000}
         pytest.param(math.nan, 1_500, None, id="BB-08 non-finite distance"),
         pytest.param(100, 0, None, id="BB-09 target at zero boundary"),
         pytest.param(100, "1500", None, id="BB-10 non-numeric target"),
+        pytest.param(0.1, 1_500, 100.0, id="BB-26 just above zero distance"),
+        pytest.param(0, -0.1, None, id="BB-27 just below zero target"),
+        pytest.param(0, 0.1, 100.0, id="BB-28 just above zero target"),
     ],
 )
 def test_score_distance(distance_m, target_m, expected):
@@ -44,6 +47,10 @@ def test_score_distance(distance_m, target_m, expected):
         pytest.param(201, 100, 0.0, id="BB-16 beyond twice the budget"),
         pytest.param(-1, 100, None, id="BB-17 negative price"),
         pytest.param(50, 0, None, id="BB-18 budget at zero boundary"),
+        pytest.param(1, 100, 99.5, id="BB-29 just above zero price"),
+        pytest.param(199, 100, 0.5, id="BB-30 just below twice budget"),
+        pytest.param(0, -1, None, id="BB-31 just below zero budget"),
+        pytest.param(0, 1, 100.0, id="BB-32 just above zero budget"),
     ],
 )
 def test_score_affordability(price, budget, expected):
