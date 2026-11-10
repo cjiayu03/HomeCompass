@@ -39,6 +39,28 @@ def test_record_summary_references_are_restricted_to_source_field_names():
         RecordSummary.model_validate({"overview": "Near a school.", "observations": [{"text": "Near a school.", "evidence_fields": ["nearby_school"]}]})
 
 
+@pytest.mark.parametrize(('text', 'towns', 'expected'), [
+    ('Find 4-room flats in Clementi under $700,000', ['Clementi', 'Bedok', 'Bishan'], ['Clementi']),
+    ('请帮我找一套大巴窑（Toa Payoh）的四房式组屋，预算为65万新元。', ['Toa Payoh', 'Bedok', 'Clementi'], ['Toa Payoh']),
+    ('Find flats in Clementi or Bedok', ['Clementi', 'Bedok', 'Bishan'], ['Clementi', 'Bedok']),
+    ('找大巴窑的组屋', ['Toa Payoh', 'Bedok'], ['Toa Payoh']),
+    ('Clementi 或大巴窑', ['Clementi', 'Toa Payoh', 'Bedok'], ['Clementi', 'Toa Payoh']),
+])
+def test_interpretation_drops_unmentioned_towns_when_explicit_names_are_present(monkeypatch, text, towns, expected):
+    import json
+    from app import ai
+    from app.schemas import InterpretRequest
+
+    async def generate(*args):
+        return json.dumps({'filters': {'towns': towns, 'budget': 650000, 'flat_type': '4 ROOM'}}), 'test-model'
+
+    monkeypatch.setattr(ai, '_generate_json', generate)
+    import asyncio
+    result, _ = asyncio.run(ai.interpret_query(InterpretRequest(text=text)))
+    assert result.filters.towns == expected
+    assert result.filters.budget == 650000
+    assert result.filters.flat_type == '4 ROOM'
+    assert result.filters.query == text
 def test_zero_budget_requires_explicit_free_tier_and_zero_rates(monkeypatch):
     monkeypatch.setenv('GEMINI_API_KEY', 'configured-for-test')
     monkeypatch.setenv('GEMINI_MONTHLY_BUDGET_USD', '0')

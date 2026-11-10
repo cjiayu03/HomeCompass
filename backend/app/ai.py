@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
@@ -16,6 +17,18 @@ from .schemas import InterpretRequest, QueryInterpretation, RecordSummary
 
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions"
 logger = logging.getLogger(__name__)
+
+_TOWN_CHINESE_NAMES = {
+    "ang mo kio": "宏茂桥", "bedok": "勿洛", "bishan": "碧山",
+    "bukit batok": "武吉巴督", "bukit merah": "红山", "bukit panjang": "武吉班让",
+    "bukit timah": "武吉知马", "central area": "中央区", "choa chu kang": "蔡厝港",
+    "clementi": "金文泰", "geylang": "芽笼", "hougang": "后港",
+    "jurong east": "裕廊东", "jurong west": "裕廊西", "kallang/whampoa": "加冷/黄埔",
+    "marine parade": "马林百列", "pasir ris": "巴西立", "punggol": "榜鹅",
+    "queenstown": "女皇镇", "sembawang": "三巴旺", "sengkang": "盛港",
+    "serangoon": "实龙岗", "tampines": "淡滨尼", "toa payoh": "大巴窑",
+    "woodlands": "兀兰", "yishun": "义顺",
+}
 
 
 def _text_from_interaction(payload: dict) -> str:
@@ -211,6 +224,9 @@ async def interpret_query(request: InterpretRequest) -> tuple[QueryInterpretatio
         "Interpret a Singapore public-housing search query into only explicit filters. "
         "Do not invent a budget, town, flat type, distance threshold, prices, amenities, safety facts, or recommendations. "
         "Keep the original text in filters.query. Add priorities only for school access, childcare, care access, or affordability. "
+        "For one requested town, set filters.town and leave filters.towns empty. "
+        "For multiple requested towns, include ONLY those requested towns in filters.towns. "
+        "Never expand a town into all towns or nearby alternatives. Translate Chinese town names to their English names. "
         "If a value or distance threshold is not explicit and materially needed, set needs_clarification=true and ask one concise question. "
         "The application will search its own verified records; do not provide factual claims.\n\n"
         f"Query: {request.text}"
@@ -221,6 +237,20 @@ async def interpret_query(request: InterpretRequest) -> tuple[QueryInterpretatio
     except ValidationError as exc:
         raise HTTPException(status_code=502, detail={"code": "AI_SCHEMA_INVALID", "message": "Gemini returned a response outside the allowed filter schema."}) from exc
     result.filters.query = request.text
+    # A singular town is authoritative; a provider may also populate the plural
+    # field with alternatives, which must not broaden the requested location.
+    if result.filters.town:
+        result.filters.towns = []
+    elif result.filters.towns:
+        mentioned = [town for town in result.filters.towns if re.search(
+            r"(?<![a-z])" + re.escape(town.strip()) + r"(?![a-z])",
+            request.text, re.IGNORECASE,
+        ) or any(alias in request.text for alias in
+                 _TOWN_CHINESE_NAMES.get(town.strip().casefold(), "").split("/") if alias)]
+        # Preserve translated-only requests: literal English matching cannot
+        # validate those. The prompt above handles their translation.
+        if mentioned:
+            result.filters.towns = mentioned
     return result, model
 
 

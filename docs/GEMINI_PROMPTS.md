@@ -35,7 +35,7 @@ These are configuration names only; no credentials or live environment values ar
 The following is the complete template. `{request.text}` is replaced by the validated input text. There is one blank line before `Query:`; the instruction sentences form one paragraph.
 
 ```text
-Interpret a Singapore public-housing search query into only explicit filters. Do not invent a budget, town, flat type, distance threshold, prices, amenities, safety facts, or recommendations. Keep the original text in filters.query. Add priorities only for school access, childcare, care access, or affordability. If a value or distance threshold is not explicit and materially needed, set needs_clarification=true and ask one concise question. The application will search its own verified records; do not provide factual claims.
+Interpret a Singapore public-housing search query into only explicit filters. Do not invent a budget, town, flat type, distance threshold, prices, amenities, safety facts, or recommendations. Keep the original text in filters.query. Add priorities only for school access, childcare, care access, or affordability. For one requested town, set filters.town and leave filters.towns empty. For multiple requested towns, include ONLY those requested towns in filters.towns. Never expand a town into all towns or nearby alternatives. Translate Chinese town names to their English names. If a value or distance threshold is not explicit and materially needed, set needs_clarification=true and ask one concise question. The application will search its own verified records; do not provide factual claims.
 
 Query: {request.text}
 ```
@@ -73,6 +73,7 @@ For an ambiguous input such as `Find a home near a school`, the prompt asks Gemi
 - `InterpretRequest` validates the incoming text. The provider receives a `QueryInterpretation` JSON schema; the backend then parses the returned JSON with `model_validate_json()`.
 - `SearchRequest` constrains filter types and ranges, including budget, distances, result limit, and floor/storey ranges. Detected priorities are restricted to `schools`, `childcare`, `care_access`, and `affordability`.
 - After validation, the backend sets `result.filters.query` to the original request text, overriding any model rewrite of that field.
+- A singular `town` clears the plural `towns` field. For plural results, when returned towns match English names or supported Chinese aliases in the request, only those matching towns are retained. If no names match, the translated model output is preserved.
 - Invalid structured output returns HTTP 502 with `AI_SCHEMA_INVALID`. The endpoint adds provider/model information and a grounding statement to successful responses.
 - The frontend's `applySearch()` merges interpreted filters with the current search criteria. On a non-authentication interpretation failure it searches the words as typed with the existing structured criteria and displays a notice. Authentication failures propagate instead. A returned clarification question is surfaced as a notice; it does not automatically pause the search.
 
