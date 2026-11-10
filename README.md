@@ -4,6 +4,10 @@ Prepared by xyz. This repository contains the historical Lab 1/Lab 2 files, Lab 
 
 Start at [`INDEX.md`](INDEX.md). The editable Markdown/Mermaid/PlantUML sources are intentionally retained so diagrams and written documents can be reviewed before exporting PDFs/JPEGs.
 
+## Gemini integration
+
+See [Gemini prompts](docs/GEMINI_PROMPTS.md) for the application's exact prompt templates, illustrative inputs and responses, response schemas, validation, and configuration requirements.
+
 ## Local run
 
 ```bash
