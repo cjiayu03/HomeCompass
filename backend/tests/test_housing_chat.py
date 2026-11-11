@@ -104,29 +104,39 @@ def test_stream_emits_text_then_validated_search_and_ignores_done_marker(monkeyp
     monkeypatch.setattr(ai, '_reserve_usage', reserve)
     monkeypatch.setattr(ai, '_settle_usage', settle)
     events = [
-        {'event_type': 'step.delta', 'delta': {'type': 'text', 'text': '{"reply":"我会查找'}},
-        {'event_type': 'step.delta', 'delta': {'type': 'text', 'text': ' Clementi 的四房式组屋。","action":"search","filters":{"town":"Clementi","flat_type":"4 ROOM","budget":700000}}'}},
+        {'event_type': 'step.delta', 'delta': {'type': 'text', 'text': '{"action":"search","filters":{"towns":["Toa Payoh"],"flat_type":"4 ROOM","budget":650000,"budget_is_ceiling":true},'}},
+        {'event_type': 'step.delta', 'delta': {'type': 'text', 'text': '"reply":"我会查找'}},
+        {'event_type': 'step.delta', 'delta': {'type': 'text', 'text': ' Toa Payoh 的四房式组屋。"}'}},
         {'event_type': 'interaction.completed', 'interaction': {}},
     ]
     wire = ''.join('data: ' + json.dumps(event) + '\n\n' for event in events) + 'data: [DONE]\n\n'
     real_client = httpx.AsyncClient
     def provider(request):
-        prompt = json.loads(request.content)['input']
+        body = json.loads(request.content)
+        prompt = body['input']
+        schema = body['response_format']['schema']
+        assert list(schema['properties']) == ['action', 'filters', 'reply']
+        assert set(schema['$defs']['ChatSearchFilters']['required']) == {'towns', 'flat_type', 'budget', 'budget_is_ceiling'}
         assert 'language of the latest user message' in prompt
         assert 'use English' in prompt
         assert 'Keep JSON keys and action values unchanged' in prompt
         return httpx.Response(200, text=wire)
     monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(provider), **kwargs))
     async def collect():
-        request = chat_request(message='找金文泰70万以内的四房式组屋', history=[{'role': 'user', 'text': 'Help me find a home'}])
+        request = chat_request(
+            message='请帮我找一套大巴窑（Toa Payoh）的四房式组屋，预算为65万新元。',
+            available_towns=['Toa Payoh'],
+            history=[{'role': 'user', 'text': 'Help me find a home'}],
+        )
         return [json.loads(item) async for item in housing_chat.stream_housing_chat(request, [])]
     result = asyncio.run(collect())
     assert [item['type'] for item in result] == ['text', 'text', 'done']
     assert result[0]['text'] == '我会查找'
-    assert result[-1]['reply'] == '我会查找 Clementi 的四房式组屋。'
+    assert result[-1]['reply'] == '我会查找 Toa Payoh 的四房式组屋。'
     assert result[-1]['action'] == 'search'
-    assert result[-1]['filters']['towns'] == ['Clementi']
-    assert result[-1]['filters']['budget'] == 700000
+    assert result[-1]['filters']['towns'] == ['Toa Payoh']
+    assert result[-1]['filters']['budget'] == 650000
+    assert result[-1]['filters']['budget_is_ceiling'] is True
     assert result[-1]['filters']['flat_type'] == '4 ROOM'
 
 
