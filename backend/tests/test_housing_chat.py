@@ -104,18 +104,28 @@ def test_stream_emits_text_then_validated_search_and_ignores_done_marker(monkeyp
     monkeypatch.setattr(ai, '_reserve_usage', reserve)
     monkeypatch.setattr(ai, '_settle_usage', settle)
     events = [
-        {'event_type': 'step.delta', 'delta': {'type': 'text', 'text': '{"reply":"Searching'}},
-        {'event_type': 'step.delta', 'delta': {'type': 'text', 'text': ' now.","action":"search","filters":{"town":"CLEMENTI"}}'}},
+        {'event_type': 'step.delta', 'delta': {'type': 'text', 'text': '{"reply":"我会查找'}},
+        {'event_type': 'step.delta', 'delta': {'type': 'text', 'text': ' Clementi 的四房式组屋。","action":"search","filters":{"town":"Clementi","flat_type":"4 ROOM","budget":700000}}'}},
         {'event_type': 'interaction.completed', 'interaction': {}},
     ]
     wire = ''.join('data: ' + json.dumps(event) + '\n\n' for event in events) + 'data: [DONE]\n\n'
     real_client = httpx.AsyncClient
-    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=wire)), **kwargs))
+    def provider(request):
+        prompt = json.loads(request.content)['input']
+        assert 'language of the latest user message' in prompt
+        assert 'use English' in prompt
+        assert 'Keep JSON keys and action values unchanged' in prompt
+        return httpx.Response(200, text=wire)
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: real_client(transport=httpx.MockTransport(provider), **kwargs))
     async def collect():
-        return [json.loads(item) async for item in housing_chat.stream_housing_chat(chat_request(message='Find 4-room flats under $700k'), [])]
+        request = chat_request(message='找金文泰70万以内的四房式组屋', history=[{'role': 'user', 'text': 'Help me find a home'}])
+        return [json.loads(item) async for item in housing_chat.stream_housing_chat(request, [])]
     result = asyncio.run(collect())
     assert [item['type'] for item in result] == ['text', 'text', 'done']
-    assert result[0]['text'] == 'Searching'
+    assert result[0]['text'] == '我会查找'
+    assert result[-1]['reply'] == '我会查找 Clementi 的四房式组屋。'
+    assert result[-1]['action'] == 'search'
+    assert result[-1]['filters']['towns'] == ['Clementi']
     assert result[-1]['filters']['budget'] == 700000
     assert result[-1]['filters']['flat_type'] == '4 ROOM'
 
