@@ -8,7 +8,7 @@ Native development now has a checkout-owned PostGIS cluster in ignored `.local/p
 
 The September checkpoint below is retained as historical evidence, including its then-current Supabase design and verification results. It does not describe the current private authentication design.
 
-Private verification: production build and Python compilation passed, along with focused live API/browser checks for search, charts, local accounts, revision-safe planning, notes/photos, comparison/export/print, map fallback and mobile layout. Full automated suites were not run. The final implementation and limits are recorded in `docs/superpowers/plans/2026-10-23-decision-tools.md`; these local checks are not a public deployment or production-readiness claim.
+Private verification: production build and Python compilation passed, along with focused live API/browser checks for search, charts, local accounts, revision-safe planning, notes/photos, comparison/export/print, map fallback and mobile layout. Full automated suites were not run. These checks covered the local environment only.
 
 **Checkpoint:** 29 September 2026  
 **Author:** xyz  
