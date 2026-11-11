@@ -226,8 +226,10 @@ async def interpret_query(request: InterpretRequest) -> tuple[QueryInterpretatio
         "Keep the original text in filters.query. Add priorities only for school access, childcare, care access, or affordability. "
         "For one requested town, set filters.town and leave filters.towns empty. "
         "For multiple requested towns, include ONLY those requested towns in filters.towns. "
-        "Never expand a town into all towns or nearby alternatives. Translate Chinese town names to their English names. "
+        "Never expand a town into all towns or nearby alternatives. Convert localized town names and flat types to their official dataset values in filters. "
         "If a value or distance threshold is not explicit and materially needed, set needs_clarification=true and ask one concise question. "
+        "For clarifying_question, use the predominant language of the user's query, or English if the language is unclear or unsupported. "
+        "Keep JSON keys, enum values and official names unchanged. "
         "The application will search its own verified records; do not provide factual claims.\n\n"
         f"Query: {request.text}"
     )
