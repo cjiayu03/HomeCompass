@@ -14,7 +14,6 @@ HomeCompass is a Singapore home-research workspace built around historical HDB r
 - View an AI evidence summary for a home when the server-side Gemini integration is configured and enabled.
 - Keep account searches and decisions associated with the signed-in account.
   
-**AI Summary is currently unavailable
 
 ## Gemini integration
 
