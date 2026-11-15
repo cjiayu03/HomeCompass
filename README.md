@@ -4,7 +4,7 @@ HomeCompass is a Singapore home-research workspace built around historical HDB r
 
 **Live site:** [homecompass.aryash.is-a.dev](https://homecompass.aryash.is-a.dev)
 
-[Lab 5 submission index](Lab5/INDEX.md)
+[Lab 5 submission index](Lab5/INDEX.md) · [AI use disclosure](Lab5/INDEX.md#ai-use-faq-q3)
 
 > HDB records are past transactions. They are not current listings, asking prices, valuations, or guarantees that a home is available.
 
