@@ -3,7 +3,7 @@
 ## Lab 5 submission
 
 - [Demo video](https://drive.google.com/file/d/1Q-R8Qwimznhnw8bJaSLYyrW1Gcc5qLE-/view) (Google Drive)
-- [Final Software Requirements Specification (PDF)](SRS.pdf) · [Google Docs](https://docs.google.com/document/d/1V-fTDaSappum0VznwQrzK4GLJLM0zjrtMyd33q0rJyU/edit?tab=t.cvt1v1eyv4na)
+- [Final Software Requirements Specification (PDF)](SRS.pdf)
   - **Use case diagram in the SRS** · Figure 2.2, printed p. 4 ([PDF page 12](SRS.pdf#page=12)) · [Standalone image](srs-figures/use-case-model.png)
   - **Use case descriptions in the SRS** · Appendix C, printed pp. 68–101 ([PDF pages 76–109](SRS.pdf#page=76))
   - [UI mockups](srs-figures/ui-mockups/)
