@@ -4,6 +4,8 @@ HomeCompass is a Singapore home-research workspace built around historical HDB r
 
 **Live site:** [homecompass.aryash.is-a.dev](https://homecompass.aryash.is-a.dev)
 
+[Lab 5 submission index](Lab5/INDEX.md)
+
 > HDB records are past transactions. They are not current listings, asking prices, valuations, or guarantees that a home is available.
 
 ## What you can do
@@ -144,7 +146,7 @@ The combined `npm run verify` script runs backend tests, frontend tests, and a p
 - [`database/migrations/`](database/migrations/) — ordered PostgreSQL/PostGIS schema migrations.
 - [`ops/README.md`](ops/README.md) — local and self-hosted operations guidance.
 - [`docs/`](docs/) — product design, implementation plans, and behavior notes.
-- [`lab3/`](lab3/), [`lab4/`](lab4/), [`lab5/`](lab5/) — course deliverables and related source materials.
+- [Lab 3](Lab3/), [Lab 4](Lab4/), and [Lab 5](Lab5/) contain course deliverables and related source materials.
 
 ## Security
 
